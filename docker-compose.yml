@@ -1,0 +1,61 @@
+version: "3.9"
+
+services:
+
+  # ── MongoDB (single-node replica set — required for multi-document transactions)
+  mongo:
+    image: mongo:7.0
+    container_name: shemford_mongo
+    restart: unless-stopped
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - mongo_data:/data/db
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: |
+        mongosh --quiet --eval "
+          try { rs.status().ok } catch(e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo:27017'}]}).ok }
+        "
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── Backend (FastAPI)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: shemford_backend
+    restart: unless-stopped
+    env_file: ./backend/.env
+    environment:
+      MONGO_URL: mongodb://mongo:27017/?replicaSet=rs0
+      BACKEND_URL: ${BACKEND_URL:-http://localhost:8000}
+    volumes:
+      - uploads_data:/app/uploads
+    ports:
+      - "8000:8000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  # ── Frontend (React → nginx)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:-http://localhost:8000}
+        REACT_APP_GOOGLE_AUTH_URL: ${REACT_APP_GOOGLE_AUTH_URL:-}
+    container_name: shemford_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  mongo_data:
+  uploads_data:

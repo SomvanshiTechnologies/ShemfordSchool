@@ -1,0 +1,164 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    :root {
+        --background: 210 40% 98%;
+        --foreground: 215 28% 17%;
+        --card: 0 0% 100%;
+        --card-foreground: 215 28% 17%;
+        --popover: 0 0% 100%;
+        --popover-foreground: 215 28% 17%;
+        --primary: 33 83% 51%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 210 40% 96%;
+        --secondary-foreground: 215 28% 17%;
+        --muted: 210 40% 96%;
+        --muted-foreground: 215 16% 47%;
+        --accent: 210 40% 96%;
+        --accent-foreground: 215 28% 17%;
+        --destructive: 0 84% 60%;
+        --destructive-foreground: 0 0% 100%;
+        --border: 214 32% 91%;
+        --input: 214 32% 91%;
+        --ring: 33 83% 51%;
+        --radius: 0.75rem;
+    }
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+    body {
+        @apply bg-background text-foreground antialiased;
+        font-family: 'Inter', sans-serif;
+    }
+    h1, h2, h3, h4, h5, h6 {
+        font-family: 'Manrope', sans-serif;
+        @apply font-bold tracking-tight;
+    }
+    code, pre {
+        font-family: 'JetBrains Mono', monospace;
+    }
+}
+
+@layer components {
+    /* ── Sidebar ── */
+    .sidebar-item {
+        @apply flex items-center gap-3 px-3 py-2.5 text-sm text-slate-400 hover:text-white hover:bg-white/10 transition-all duration-200 rounded-xl mx-2;
+    }
+    .sidebar-item .sidebar-icon {
+        @apply text-slate-500 transition-colors duration-200;
+    }
+    .sidebar-item:hover .sidebar-icon {
+        @apply text-slate-300;
+    }
+    .sidebar-item.active {
+        @apply text-white bg-[#E88A1A]/20 font-semibold rounded-xl;
+    }
+    .sidebar-item.active .sidebar-icon {
+        @apply text-[#E88A1A];
+    }
+    .sidebar-section-label {
+        @apply px-5 pt-5 pb-1.5 text-[10px] uppercase tracking-widest font-semibold text-slate-500/60;
+    }
+
+    /* ── Cards ── */
+    .stat-card {
+        @apply bg-white rounded-2xl border border-slate-200 p-6 shadow-sm hover:shadow-md transition-all duration-200;
+    }
+    .action-card {
+        @apply bg-white border border-slate-200 rounded-2xl p-5 flex items-center gap-4 hover:shadow-lg transition-all duration-200 cursor-pointer;
+    }
+
+    /* ── Table ── */
+    tbody tr {
+        @apply transition-colors duration-100;
+    }
+    tbody tr:hover {
+        @apply bg-orange-50/40;
+    }
+    tbody tr:nth-child(even) {
+        @apply bg-slate-50/60;
+    }
+    thead th {
+        @apply text-xs font-semibold text-slate-500 tracking-wide;
+    }
+
+    /* ── Buttons ── */
+    button, [role="button"] {
+        transition: all 150ms ease;
+    }
+
+    /* ── Misc ── */
+    .card-hoverable {
+        @apply shadow-sm transition-shadow duration-200 hover:shadow-md;
+    }
+    .empty-state-icon {
+        @apply h-14 w-14 mx-auto mb-3 flex items-center justify-center rounded-2xl bg-orange-50 text-[#E88A1A];
+    }
+    .stat-label {
+        @apply text-xs font-semibold text-slate-500 tracking-wide mb-1;
+    }
+    .stat-label-dark {
+        @apply text-xs font-semibold text-slate-400 tracking-wide mb-1;
+    }
+    .page-header {
+        @apply mb-8;
+    }
+    .badge-pill {
+        @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold;
+    }
+}
+
+/* ── Card shadow system ── */
+.rounded-2xl.border, .rounded-xl.border, .rounded-lg.border {
+    box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.04), 0 1px 2px -1px rgb(0 0 0 / 0.04);
+    transition: box-shadow 200ms ease, transform 200ms ease;
+}
+.rounded-2xl.border:hover, .rounded-xl.border:hover {
+    box-shadow: 0 8px 24px 0 rgb(0 0 0 / 0.08);
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+
+/* ── Focus ── */
+*:focus-visible {
+    outline: 2px solid #E88A1A;
+    outline-offset: 2px;
+    border-radius: 6px;
+}
+
+/* ── Selection ── */
+::selection { background: #E88A1A; color: white; }
+
+/* ── Print ── */
+@media print {
+    .no-print { display: none !important; }
+    body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+}
+
+/* ── Animations ── */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideInLeft {
+    from { opacity: 0; transform: translateX(-10px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+@keyframes scaleIn {
+    from { opacity: 0; transform: scale(0.97); }
+    to { opacity: 1; transform: scale(1); }
+}
+.animate-fade-in { animation: fadeIn 0.35s ease-out; }
+.animate-slide-in { animation: slideInLeft 0.3s ease-out; }
+.animate-scale-in { animation: scaleIn 0.25s ease-out; }

@@ -1,0 +1,530 @@
+{
+  "summary": {
+    "total_tests": 27,
+    "passed": 18,
+    "failed": 9,
+    "success_rate": 66.66666666666666,
+    "critical_failures": [],
+    "timestamp": "2026-03-17T11:14:58.925380"
+  },
+  "detailed_results": [
+    {
+      "name": "Health Check",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:55.779436",
+      "response_data": {
+        "status": "healthy",
+        "timestamp": "2026-03-17T11:14:55.760827+00:00"
+      }
+    },
+    {
+      "name": "User Registration",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:56.132417",
+      "response_data": {
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoidXNlcl8wNGJkYjE1OTJjNGQiLCJyb2xlIjoiYWRtaW4iLCJleHAiOjE3NzM4MzI0OTZ9.vIXfgnNEXtOT2k5UMXbVRrwg_MCMyuJP304hZsuf_Y8",
+        "user": {
+          "user_id": "user_04bdb1592c4d",
+          "email": "test_admin_111455@shemford.edu",
+          "name": "Test Admin User",
+          "role": "admin",
+          "phone": "+91-9876543210",
+          "picture": null,
+          "is_active": true,
+          "created_at": "2026-03-17T11:14:55.875698+00:00"
+        }
+      }
+    },
+    {
+      "name": "Get User Info",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:56.244294",
+      "response_data": {
+        "user_id": "user_04bdb1592c4d",
+        "email": "test_admin_111455@shemford.edu",
+        "name": "Test Admin User",
+        "role": "admin",
+        "phone": "+91-9876543210",
+        "picture": null,
+        "is_active": true,
+        "created_at": "2026-03-17T11:14:55.875698+00:00"
+      }
+    },
+    {
+      "name": "Get Classes",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:56.375127",
+      "response_data": [
+        {
+          "name": "Nursery",
+          "sections": [
+            "A",
+            "B"
+          ]
+        },
+        {
+          "name": "LKG",
+          "sections": [
+            "A",
+            "B"
+          ]
+        },
+        {
+          "name": "UKG",
+          "sections": [
+            "A",
+            "B"
+          ]
+        },
+        {
+          "name": "1",
+          "sections": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        {
+          "name": "2",
+          "sections": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        {
+          "name": "3",
+          "sections": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        {
+          "name": "4",
+          "sections": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        {
+          "name": "5",
+          "sections": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        {
+          "name": "6",
+          "sections": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        {
+          "name": "7",
+          "sections": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        {
+          "name": "8",
+          "sections": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        {
+          "name": "9",
+          "sections": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        {
+          "name": "10",
+          "sections": [
+            "A",
+            "B",
+            "C"
+          ]
+        },
+        {
+          "name": "11",
+          "sections": [
+            "Science",
+            "Commerce",
+            "Arts"
+          ]
+        },
+        {
+          "name": "12",
+          "sections": [
+            "Science",
+            "Commerce",
+            "Arts"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Get Subjects",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:56.483410",
+      "response_data": [
+        "English",
+        "Hindi",
+        "Mathematics",
+        "Science",
+        "Social Science",
+        "Physics",
+        "Chemistry",
+        "Biology",
+        "Computer Science",
+        "Economics",
+        "Accountancy",
+        "Business Studies",
+        "History",
+        "Geography",
+        "Political Science",
+        "Physical Education"
+      ]
+    },
+    {
+      "name": "Get Departments",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:56.585494",
+      "response_data": [
+        "Teaching",
+        "Administration",
+        "Accounts",
+        "IT",
+        "Sports",
+        "Library",
+        "Laboratory",
+        "Transport",
+        "Security"
+      ]
+    },
+    {
+      "name": "Create Student",
+      "success": false,
+      "error": "Status 500, expected 200. Response: {'raw_response': 'Internal Server Error'}",
+      "timestamp": "2026-03-17T11:14:56.742056",
+      "response_data": {
+        "raw_response": "Internal Server Error"
+      }
+    },
+    {
+      "name": "Get Students",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:56.876753",
+      "response_data": [
+        {
+          "student_id": "STU2026123F80",
+          "admission_number": "SFS20260001",
+          "user_id": null,
+          "first_name": "Test",
+          "last_name": "Student",
+          "email": "test.student@example.com",
+          "phone": "+91-9876543211",
+          "date_of_birth": "2010-01-15",
+          "gender": "male",
+          "address": "Test Address, Test City",
+          "class_name": "5",
+          "section": "A",
+          "roll_number": "05A001",
+          "parent_id": null,
+          "parent_name": "Test Parent",
+          "parent_phone": "+91-9876543212",
+          "parent_email": "test.parent@example.com",
+          "admission_date": "2026-03-17",
+          "is_active": true,
+          "fee_status": "pending",
+          "app_locked": false,
+          "created_at": "2026-03-17T11:14:56.716176+00:00"
+        }
+      ]
+    },
+    {
+      "name": "Get Specific Student",
+      "success": false,
+      "error": "No student ID available",
+      "timestamp": "2026-03-17T11:14:56.876766",
+      "response_data": null
+    },
+    {
+      "name": "Create Employee",
+      "success": false,
+      "error": "Status 500, expected 200. Response: {'raw_response': 'Internal Server Error'}",
+      "timestamp": "2026-03-17T11:14:57.031140",
+      "response_data": {
+        "raw_response": "Internal Server Error"
+      }
+    },
+    {
+      "name": "Get Employees",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:57.135983",
+      "response_data": [
+        {
+          "employee_id": "EMP20261E7586",
+          "user_id": null,
+          "first_name": "Test",
+          "last_name": "Employee",
+          "email": "test.employee@shemford.edu",
+          "phone": "+91-9876543213",
+          "date_of_birth": "1985-05-20",
+          "gender": "female",
+          "address": "Employee Address, Test City",
+          "designation": "Assistant Teacher",
+          "department": "Teaching",
+          "joining_date": "2026-03-17",
+          "salary": 45000.0,
+          "is_active": true,
+          "created_at": "2026-03-17T11:14:57.001804+00:00"
+        }
+      ]
+    },
+    {
+      "name": "Get Specific Employee",
+      "success": false,
+      "error": "No employee ID available",
+      "timestamp": "2026-03-17T11:14:57.135996",
+      "response_data": null
+    },
+    {
+      "name": "Create Fee Structure",
+      "success": false,
+      "error": "Status 500, expected 200. Response: {'raw_response': 'Internal Server Error'}",
+      "timestamp": "2026-03-17T11:14:57.310228",
+      "response_data": {
+        "raw_response": "Internal Server Error"
+      }
+    },
+    {
+      "name": "Get Fee Structures",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:57.422382",
+      "response_data": [
+        {
+          "fee_id": "fee_6159b795ce8d",
+          "class_name": "5",
+          "fee_type": "tuition",
+          "amount": 5000.0,
+          "academic_year": "2024-2025",
+          "frequency": "monthly",
+          "due_day": 10,
+          "is_active": true,
+          "created_at": "2026-03-17T11:14:57.283627+00:00"
+        }
+      ]
+    },
+    {
+      "name": "Get Fee Payments",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:57.562482",
+      "response_data": []
+    },
+    {
+      "name": "Get Due Chart",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:57.670724",
+      "response_data": [
+        {
+          "student_id": "STU2026123F80",
+          "admission_number": "SFS20260001",
+          "name": "Test Student",
+          "class_name": "5",
+          "section": "A",
+          "total_due": 0,
+          "fee_status": "pending",
+          "pending_months": []
+        }
+      ]
+    },
+    {
+      "name": "Create Announcement",
+      "success": false,
+      "error": "Status 500, expected 200. Response: {'raw_response': 'Internal Server Error'}",
+      "timestamp": "2026-03-17T11:14:57.794854",
+      "response_data": {
+        "raw_response": "Internal Server Error"
+      }
+    },
+    {
+      "name": "Get Announcements",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:57.901643",
+      "response_data": [
+        {
+          "announcement_id": "ann_13c70c901b77",
+          "title": "Test Announcement",
+          "content": "This is a test announcement for the school management system.",
+          "target_type": "all",
+          "target_value": null,
+          "priority": "normal",
+          "created_by": "user_04bdb1592c4d",
+          "is_active": true,
+          "created_at": "2026-03-17T11:14:57.755586+00:00"
+        }
+      ]
+    },
+    {
+      "name": "Send Message",
+      "success": false,
+      "error": "Status 500, expected 200. Response: {'raw_response': 'Internal Server Error'}",
+      "timestamp": "2026-03-17T11:14:58.018851",
+      "response_data": {
+        "raw_response": "Internal Server Error"
+      }
+    },
+    {
+      "name": "Get Messages",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:58.125240",
+      "response_data": [
+        {
+          "message_id": "msg_ec478ef472f3",
+          "sender_id": "user_04bdb1592c4d",
+          "sender_name": "Test Admin User",
+          "recipient_id": null,
+          "recipient_type": "all",
+          "recipient_value": null,
+          "subject": "Test Message",
+          "content": "This is a test message from the automated testing system.",
+          "message_type": "text",
+          "voice_url": null,
+          "is_read": false,
+          "created_at": "2026-03-17T11:14:57.991064+00:00"
+        }
+      ]
+    },
+    {
+      "name": "Create Syllabus",
+      "success": false,
+      "error": "Status 500, expected 200. Response: {'raw_response': 'Internal Server Error'}",
+      "timestamp": "2026-03-17T11:14:58.254785",
+      "response_data": {
+        "raw_response": "Internal Server Error"
+      }
+    },
+    {
+      "name": "Get Syllabus",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:58.362396",
+      "response_data": [
+        {
+          "syllabus_id": "syl_52dae78af548",
+          "class_name": "5",
+          "subject": "Mathematics",
+          "title": "Mathematics Syllabus - Class 5",
+          "description": "Complete mathematics syllabus for class 5 students",
+          "file_url": null,
+          "file_name": null,
+          "academic_year": "2024-2025",
+          "uploaded_by": "user_04bdb1592c4d",
+          "is_active": true,
+          "created_at": "2026-03-17T11:14:58.226839+00:00"
+        }
+      ]
+    },
+    {
+      "name": "Create Issue",
+      "success": false,
+      "error": "Status 500, expected 200. Response: {'raw_response': 'Internal Server Error'}",
+      "timestamp": "2026-03-17T11:14:58.466456",
+      "response_data": {
+        "raw_response": "Internal Server Error"
+      }
+    },
+    {
+      "name": "Get Issues",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:58.578389",
+      "response_data": [
+        {
+          "issue_id": "iss_b0fe6360f216",
+          "title": "Test Issue - Network Problem",
+          "description": "Test issue for network connectivity problems in computer lab",
+          "category": "facility",
+          "priority": "normal",
+          "status": "open",
+          "raised_by": "user_04bdb1592c4d",
+          "raised_by_role": "admin",
+          "assigned_to": null,
+          "resolution": null,
+          "resolved_at": null,
+          "created_at": "2026-03-17T11:14:58.440426+00:00"
+        }
+      ]
+    },
+    {
+      "name": "Get Dashboard Stats",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:58.725184",
+      "response_data": {
+        "total_students": 1,
+        "total_employees": 1,
+        "fee_overdue_count": 0,
+        "open_issues": 1,
+        "today_present": 0,
+        "month_collection": 0
+      }
+    },
+    {
+      "name": "Get Financial Report",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:58.821278",
+      "response_data": {
+        "total_collection": 0,
+        "total_pending": 0,
+        "by_payment_method": {},
+        "by_month": {},
+        "transaction_count": 0
+      }
+    },
+    {
+      "name": "Get Users",
+      "success": true,
+      "error": null,
+      "timestamp": "2026-03-17T11:14:58.925116",
+      "response_data": [
+        {
+          "user_id": "user_04bdb1592c4d",
+          "email": "test_admin_111455@shemford.edu",
+          "name": "Test Admin User",
+          "role": "admin",
+          "phone": "+91-9876543210",
+          "picture": null,
+          "is_active": true,
+          "created_at": "2026-03-17T11:14:55.875698Z"
+        }
+      ]
+    }
+  ]
+}

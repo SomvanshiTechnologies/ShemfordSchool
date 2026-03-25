@@ -1,0 +1,148 @@
+{
+  "identity": {
+    "name": "E1 - The Monochrome Minimalist",
+    "tone": "Professional, High-Contrast, Architectural, Precision-Oriented",
+    "core_principles": [
+      "Strict Color Discipline: ONLY Orange (#E88A1A), Black, White, and Grays.",
+      "Content is King: Reduce UI chrome. Data stands out, containers recede.",
+      "Professional Density: Use whitespace to group, not lines.",
+      "No Visual Clutter: No decorative icons, no gradients, no shadows (flat style)."
+    ]
+  },
+  "palette": {
+    "primary": {
+      "main": "#E88A1A",
+      "hover": "#D17609",
+      "active": "#B56000",
+      "foreground": "#FFFFFF"
+    },
+    "neutral": {
+      "black": "#000000",
+      "charcoal": "#1A1A1A",
+      "dark_gray": "#333333",
+      "mid_gray": "#888888",
+      "light_gray": "#E5E5E5",
+      "off_white": "#F9FAFB",
+      "white": "#FFFFFF"
+    },
+    "functional": {
+      "background": "#F9FAFB",
+      "card_bg": "#FFFFFF",
+      "sidebar_bg": "#1A1A1A",
+      "sidebar_active": "#E88A1A",
+      "text_main": "#1A1A1A",
+      "text_muted": "#888888",
+      "border": "#E5E5E5"
+    },
+    "semantic_replacements": {
+      "error": "Border: 2px solid #E88A1A, Text: #E88A1A (Do not use Red)",
+      "success": "Background: #000000, Text: #FFFFFF (Do not use Green)",
+      "warning": "Border: 1px dashed #E88A1A, Text: #1A1A1A (Do not use Yellow)",
+      "info": "Background: #F5F5F5, Text: #1A1A1A (Do not use Blue)"
+    }
+  },
+  "typography": {
+    "font_family": {
+      "headings": "Manrope, sans-serif",
+      "body": "Inter, sans-serif",
+      "mono": "JetBrains Mono, monospace"
+    },
+    "styles": {
+      "h1": "text-4xl font-bold tracking-tight text-[#1A1A1A]",
+      "h2": "text-2xl font-bold tracking-tight text-[#1A1A1A]",
+      "h3": "text-xl font-semibold tracking-tight text-[#1A1A1A]",
+      "body": "text-sm text-[#333333] leading-relaxed",
+      "small": "text-xs text-[#888888] font-medium uppercase tracking-wider"
+    }
+  },
+  "layout": {
+    "spacing_scale": {
+      "container_padding": "p-8",
+      "grid_gap": "gap-6",
+      "section_gap": "gap-12"
+    },
+    "grid_system": "Bento Grid (Mode B)",
+    "sidebar": {
+      "width": "w-64",
+      "background": "bg-[#1A1A1A]",
+      "text": "text-gray-400",
+      "active_item": "bg-[#E88A1A] text-white rounded-none border-r-4 border-white"
+    },
+    "radius": {
+      "default": "rounded-none",
+      "card": "rounded-sm",
+      "button": "rounded-sm",
+      "input": "rounded-sm"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-[#E88A1A] text-white hover:bg-black transition-colors duration-200 rounded-sm font-semibold uppercase tracking-wide text-xs px-6 py-3",
+      "secondary": "bg-black text-white hover:bg-[#333333] rounded-sm font-semibold uppercase tracking-wide text-xs px-6 py-3",
+      "outline": "border border-[#E5E5E5] bg-transparent text-[#1A1A1A] hover:border-black hover:bg-transparent rounded-sm font-semibold uppercase tracking-wide text-xs px-6 py-3",
+      "ghost": "text-[#888888] hover:text-[#E88A1A] hover:bg-transparent"
+    },
+    "cards": {
+      "default": "bg-white border border-[#E5E5E5] p-6 shadow-none rounded-sm",
+      "stat": "bg-white border-l-4 border-[#E88A1A] p-6 shadow-none rounded-sm",
+      "interactive": "bg-white border border-[#E5E5E5] hover:border-[#E88A1A] transition-colors duration-300 p-6 cursor-pointer"
+    },
+    "inputs": {
+      "default": "bg-white border border-[#E5E5E5] focus:border-[#E88A1A] focus:ring-0 rounded-sm h-12 text-sm placeholder:text-[#888888]",
+      "label": "text-xs font-bold uppercase tracking-wider text-[#1A1A1A] mb-2 block"
+    },
+    "tables": {
+      "container": "border border-[#E5E5E5] rounded-sm overflow-hidden",
+      "header": "bg-[#FAFAFA] text-[#888888] uppercase text-xs font-bold tracking-wider py-4 border-b border-[#E5E5E5]",
+      "row": "border-b border-[#E5E5E5] hover:bg-[#FAFAFA] transition-colors",
+      "cell": "py-4 text-sm text-[#333333]"
+    },
+    "charts": {
+      "palette": ["#E88A1A", "#000000", "#A3A3A3", "#E5E5E5"],
+      "background": "transparent",
+      "grid": "#F5F5F5",
+      "tooltip_bg": "#1A1A1A",
+      "tooltip_text": "#FFFFFF"
+    },
+    "badges": {
+      "base": "px-2 py-1 text-[10px] uppercase font-bold tracking-wider border",
+      "active": "bg-white text-[#E88A1A] border-[#E88A1A]",
+      "inactive": "bg-white text-[#888888] border-[#E5E5E5]",
+      "highlight": "bg-[#1A1A1A] text-white border-[#1A1A1A]"
+    }
+  },
+  "assets": {
+    "login_hero": {
+      "url": "https://images.unsplash.com/photo-1770832501247-f8de2a392550?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHwyfHxtb2Rlcm4lMjBzY2hvb2wlMjBidWlsZGluZyUyMG1pbmltYWxpc3QlMjBhcmNoaXRlY3R1cmV8ZW58MHx8fHwxNzczODQxMzMyfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Modern Minimalist Architecture"
+    },
+    "student_placeholder": {
+      "url": "https://images.unsplash.com/photo-1555175672-b3a07ff5a80b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHw0fHxtb2Rlcm4lMjBzY2hvb2wlMjBidWlsZGluZyUyMG1pbmltYWxpc3QlMjBhcmNoaXRlY3R1cmV8ZW58MHx8fHwxNzczODQxMzMyfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "School Building Placeholder"
+    }
+  },
+  "motion": {
+    "hover": "transition-all duration-300 ease-out",
+    "page_enter": "animate-fade-in",
+    "micro_interactions": "active:scale-[0.98]"
+  },
+  "universal_guidelines": [
+    "NO EMOJIS allowed anywhere in the UI.",
+    "NO SHADOWS for depth; use Borders and Contrast instead.",
+    "NO ROUNDED CORNERS > 4px. Prefer sharp or 2px radius.",
+    "NO GRADIENTS. Solid flat colors only.",
+    "ALL ICONS must be stroke-based, thin (1.5px), and colored #1A1A1A or #E88A1A.",
+    "DATA VISUALIZATION: Use patterns or shades of gray/orange/black to differentiate data points, never other colors.",
+    "FORBIDDEN: Blue, Green, Red, Yellow, Purple, Teal.",
+    "USE 'Lucide-React' icons only."
+  ],
+  "instructions_to_main_agent": [
+    "1. UPDATE tailwind.config.js to extend colors with 'brand-orange': '#E88A1A', 'brand-black': '#1A1A1A'. Remove standard 'destructive', 'success' colors.",
+    "2. REFACTOR Sidebar: Use the #1A1A1A background. Active state is solid Orange text with white indicator.",
+    "3. REFACTOR Dashboard: Convert all Stat Cards to 'Minimal Stat'. Remove background icons. Use simple big numbers.",
+    "4. REFACTOR Tables: Remove zebra striping. Use thin gray borders. Align text left.",
+    "5. REFACTOR Login: Split screen. Left side: Image (Grayscale or muted). Right side: Clean form with Orange button.",
+    "6. DELETE unused components that add clutter.",
+    "7. ENSURE all text meets WCAG AA contrast ratios (Orange on White is tricky, use Orange for graphical elements/buttons, Black for text)."
+  ]
+}

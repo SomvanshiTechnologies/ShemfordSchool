@@ -1,0 +1,154 @@
+<analysis>**original_problem_statement**:
+The user wants to build a complete, production-ready School Management System for “Shemford Futuristic School”.
+LATEST PRODUCT REQUIREMENTS: Correct, standardize, and implement REALISTIC BUSINESS LOGIC matching a real Indian school ERP.
+- **Fees**: Admin defines Annual Fee per class -> system divides into 12 monthly installments. Strict payment rules: No skipped payments, no partial payments.
+- **Attendance**: Teacher marks daily -> locks upon submission. Admin override required to edit.
+- **Marks**: Admin defines Exams (Term 1, Term 2). Teacher enters marks -> locks upon final submission. CBSE-style calculation.
+- **RBAC**: Strict role enforcement. Admin (full), Teacher (marks/attendance entry, view assigned), Parent (view-only + pay fees), Student (view-only).
+- **Data Flow**: Class changes must trigger fee recalculation. Modules must be tightly interconnected.
+
+**User's preferred language**: English
+
+**what currently exists?** 
+A fully refactored, modular FastAPI backend (split into 16 distinct router files) and a newly redesigned, minimalist React frontend (using a strict monochrome palette: Orange, White, Black). The backend has just been completely overhauled to support the realistic Indian school business logic (fee installments, attendance locks, exam locks), and the agent was in the middle of updating the frontend to match these new backend structures.
+
+**Last working item**:
+    - **Last item agent was working**: Updating the frontend components to match the new realistic business logic backend. The agent completely rewrote  and was actively running  edits on  to implement the new lock after submission UI flow.
+    - **Status**: IN PROGRESS
+    - **Agent Testing Done**: N (Backend was tested via bash scripts, but the frontend rewrite is mid-execution).
+    - **Which testing method agent to use?** testing_agent_v3_fork (both backend and frontend) once the remaining frontend pages are fully updated.
+    - **User Testing Done**: N
+
+**All Pending/In progress Issue list**:
+  Issue 1: Frontend updates for Marks and Reporting (P0)
+     - **Attempted fixes**: N/A (Agent hasn't reached this yet).
+     - **Next debug checklist**: Update  to support the new Exam definition and locked state logic. Update  to read from the new fee installment and attendance schemas.
+     - **Why fix this issue and what will be achieved with the fix?**: Ensures the frontend properly reflects the newly overhauled backend logic without breaking.
+     - **Status**: NOT STARTED
+     - **Is recurring issue?** N
+     - **Should Test frontend/backend/both after fix?**: both
+     - **Blocked on other issue**: None.
+     
+  Issue 2: Strict UI Role-Based Access Control (RBAC) Verification (P0)
+     - **Attempted fixes**: N/A
+     - **Next debug checklist**: Check all main pages (, , , etc.) to ensure buttons and tabs are strictly hidden/shown based on the exact Teacher/Parent/Admin rules provided in the prompt (e.g., Teachers cannot access financial reports, Parents cannot edit anything).
+     - **Why fix this issue and what will be achieved with the fix?**: Fulfills the user's strict RBAC requirements.
+     - **Status**: NOT STARTED
+     - **Is recurring issue?** N
+     - **Should Test frontend/backend/both after fix?**: frontend
+
+**In progress Task List**:
+  Task 1: Complete Realistic Business Logic Frontend Implementation (P0)
+     - **Where to resume**: The agent just executed  blocks on  to support attendance locking. Verify if  is fully complete and functional. Then proceed to rewrite/update  and  to match their respective backend overhauls. 
+     - **What will be achieved with this?**: A complete end-to-end sync between the user's realistic Indian school requirements and the UI.
+     - **Status**: IN PROGRESS
+     - **Should Test frontend/backend/both after fix?**: both
+     - **Blocked on something**: No.
+
+**Upcoming and Future Tasks**:
+    Upcoming Tasks:
+    - (P1) Implement Real Payment Gateway: Replace the mock Stripe integration with a fully functional one.
+    - (P1) Implement Real Notification System: Replace mock email/SMS placeholders with actual integrations (e.g., SendGrid, Twilio).
+    - (P1) Voice Note Feature: Implement the feature to record, send, and securely play back voice messages.
+    
+    Future Tasks:
+    - (P2) Advanced Security Hardening: Signed/expiring URLs for secure file access, restriction of screenshots.
+    - (P2) Issue Tracking System Enhancement.
+
+**Completed work in this session**:
+- Refactored monolithic backend  into 16 modular  files inside .
+- Fixed Excel/PDF report generation (Resolved  merged cell errors).
+- Implemented Forgot Password flow and Employee-User account linking.
+- Full UI Redesign: Migrated 14+ pages to a professional minimalist design using exclusively Orange (#E88A1A), White, and Black (#1A1A1A). Replaced green/red UI badges with monochrome/outline variants.
+- Backend Business Logic Overhaul (Phase 1):
+  - Rewrote Fees logic (Annual fee -> 12 monthly installments, no skip payments, no partial payments).
+  - Rewrote Attendance logic (Daily locks, Admin override).
+  - Rewrote Marks logic (Exam definitions, locked state).
+  - Updated Onboarding to automatically generate fee installments.
+
+**Earlier issues found/mentioned but not fixed**:
+  None. The agent successfully addressed previous testing failures and UI issues before beginning the current business logic rewrite.
+
+**Known issue recurrence from previous fork**:
+  - Issue recurrence in previous fork: None
+  - Recurrence count: 0
+  - Status: RESOLVED
+
+**Code Architecture**:
+
+
+**Key Technical Concepts**:
+- **Frontend**: React, TailwindCSS (Monochrome strict palette), Shadcn/UI
+- **Backend**: FastAPI (Python), Pydantic
+- **Database**: MongoDB (motor)
+- **Authentication**: JWT, Google OAuth
+
+**key DB schema**:
+- **users**, **students**, **employees**, **classes**
+- **fee_installments** (NEW): {student_id, month, amount, status, due_date}
+- **attendance**: Updated to include  and  fields.
+- **exams** (NEW): {name, class_id, is_locked}
+
+**changes in tech stack**:
+- None in this specific session, but heavy data-model redesign.
+
+**All files of reference**:
+-  (Updated schema definitions)
+- , ,  (New realistic logic)
+-  (Fully rewritten frontend logic)
+-  (Currently being edited)
+-  (Strict UI guidelines created by design agent)
+
+**Areas that need refactoring**:
+-  and  must be updated next to align with the new backend logic.
+
+**key api endpoints**:
+-  (Set annual fees)
+-  (Get monthly breakdown)
+-  (Includes lock logic)
+-  (Exam creation/locking)
+
+**Critical Info for New Agent**:
+- **Strict Business Rules:** The system now operates on rigid Indian school rules. Fees are generated as 12 monthly installments. Parents CANNOT pay partially or skip months. Attendance and marks LOCK immediately upon teacher submission. The frontend UI MUST respect these rules (e.g., disable form inputs and show Locked by Admin badges when ).
+- **UI Styling:** The app has a strict Minimalist Monochrome design. Do NOT introduce new colors (like green for success or red for danger). Stick strictly to Orange, White, and Black. Use  or  for badges.
+
+**documents and test reports created in this job**:
+-  (From earlier refactoring phase)
+-  (Created by design agent)
+-  (Updated)
+
+**Last 10 User Messages and any pending HUMAN messages**:
+1. **User**: Please use ask_human tool and confirm your plan now.
+2. **User**: Proceed
+3. **User**: Improve the UI to be more professional and minimalistic, use only orange, white and black and remove unnecessary UI components
+4. **User**: Improve the UI with complete autonomy
+5. **User**: Credits added
+6. **User**: Give me test credentials for all users
+7. **User**: Your task is to CORRECT, STANDARDIZE, and IMPLEMENT REALISTIC BUSINESS LOGIC across the entire School Management System... (Highly detailed prompt regarding Fees, RBAC, Attendance, Marks).
+8. **User**: Proceed with all
+*Pending Human Messages*: None. The agent is mid-execution of the task requested in message #7.
+
+**Project Health Check**:
+- **Backend**: Working. Completely overhauled and tested via bash. 
+- **Frontend**: Broken/Mid-Update.  was replaced,  is mid-edit, and  is currently out of sync with the backend.
+
+**3rd Party Integrations**:
+- **Emergent-managed Google Auth**: Functional
+- **Stripe (Payments)**: Mocked — requires User API Key
+- **Resend/Sendgrid (Email)**: Mocked — requires User API Key
+
+**Testing status**:
+- Testing agent used after significant changes: YES (For the first backend refactoring phase and UI redesign).
+- Troubleshoot agent used after agent stuck in loop: NO
+- Test files created: None recently.
+- Known regressions:  and  are out of sync due to the ongoing business logic overhaul.
+
+**Credentials to test flow**:
+| Role | Email | Password |
+|---|---|---|
+| Admin | admin@test.com | Test1234! |
+| Teacher | teacher@school.com | Teacher1234! |
+| Parent | parent@test.com | Test1234! |
+
+**What agent forgot to execute**:
+The agent hasn't forgotten anything; it is simply in the middle of a massive frontend overhaul. It needs to finish , then move directly to , , and strict UI RBAC verification.</analysis>
