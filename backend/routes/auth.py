@@ -409,4 +409,39 @@ async def search_users(request: Request, q: Optional[str] = None, role: Optional
         query["role"] = role
 
     users = await db.users.find(query, {"_id": 0, "password_hash": 0}).to_list(50)
-    return [{"user_id": u["user_id"], "name": u["name"], "email": u["email"], "role": u["role"]} for u in users]
+    results = [
+        {
+            "user_id": u["user_id"],
+            "name": u["name"],
+            "email": u.get("email", ""),
+            "role": u["role"]
+        }
+        for u in users
+    ]
+
+    # Also search students collection when query includes student role or no role filter
+    if q and (not role or role == "student"):
+        student_query: dict = {"is_active": True}
+        student_query["$or"] = [
+            {"first_name": {"$regex": q, "$options": "i"}},
+            {"last_name": {"$regex": q, "$options": "i"}},
+            {"admission_number": {"$regex": q, "$options": "i"}},
+        ]
+        students = await db.students.find(student_query, {"_id": 0}).to_list(30)
+        seen_user_ids = {r["user_id"] for r in results}
+        for s in students:
+            uid = s.get("user_id") or s["student_id"]
+            if uid not in seen_user_ids:
+                seen_user_ids.add(uid)
+                results.append({
+                    "user_id": uid,
+                    "name": f"{s['first_name']} {s['last_name']}",
+                    "email": s.get("email", ""),
+                    "role": "student",
+                    "student_id": s["student_id"],
+                    "class_name": s.get("class_name", ""),
+                    "section": s.get("section", ""),
+                    "admission_number": s.get("admission_number", ""),
+                })
+
+    return results[:50]

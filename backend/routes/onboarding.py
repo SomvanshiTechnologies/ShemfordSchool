@@ -45,6 +45,26 @@ async def start_onboarding(request: Request):
     user = await require_roles(UserRole.ADMIN)(request)
     body = await request.json()
 
+    # ── Required field validation ───────────────────────────────────────────
+    REQUIRED_FIELDS = {
+        "first_name": "First Name",
+        "last_name": "Last Name",
+        "gender": "Gender",
+        "date_of_birth": "Date of Birth",
+        "parent_name": "Father / Guardian Name",
+        "parent_phone": "Contact Number",
+    }
+    validation_errors = {}
+    for field, label in REQUIRED_FIELDS.items():
+        val = body.get(field)
+        if not val or (isinstance(val, str) and not val.strip()):
+            validation_errors[field] = f"{label} is required"
+    if validation_errors:
+        raise HTTPException(
+            status_code=422,
+            detail={"validation_errors": validation_errors}
+        )
+
     # Duplicate check in existing students
     if body.get("date_of_birth"):
         existing = await db.students.find_one({

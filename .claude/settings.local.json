@@ -123,7 +123,17 @@
       "Bash(kill -9 4312)",
       "Bash(git init:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git remote:*)",
+      "Bash(git branch:*)",
+      "Bash(git push:*)",
+      "Bash(gh auth:*)",
+      "Bash(npx --no-install react-scripts build)",
+      "Bash(npx --yes acorn --ecma2020 --module src/components/ReportsPage.js)",
+      "Bash(mongosh --quiet --eval \"db.runCommand\\({ping:1}\\)\")",
+      "Bash(mongosh --quiet --eval \"rs.status\\(\\).ok\")",
+      "Bash(mkdir -p /tmp/shemford-mongo)",
+      "Bash(mongod --replSet rs0 --dbpath /tmp/shemford-mongo --port 27017 --bind_ip localhost --fork --logpath /tmp/shemford-mongo/mongod.log)"
     ]
   }
 }

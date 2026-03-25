@@ -21,7 +21,7 @@ import {
   TableRow,
 } from './ui/table';
 import { toast } from 'sonner';
-import { BarChart3, TrendingUp, Download, CreditCard, GraduationCap, Calendar, FileText, Loader2 } from 'lucide-react';
+import { BarChart3, TrendingUp, Download, CreditCard, GraduationCap, Calendar, FileText, Loader2, Clock } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from 'recharts';
 
 const ReportsPage = () => {
@@ -37,7 +37,22 @@ const ReportsPage = () => {
   const [endDate, setEndDate] = useState('');
   const [attClass, setAttClass] = useState('');
   const [attDate, setAttDate] = useState('');
+  const [attStartDate, setAttStartDate] = useState('');
+  const [attEndDate, setAttEndDate] = useState('');
   const [attendanceReport, setAttendanceReport] = useState(null);
+
+  // Helper: get date string N months ago
+  const dateMonthsAgo = (n) => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - n);
+    return d.toISOString().slice(0, 10);
+  };
+  const today = () => new Date().toISOString().slice(0, 10);
+
+  const applyQuickFilter = (months, setStart, setEnd) => {
+    setStart(dateMonthsAgo(months));
+    setEnd(today());
+  };
 
   useEffect(() => {
     fetchClasses();
@@ -92,7 +107,12 @@ const ReportsPage = () => {
     try {
       const params = {};
       if (attClass) params.class_name = attClass;
-      if (attDate) params.date = attDate;
+      if (attDate) {
+        params.date = attDate;
+      } else {
+        if (attStartDate) params.start_date = attStartDate;
+        if (attEndDate) params.end_date = attEndDate;
+      }
       const response = await api.get('/reports/attendance', { params });
       setAttendanceReport(response.data);
     } catch (error) {
@@ -138,63 +158,89 @@ const ReportsPage = () => {
         <TabsContent value="financial">
           <Card className="mb-6">
             <CardContent className="p-4">
-              <div className="flex flex-col sm:flex-row gap-4 items-end flex-wrap">
-                <div className="space-y-2">
-                  <Label>Start Date</Label>
-                  <Input
-                    type="date"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                    data-testid="start-date"
-                  />
+              <div className="flex flex-col gap-3">
+                {/* Quick filter buttons */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Clock className="h-4 w-4 text-slate-500" />
+                  <span className="text-xs text-slate-500 font-medium">Quick filter:</span>
+                  {[['1M', 1], ['3M', 3], ['6M', 6]].map(([label, months]) => (
+                    <button key={label} onClick={() => applyQuickFilter(months, setStartDate, setEndDate)}
+                      className="px-3 py-1 rounded-xl text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-900 hover:text-white hover:border-slate-900 transition-colors">
+                      Last {label}
+                    </button>
+                  ))}
+                  {(startDate || endDate) && (
+                    <button onClick={() => { setStartDate(''); setEndDate(''); }}
+                      className="px-3 py-1 rounded-xl text-xs font-semibold border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 transition-colors">
+                      Clear
+                    </button>
+                  )}
                 </div>
-                <div className="space-y-2">
-                  <Label>End Date</Label>
-                  <Input
-                    type="date"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                    data-testid="end-date"
-                  />
-                </div>
-                <Button onClick={fetchFinancialReport} disabled={loading} data-testid="generate-financial-btn">
-                  {loading ? 'Loading...' : 'Generate Report'}
-                </Button>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      const params = new URLSearchParams();
-                      params.set('format', 'pdf');
-                      if (startDate) params.set('start_date', startDate);
-                      if (endDate) params.set('end_date', endDate);
-                      window.open(`${process.env.REACT_APP_BACKEND_URL}/api/reports/financial/export?${params.toString()}`, '_blank');
-                    }}
-                    data-testid="export-financial-pdf"
-                  >
-                    <Download className="h-4 w-4 mr-1" /> PDF
+                <div className="flex flex-col sm:flex-row gap-4 items-end flex-wrap">
+                  <div className="space-y-2">
+                    <Label>Start Date</Label>
+                    <Input
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      data-testid="start-date"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>End Date</Label>
+                    <Input
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      data-testid="end-date"
+                    />
+                  </div>
+                  <Button onClick={fetchFinancialReport} disabled={loading} data-testid="generate-financial-btn">
+                    {loading ? 'Loading...' : 'Generate Report'}
                   </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      const params = new URLSearchParams();
-                      params.set('format', 'excel');
-                      if (startDate) params.set('start_date', startDate);
-                      if (endDate) params.set('end_date', endDate);
-                      window.open(`${process.env.REACT_APP_BACKEND_URL}/api/reports/financial/export?${params.toString()}`, '_blank');
-                    }}
-                    data-testid="export-financial-excel"
-                  >
-                    <FileText className="h-4 w-4 mr-1" /> Excel
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const params = new URLSearchParams();
+                        params.set('format', 'pdf');
+                        if (startDate) params.set('start_date', startDate);
+                        if (endDate) params.set('end_date', endDate);
+                        window.open(`${process.env.REACT_APP_BACKEND_URL}/api/reports/financial/export?${params.toString()}`, '_blank');
+                      }}
+                      data-testid="export-financial-pdf"
+                    >
+                      <Download className="h-4 w-4 mr-1" /> PDF
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const params = new URLSearchParams();
+                        params.set('format', 'excel');
+                        if (startDate) params.set('start_date', startDate);
+                        if (endDate) params.set('end_date', endDate);
+                        window.open(`${process.env.REACT_APP_BACKEND_URL}/api/reports/financial/export?${params.toString()}`, '_blank');
+                      }}
+                      data-testid="export-financial-excel"
+                    >
+                      <FileText className="h-4 w-4 mr-1" /> Excel
+                    </Button>
+                  </div>
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          {financialReport && (
+          {financialReport && financialReport.transaction_count === 0 && (
+            <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+              <CreditCard className="h-12 w-12 mb-4 text-slate-300" />
+              <p className="text-sm font-medium">No transactions found for the selected period</p>
+              <p className="text-xs mt-1">Try adjusting the date range or clear filters</p>
+            </div>
+          )}
+          {financialReport && financialReport.transaction_count > 0 && (
             <div className="space-y-6">
               <div className="grid gap-4 md:grid-cols-4">
                 <div className="bg-slate-900 p-6 rounded-2xl">
@@ -394,86 +440,120 @@ const ReportsPage = () => {
         <TabsContent value="attendance">
           <Card className="mb-6">
             <CardContent className="p-4">
-              <div className="flex flex-col sm:flex-row gap-4 items-end flex-wrap">
-                <div className="space-y-2">
-                  <Label>Class</Label>
-                  <Select value={attClass || "all"} onValueChange={(v) => setAttClass(v === "all" ? "" : v)}>
-                    <SelectTrigger className="w-[150px]" data-testid="att-class">
-                      <SelectValue placeholder="All" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Classes</SelectItem>
-                      {classes.map((cls) => (
-                        <SelectItem key={cls.name} value={cls.name}>{cls.display_name || cls.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+              <div className="flex flex-col gap-3">
+                {/* Quick filter buttons */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Clock className="h-4 w-4 text-slate-500" />
+                  <span className="text-xs text-slate-500 font-medium">Quick filter:</span>
+                  {[['1M', 1], ['3M', 3], ['6M', 6]].map(([label, months]) => (
+                    <button key={label} onClick={() => { applyQuickFilter(months, setAttStartDate, setAttEndDate); setAttDate(''); }}
+                      className="px-3 py-1 rounded-xl text-xs font-semibold border border-slate-200 bg-white text-slate-700 hover:bg-slate-900 hover:text-white hover:border-slate-900 transition-colors">
+                      Last {label}
+                    </button>
+                  ))}
+                  {(attStartDate || attEndDate || attDate) && (
+                    <button onClick={() => { setAttStartDate(''); setAttEndDate(''); setAttDate(''); }}
+                      className="px-3 py-1 rounded-xl text-xs font-semibold border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 transition-colors">
+                      Clear
+                    </button>
+                  )}
                 </div>
-                <div className="space-y-2">
-                  <Label>Date</Label>
-                  <Input
-                    type="date"
-                    value={attDate}
-                    onChange={(e) => setAttDate(e.target.value)}
-                    data-testid="att-date"
-                  />
-                </div>
-                <Button onClick={fetchAttendanceReport} disabled={loading} data-testid="generate-attendance-btn">
-                  {loading ? 'Loading...' : 'Generate Report'}
-                </Button>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      const params = new URLSearchParams({ format: 'pdf' });
-                      if (attClass) params.set('class_name', attClass);
-                      if (attDate) params.set('date', attDate);
-                      window.open(`${process.env.REACT_APP_BACKEND_URL}/api/reports/attendance/export?${params.toString()}`, '_blank');
-                    }}
-                    data-testid="export-attendance-pdf"
-                  >
-                    <Download className="h-4 w-4 mr-1" /> PDF
+                <div className="flex flex-col sm:flex-row gap-4 items-end flex-wrap">
+                  <div className="space-y-2">
+                    <Label>Class</Label>
+                    <Select value={attClass || "all"} onValueChange={(v) => setAttClass(v === "all" ? "" : v)}>
+                      <SelectTrigger className="w-[150px]" data-testid="att-class">
+                        <SelectValue placeholder="All" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Classes</SelectItem>
+                        {classes.map((cls) => (
+                          <SelectItem key={cls.name} value={cls.name}>{cls.display_name || cls.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Single Date</Label>
+                    <Input type="date" value={attDate} onChange={(e) => { setAttDate(e.target.value); if (e.target.value) { setAttStartDate(''); setAttEndDate(''); }}} data-testid="att-date" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Start Date</Label>
+                    <Input type="date" value={attStartDate} onChange={(e) => { setAttStartDate(e.target.value); setAttDate(''); }} data-testid="att-start-date" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>End Date</Label>
+                    <Input type="date" value={attEndDate} onChange={(e) => { setAttEndDate(e.target.value); setAttDate(''); }} data-testid="att-end-date" />
+                  </div>
+                  <Button onClick={fetchAttendanceReport} disabled={loading} data-testid="generate-attendance-btn">
+                    {loading ? 'Loading...' : 'Generate Report'}
                   </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      const params = new URLSearchParams({ format: 'excel' });
-                      if (attClass) params.set('class_name', attClass);
-                      if (attDate) params.set('date', attDate);
-                      window.open(`${process.env.REACT_APP_BACKEND_URL}/api/reports/attendance/export?${params.toString()}`, '_blank');
-                    }}
-                    data-testid="export-attendance-excel"
-                  >
-                    <FileText className="h-4 w-4 mr-1" /> Excel
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const params = new URLSearchParams({ format: 'pdf' });
+                        if (attClass) params.set('class_name', attClass);
+                        if (attDate) params.set('date', attDate);
+                        if (attStartDate) params.set('start_date', attStartDate);
+                        if (attEndDate) params.set('end_date', attEndDate);
+                        window.open(`${process.env.REACT_APP_BACKEND_URL}/api/reports/attendance/export?${params.toString()}`, '_blank');
+                      }}
+                      data-testid="export-attendance-pdf"
+                    >
+                      <Download className="h-4 w-4 mr-1" /> PDF
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const params = new URLSearchParams({ format: 'excel' });
+                        if (attClass) params.set('class_name', attClass);
+                        if (attDate) params.set('date', attDate);
+                        if (attStartDate) params.set('start_date', attStartDate);
+                        if (attEndDate) params.set('end_date', attEndDate);
+                        window.open(`${process.env.REACT_APP_BACKEND_URL}/api/reports/attendance/export?${params.toString()}`, '_blank');
+                      }}
+                      data-testid="export-attendance-excel"
+                    >
+                      <FileText className="h-4 w-4 mr-1" /> Excel
+                    </Button>
+                  </div>
                 </div>
               </div>
             </CardContent>
           </Card>
 
           {attendanceReport && (
-            <div className="space-y-6">
-              <div className="grid gap-4 md:grid-cols-4">
-                <div className="bg-white border border-slate-200 p-6 rounded-2xl">
-                  <p className="stat-label">Total Records</p>
-                  <p className="text-3xl font-bold text-slate-900 tracking-tight">{attendanceReport.total_records}</p>
-                </div>
-                <div className="bg-slate-900 p-6 rounded-2xl">
-                  <p className="stat-label">Present</p>
-                  <p className="text-3xl font-bold text-white tracking-tight">{attendanceReport.present}</p>
-                </div>
-                <div className="bg-white border border-slate-200 border-l-4 border-l-[#E88A1A] p-6 rounded-2xl">
-                  <p className="stat-label">Absent</p>
-                  <p className="text-3xl font-bold text-slate-900 tracking-tight">{attendanceReport.absent}</p>
-                </div>
-                <div className="bg-white border border-slate-200 p-6 rounded-2xl">
-                  <p className="stat-label">Attendance %</p>
-                  <p className="text-3xl font-bold text-slate-900 tracking-tight">{attendanceReport.percentage}%</p>
+            attendanceReport.total_records === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+                <Calendar className="h-12 w-12 mb-4 text-slate-300" />
+                <p className="text-sm font-medium">No attendance records found</p>
+                <p className="text-xs mt-1">Try adjusting the date range or class filter</p>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                <div className="grid gap-4 md:grid-cols-4">
+                  <div className="bg-white border border-slate-200 p-6 rounded-2xl">
+                    <p className="stat-label">Total Records</p>
+                    <p className="text-3xl font-bold text-slate-900 tracking-tight">{attendanceReport.total_records}</p>
+                  </div>
+                  <div className="bg-slate-900 p-6 rounded-2xl">
+                    <p className="stat-label">Present</p>
+                    <p className="text-3xl font-bold text-white tracking-tight">{attendanceReport.present}</p>
+                  </div>
+                  <div className="bg-white border border-slate-200 border-l-4 border-l-[#E88A1A] p-6 rounded-2xl">
+                    <p className="stat-label">Absent</p>
+                    <p className="text-3xl font-bold text-slate-900 tracking-tight">{attendanceReport.absent}</p>
+                  </div>
+                  <div className="bg-white border border-slate-200 p-6 rounded-2xl">
+                    <p className="stat-label">Attendance %</p>
+                    <p className="text-3xl font-bold text-slate-900 tracking-tight">{attendanceReport.percentage}%</p>
+                  </div>
                 </div>
               </div>
-            </div>
+            )
           )}
         </TabsContent>
       </Tabs>

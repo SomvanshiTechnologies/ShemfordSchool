@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import api from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -39,16 +39,28 @@ const MessagesPage = () => {
   const [selectedMessage, setSelectedMessage] = useState(null);
   const [userSearchResults, setUserSearchResults] = useState([]);
   const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [classes, setClasses] = useState([]);
+  const [selectedClass, setSelectedClass] = useState('');
+  const [selectedSection, setSelectedSection] = useState('');
   const [formData, setFormData] = useState({
     recipient_type: 'user',
     recipient_id: '',
+    recipient_value: '',
     subject: '',
     content: ''
   });
 
   useEffect(() => {
     fetchMessages();
+    fetchClasses();
   }, [activeTab]);
+
+  const fetchClasses = async () => {
+    try {
+      const res = await api.get('/classes');
+      setClasses(res.data);
+    } catch {}
+  };
 
   const fetchMessages = async () => {
     setLoading(true);
@@ -83,19 +95,26 @@ const MessagesPage = () => {
 
   const handleSend = async (e) => {
     e.preventDefault();
+    const payload = { ...formData };
+    // For class/section types, set recipient_value
+    if (formData.recipient_type === 'class') {
+      payload.recipient_value = selectedClass;
+      delete payload.recipient_id;
+    } else if (formData.recipient_type === 'section') {
+      payload.recipient_value = `${selectedClass}:${selectedSection}`;
+      delete payload.recipient_id;
+    }
     try {
-      await api.post('/messages', formData);
+      await api.post('/messages', payload);
       toast.success('Message sent');
       setShowComposeDialog(false);
-      setFormData({
-        recipient_type: 'user',
-        recipient_id: '',
-        subject: '',
-        content: ''
-      });
+      setFormData({ recipient_type: 'user', recipient_id: '', recipient_value: '', subject: '', content: '' });
+      setSelectedClass('');
+      setSelectedSection('');
+      setUserSearchQuery('');
       fetchMessages();
     } catch (error) {
-      toast.error('Failed to send message');
+      toast.error(error.response?.data?.detail || 'Failed to send message');
     }
   };
 
@@ -151,25 +170,52 @@ const MessagesPage = () => {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="user">Specific User</SelectItem>
+                      <SelectItem value="user">Specific User / Student</SelectItem>
                       {(user?.role === 'admin' || user?.role === 'teacher') && (
                         <>
                           <SelectItem value="all">Everyone</SelectItem>
                           <SelectItem value="teacher">All Teachers</SelectItem>
                           <SelectItem value="student">All Students</SelectItem>
                           <SelectItem value="parent">All Parents</SelectItem>
+                          <SelectItem value="class">Entire Class</SelectItem>
+                          <SelectItem value="section">Specific Section</SelectItem>
                         </>
                       )}
                     </SelectContent>
                   </Select>
                 </div>
+                {/* Class selector for class/section broadcast */}
+                {(formData.recipient_type === 'class' || formData.recipient_type === 'section') && (
+                  <div className="space-y-2">
+                    <Label>Select Class <span className="text-red-500">*</span></Label>
+                    <Select value={selectedClass} onValueChange={(v) => { setSelectedClass(v); setSelectedSection(''); }}>
+                      <SelectTrigger><SelectValue placeholder="Choose class" /></SelectTrigger>
+                      <SelectContent>
+                        {classes.map(c => <SelectItem key={c.class_id || c.name} value={c.name}>{c.display_name || `Class ${c.name}`}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                {formData.recipient_type === 'section' && selectedClass && (
+                  <div className="space-y-2">
+                    <Label>Select Section <span className="text-red-500">*</span></Label>
+                    <Select value={selectedSection} onValueChange={setSelectedSection}>
+                      <SelectTrigger><SelectValue placeholder="Choose section" /></SelectTrigger>
+                      <SelectContent>
+                        {(classes.find(c => c.name === selectedClass)?.sections || []).map(s => (
+                          <SelectItem key={s.section_name} value={s.section_name}>{s.section_name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
                 {formData.recipient_type === 'user' && (
                   <div className="space-y-2">
-                    <Label>Search User</Label>
+                    <Label>Search User or Student</Label>
                     <Input
                       value={userSearchQuery}
                       onChange={(e) => searchUsers(e.target.value)}
-                      placeholder="Type name or email to search..."
+                      placeholder="Type name, admission number or email..."
                       data-testid="recipient-search"
                     />
                     {userSearchResults.length > 0 && (
@@ -185,8 +231,12 @@ const MessagesPage = () => {
                             }}
                             data-testid={`user-option-${u.user_id}`}
                           >
-                            <span className="font-medium text-foreground">{u.name}</span>
-                            <Badge variant="outline" className="text-xs">{u.role}</Badge>
+                            <div>
+                              <span className="font-medium text-foreground">{u.name}</span>
+                              {u.class_name && <span className="ml-2 text-xs text-slate-500">Class {u.class_name} - {u.section}</span>}
+                              {u.admission_number && <span className="ml-1 text-xs text-slate-400">({u.admission_number})</span>}
+                            </div>
+                            <Badge variant="outline" className="text-xs capitalize">{u.role}</Badge>
                           </div>
                         ))}
                       </div>

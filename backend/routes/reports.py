@@ -285,13 +285,25 @@ def _financial_excel(payments, total_collection, total_pending):
 # ==================== ATTENDANCE REPORT ====================
 
 @router.get("/reports/attendance")
-async def get_attendance_report(request: Request, class_name: Optional[str] = None, date: Optional[str] = None):
+async def get_attendance_report(
+    request: Request,
+    class_name: Optional[str] = None,
+    date: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
     await require_roles(UserRole.ADMIN, UserRole.TEACHER)(request)
     query = {"entity_type": "student"}
     if class_name:
         query["class_name"] = class_name
     if date:
         query["date"] = date
+    elif start_date and end_date:
+        query["date"] = {"$gte": start_date, "$lte": end_date}
+    elif start_date:
+        query["date"] = {"$gte": start_date}
+    elif end_date:
+        query["date"] = {"$lte": end_date}
 
     records = await db.attendance.find(query, {"_id": 0}).to_list(10000)
 
@@ -311,13 +323,26 @@ async def get_attendance_report(request: Request, class_name: Optional[str] = No
 
 
 @router.get("/reports/attendance/export")
-async def export_attendance_report(request: Request, format: str = "pdf", class_name: Optional[str] = None, date: Optional[str] = None):
+async def export_attendance_report(
+    request: Request,
+    format: str = "pdf",
+    class_name: Optional[str] = None,
+    date: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
     await require_roles(UserRole.ADMIN, UserRole.TEACHER)(request)
     query = {"entity_type": "student"}
     if class_name:
         query["class_name"] = class_name
     if date:
         query["date"] = date
+    elif start_date and end_date:
+        query["date"] = {"$gte": start_date, "$lte": end_date}
+    elif start_date:
+        query["date"] = {"$gte": start_date}
+    elif end_date:
+        query["date"] = {"$lte": end_date}
 
     records = await db.attendance.find(query, {"_id": 0}).to_list(10000)
 

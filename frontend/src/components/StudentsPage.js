@@ -31,7 +31,7 @@ import {
   TableRow,
 } from './ui/table';
 import { toast } from 'sonner';
-import { Plus, Search, Upload, Eye, Edit, GraduationCap, Filter, FileUp, Download, CheckCircle, XCircle, ArrowRight, ArrowLeft, CreditCard, User, BookOpen, KeyRound, RefreshCw, Copy, EyeOff, Loader2 } from 'lucide-react';
+import { Plus, Search, Upload, Eye, Edit, GraduationCap, Filter, FileUp, Download, CheckCircle, XCircle, ArrowRight, ArrowLeft, CreditCard, User, BookOpen, KeyRound, RefreshCw, Copy, EyeOff, Loader2, UserX, UserCheck, AlertCircle } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -65,6 +65,10 @@ const StudentsPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterClass, setFilterClass] = useState('');
   const [filterSection, setFilterSection] = useState('');
+  const [filterStatus, setFilterStatus] = useState('active'); // active | inactive | all
+  const [showDeactivateDialog, setShowDeactivateDialog] = useState(false);
+  const [deactivateTarget, setDeactivateTarget] = useState(null);
+  const [deactivateLoading, setDeactivateLoading] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showViewDialog, setShowViewDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
@@ -111,14 +115,16 @@ const StudentsPage = () => {
   const [onbDocLoading, setOnbDocLoading] = useState({});
   const [onbResult, setOnbResult] = useState(null);
   const [onbLoading, setOnbLoading] = useState(false);
+  const [onbErrors, setOnbErrors] = useState({});
 
-  useEffect(() => { fetchStudents(); fetchClasses(); }, [filterClass, filterSection]);
+  useEffect(() => { fetchStudents(); fetchClasses(); }, [filterClass, filterSection, filterStatus]);
 
   const fetchStudents = async () => {
     try {
       const params = {};
       if (filterClass) params.class_name = filterClass;
       if (filterSection) params.section = filterSection;
+      if (filterStatus) params.status = filterStatus;
       const response = await api.get('/students', { params });
       setStudents(response.data);
     } catch { toast.error('Failed to fetch students'); }
@@ -147,26 +153,43 @@ const StudentsPage = () => {
     setOnbDocuments({});
     setOnbDocLoading({});
     setOnbResult(null);
+    setOnbErrors({});
     setShowOnboarding(false);
   };
 
   const handleOnbStep1 = async () => {
-    if (!onbData.first_name || !onbData.last_name || !onbData.gender) {
-      toast.error('First name, last name, and gender are required');
+    // Validate all required fields client-side
+    const errors = {};
+    if (!onbData.first_name?.trim()) errors.first_name = 'First Name is required';
+    if (!onbData.last_name?.trim()) errors.last_name = 'Last Name is required';
+    if (!onbData.gender) errors.gender = 'Gender is required';
+    if (!onbData.date_of_birth) errors.date_of_birth = 'Date of Birth is required';
+    if (!onbData.parent_name?.trim()) errors.parent_name = 'Father / Guardian Name is required';
+    if (!onbData.parent_phone?.trim()) errors.parent_phone = 'Contact Number is required';
+    setOnbErrors(errors);
+    if (Object.keys(errors).length > 0) {
+      toast.error('Please fill in all required fields');
       return;
     }
     setOnbLoading(true);
     try {
       const payload = { ...onbData };
       // Strip empty strings from optional fields — Pydantic EmailStr rejects ""
-      ['email', 'parent_email', 'phone', 'parent_phone', 'date_of_birth', 'address', 'parent_name', 'sibling_student_id'].forEach(k => {
+      ['email', 'parent_email', 'phone', 'date_of_birth', 'address', 'sibling_student_id'].forEach(k => {
         if (!payload[k]) delete payload[k];
       });
       const res = await api.post('/onboarding/start', payload);
       setOnbId(res.data.onboarding_id);
+      setOnbErrors({});
       setOnbStep(2);
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to start onboarding');
+      const detail = err.response?.data?.detail;
+      if (detail?.validation_errors) {
+        setOnbErrors(detail.validation_errors);
+        toast.error('Please fix the highlighted fields');
+      } else {
+        toast.error(detail || 'Failed to start onboarding');
+      }
     } finally { setOnbLoading(false); }
   };
 
@@ -251,6 +274,31 @@ const StudentsPage = () => {
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to complete admission');
     } finally { setOnbLoading(false); }
+  };
+
+  // ===== DEACTIVATE / REACTIVATE =====
+  const handleDeactivateStudent = async () => {
+    if (!deactivateTarget) return;
+    setDeactivateLoading(true);
+    try {
+      await api.delete(`/students/${deactivateTarget.student_id}`);
+      toast.success(`${deactivateTarget.first_name} ${deactivateTarget.last_name} deactivated`);
+      setShowDeactivateDialog(false);
+      setDeactivateTarget(null);
+      fetchStudents();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to deactivate student');
+    } finally { setDeactivateLoading(false); }
+  };
+
+  const handleReactivateStudent = async (student) => {
+    try {
+      await api.put(`/students/${student.student_id}/reactivate`);
+      toast.success(`${student.first_name} ${student.last_name} reactivated`);
+      fetchStudents();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to reactivate student');
+    }
   };
 
   // ===== EDIT STUDENT =====
@@ -700,6 +748,14 @@ const StudentsPage = () => {
                 {getSections(filterClass).map((sec) => <SelectItem key={sec.section_name} value={sec.section_name}>Section {sec.section_name}</SelectItem>)}
               </SelectContent>
             </Select>
+            <Select value={filterStatus} onValueChange={setFilterStatus}>
+              <SelectTrigger className="w-[140px]" data-testid="filter-status"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="active">Active Only</SelectItem>
+                <SelectItem value="inactive">Inactive Only</SelectItem>
+                <SelectItem value="all">All Students</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </CardContent>
       </Card>
@@ -717,11 +773,11 @@ const StudentsPage = () => {
           ) : (
             <Table>
               <TableHeader><TableRow>
-                <TableHead>Admission No.</TableHead><TableHead>Name</TableHead><TableHead>Class</TableHead><TableHead>Parent</TableHead><TableHead>Fee Status</TableHead><TableHead className="text-right">Actions</TableHead>
+                <TableHead>Admission No.</TableHead><TableHead>Name</TableHead><TableHead>Class</TableHead><TableHead>Parent</TableHead><TableHead>Fee Status</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead>
               </TableRow></TableHeader>
               <TableBody>
                 {filteredStudents.map((student) => (
-                  <TableRow key={student.student_id} data-testid={`student-row-${student.student_id}`}>
+                  <TableRow key={student.student_id} data-testid={`student-row-${student.student_id}`} className={!student.is_active ? 'opacity-60 bg-slate-50' : ''}>
                     <TableCell className="font-mono text-sm">{student.admission_number}</TableCell>
                     <TableCell>
                       <p className="font-medium text-foreground">{student.first_name} {student.last_name}</p>
@@ -733,9 +789,21 @@ const StudentsPage = () => {
                       <p className="text-xs text-muted-foreground">{student.parent_phone || ''}</p>
                     </TableCell>
                     <TableCell>{getStatusBadge(student.fee_status)}</TableCell>
+                    <TableCell>
+                      {student.is_active
+                        ? <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-200">Active</Badge>
+                        : <Badge className="bg-red-50 text-red-700 border border-red-200">Inactive</Badge>
+                      }
+                    </TableCell>
                     <TableCell className="text-right">
                       <Button variant="ghost" size="sm" onClick={async () => { setSelectedStudent(student); setPwResult(null); setPwInput(''); setPwVisible(false); setCurrentPw(null); setCurrentPwVisible(false); setParentPw(null); setParentPwVisible(false); setShowViewDialog(true); try { const [r1, r2] = await Promise.allSettled([api.get(`/students/${student.student_id}/password`), api.get(`/students/${student.student_id}/parent-password`)]); if (r1.status === 'fulfilled') setCurrentPw(r1.value.data.password); if (r2.status === 'fulfilled') setParentPw(r2.value.data.password); } catch {} }} data-testid={`view-${student.student_id}`}><Eye className="h-4 w-4" /></Button>
-                      {isAdmin && <Button variant="ghost" size="sm" onClick={() => handleEditStudent(student)} data-testid={`edit-${student.student_id}`}><Edit className="h-4 w-4" /></Button>}
+                      {isAdmin && student.is_active && <Button variant="ghost" size="sm" onClick={() => handleEditStudent(student)} data-testid={`edit-${student.student_id}`}><Edit className="h-4 w-4" /></Button>}
+                      {isAdmin && student.is_active && (
+                        <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-700 hover:bg-red-50" onClick={() => { setDeactivateTarget(student); setShowDeactivateDialog(true); }} data-testid={`deactivate-${student.student_id}`} title="Deactivate Student"><UserX className="h-4 w-4" /></Button>
+                      )}
+                      {isAdmin && !student.is_active && (
+                        <Button variant="ghost" size="sm" className="text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50" onClick={() => handleReactivateStudent(student)} data-testid={`reactivate-${student.student_id}`} title="Reactivate Student"><UserCheck className="h-4 w-4" /></Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -744,6 +812,39 @@ const StudentsPage = () => {
           )}
         </CardContent>
       </Card>
+
+      {/* ===== DEACTIVATION CONFIRMATION ===== */}
+      <Dialog open={showDeactivateDialog} onOpenChange={setShowDeactivateDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-600">
+              <AlertCircle className="h-5 w-5" />
+              Deactivate Student
+            </DialogTitle>
+            <DialogDescription>
+              This will deactivate <strong>{deactivateTarget?.first_name} {deactivateTarget?.last_name}</strong>.
+              The student will lose access to the app but all records (fees, attendance, marks) will be preserved.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800">
+              <ul className="list-disc list-inside space-y-1">
+                <li>Student will be excluded from active attendance lists</li>
+                <li>Student cannot log in or access the app</li>
+                <li>Past fees, attendance and marks are preserved</li>
+                <li>You can reactivate the student at any time</li>
+              </ul>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setShowDeactivateDialog(false); setDeactivateTarget(null); }}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeactivateStudent} disabled={deactivateLoading}>
+              {deactivateLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <UserX className="h-4 w-4 mr-2" />}
+              Deactivate Student
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ===== ONBOARDING WIZARD ===== */}
       <Dialog open={showOnboarding} onOpenChange={(v) => { if (!v) resetOnboarding(); }}>
@@ -771,31 +872,52 @@ const StudentsPage = () => {
           {onbStep === 1 && (
             <div className="grid gap-4">
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2"><Label>First Name *</Label><Input value={onbData.first_name} onChange={(e) => setOnbData({...onbData, first_name: e.target.value})} required data-testid="onb-first-name" /></div>
-                <div className="space-y-2"><Label>Last Name *</Label><Input value={onbData.last_name} onChange={(e) => setOnbData({...onbData, last_name: e.target.value})} required data-testid="onb-last-name" /></div>
+                <div className="space-y-1">
+                  <Label>First Name <span className="text-red-500">*</span></Label>
+                  <Input value={onbData.first_name} onChange={(e) => { setOnbData({...onbData, first_name: e.target.value}); setOnbErrors(p => ({...p, first_name: ''})); }} className={onbErrors.first_name ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-first-name" />
+                  {onbErrors.first_name && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.first_name}</p>}
+                </div>
+                <div className="space-y-1">
+                  <Label>Last Name <span className="text-red-500">*</span></Label>
+                  <Input value={onbData.last_name} onChange={(e) => { setOnbData({...onbData, last_name: e.target.value}); setOnbErrors(p => ({...p, last_name: ''})); }} className={onbErrors.last_name ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-last-name" />
+                  {onbErrors.last_name && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.last_name}</p>}
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Gender *</Label>
-                  <Select value={onbData.gender} onValueChange={(v) => setOnbData({...onbData, gender: v})}>
-                    <SelectTrigger data-testid="onb-gender"><SelectValue /></SelectTrigger>
+                <div className="space-y-1">
+                  <Label>Gender <span className="text-red-500">*</span></Label>
+                  <Select value={onbData.gender} onValueChange={(v) => { setOnbData({...onbData, gender: v}); setOnbErrors(p => ({...p, gender: ''})); }}>
+                    <SelectTrigger className={onbErrors.gender ? 'border-red-500' : ''} data-testid="onb-gender"><SelectValue /></SelectTrigger>
                     <SelectContent><SelectItem value="male">Male</SelectItem><SelectItem value="female">Female</SelectItem><SelectItem value="other">Other</SelectItem></SelectContent>
                   </Select>
+                  {onbErrors.gender && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.gender}</p>}
                 </div>
-                <div className="space-y-2"><Label>Date of Birth</Label><Input type="date" value={onbData.date_of_birth} onChange={(e) => setOnbData({...onbData, date_of_birth: e.target.value})} data-testid="onb-dob" /></div>
+                <div className="space-y-1">
+                  <Label>Date of Birth <span className="text-red-500">*</span></Label>
+                  <Input type="date" value={onbData.date_of_birth} onChange={(e) => { setOnbData({...onbData, date_of_birth: e.target.value}); setOnbErrors(p => ({...p, date_of_birth: ''})); }} className={onbErrors.date_of_birth ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-dob" />
+                  {onbErrors.date_of_birth && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.date_of_birth}</p>}
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2"><Label>Email</Label><Input type="email" value={onbData.email} onChange={(e) => setOnbData({...onbData, email: e.target.value})} data-testid="onb-email" /></div>
-                <div className="space-y-2"><Label>Phone</Label><Input value={onbData.phone} onChange={(e) => setOnbData({...onbData, phone: e.target.value})} data-testid="onb-phone" /></div>
+                <div className="space-y-1"><Label>Email</Label><Input type="email" value={onbData.email} onChange={(e) => setOnbData({...onbData, email: e.target.value})} data-testid="onb-email" /></div>
+                <div className="space-y-1"><Label>Phone</Label><Input value={onbData.phone} onChange={(e) => setOnbData({...onbData, phone: e.target.value})} data-testid="onb-phone" /></div>
               </div>
-              <div className="space-y-2"><Label>Address</Label><Input value={onbData.address} onChange={(e) => setOnbData({...onbData, address: e.target.value})} data-testid="onb-address" /></div>
+              <div className="space-y-1"><Label>Address</Label><Input value={onbData.address} onChange={(e) => setOnbData({...onbData, address: e.target.value})} data-testid="onb-address" /></div>
               <div className="border-t pt-4">
                 <h4 className="font-medium mb-3 text-foreground">Parent / Guardian Details</h4>
                 <div className="grid gap-4">
-                  <div className="space-y-2"><Label>Parent Name</Label><Input value={onbData.parent_name} onChange={(e) => setOnbData({...onbData, parent_name: e.target.value})} data-testid="onb-parent-name" /></div>
+                  <div className="space-y-1">
+                    <Label>Father / Guardian Name <span className="text-red-500">*</span></Label>
+                    <Input value={onbData.parent_name} onChange={(e) => { setOnbData({...onbData, parent_name: e.target.value}); setOnbErrors(p => ({...p, parent_name: ''})); }} className={onbErrors.parent_name ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-parent-name" />
+                    {onbErrors.parent_name && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.parent_name}</p>}
+                  </div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2"><Label>Parent Phone</Label><Input value={onbData.parent_phone} onChange={(e) => setOnbData({...onbData, parent_phone: e.target.value})} data-testid="onb-parent-phone" /></div>
-                    <div className="space-y-2"><Label>Parent Email</Label><Input type="email" value={onbData.parent_email} onChange={(e) => setOnbData({...onbData, parent_email: e.target.value})} data-testid="onb-parent-email" /></div>
+                    <div className="space-y-1">
+                      <Label>Contact Number <span className="text-red-500">*</span></Label>
+                      <Input value={onbData.parent_phone} onChange={(e) => { setOnbData({...onbData, parent_phone: e.target.value}); setOnbErrors(p => ({...p, parent_phone: ''})); }} className={onbErrors.parent_phone ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-parent-phone" />
+                      {onbErrors.parent_phone && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.parent_phone}</p>}
+                    </div>
+                    <div className="space-y-1"><Label>Parent Email</Label><Input type="email" value={onbData.parent_email} onChange={(e) => setOnbData({...onbData, parent_email: e.target.value})} data-testid="onb-parent-email" /></div>
                   </div>
                 </div>
               </div>

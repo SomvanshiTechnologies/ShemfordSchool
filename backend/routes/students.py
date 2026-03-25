@@ -78,6 +78,17 @@ async def _try_create_fee_ledger(student: dict):
 async def create_student(student: StudentCreate, request: Request):
     user = await require_roles(UserRole.ADMIN)(request)
 
+    # ── Required field validation ───────────────────────────────────────────
+    errors = {}
+    if not student.date_of_birth:
+        errors["date_of_birth"] = "Date of Birth is required"
+    if not student.parent_name:
+        errors["parent_name"] = "Father / Guardian Name is required"
+    if not student.parent_phone:
+        errors["parent_phone"] = "Contact Number is required"
+    if errors:
+        raise HTTPException(status_code=422, detail={"validation_errors": errors})
+
     # Duplicate check
     if student.date_of_birth:
         existing = await db.students.find_one({
@@ -174,9 +185,15 @@ async def get_students(
     section: Optional[str] = None,
     fee_status: Optional[str] = None,
     search: Optional[str] = None,
+    status: Optional[str] = "active",  # active | inactive | all
 ):
     user = await get_current_user(request)
-    query = {"is_active": True}
+    if status == "inactive":
+        query: Dict[str, Any] = {"is_active": False}
+    elif status == "all":
+        query = {}
+    else:
+        query = {"is_active": True}
 
     # Role-scoped filtering
     if user["role"] == UserRole.STUDENT:
@@ -302,15 +319,60 @@ async def deactivate_student(student_id: str, request: Request):
     student = await db.students.find_one({"student_id": student_id}, {"_id": 0})
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
+    if not student.get("is_active", True):
+        raise HTTPException(status_code=400, detail="Student is already inactive")
 
     await db.students.update_one(
         {"student_id": student_id},
         {"$set": {"is_active": False, "deactivated_at": datetime.now(timezone.utc).isoformat()}}
     )
+    # Also deactivate the linked user account so student cannot log in
+    if student.get("email"):
+        await db.users.update_one(
+            {"email": student["email"], "role": "student"},
+            {"$set": {"is_active": False}}
+        )
+    if student.get("user_id"):
+        await db.users.update_one(
+            {"user_id": student["user_id"]},
+            {"$set": {"is_active": False}}
+        )
     await create_audit_log("student", student_id, "deactivate", {
         "name": f"{student['first_name']} {student['last_name']}"
     }, user)
     return {"message": "Student deactivated successfully", "student_id": student_id}
+
+
+@router.put("/students/{student_id}/reactivate")
+async def reactivate_student(student_id: str, request: Request):
+    """Reactivate a previously deactivated student."""
+    user = await require_roles(UserRole.ADMIN)(request)
+
+    student = await db.students.find_one({"student_id": student_id}, {"_id": 0})
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    if student.get("is_active", True):
+        raise HTTPException(status_code=400, detail="Student is already active")
+
+    await db.students.update_one(
+        {"student_id": student_id},
+        {"$set": {"is_active": True}, "$unset": {"deactivated_at": ""}}
+    )
+    # Reactivate linked user account
+    if student.get("email"):
+        await db.users.update_one(
+            {"email": student["email"], "role": "student"},
+            {"$set": {"is_active": True}}
+        )
+    if student.get("user_id"):
+        await db.users.update_one(
+            {"user_id": student["user_id"]},
+            {"$set": {"is_active": True}}
+        )
+    await create_audit_log("student", student_id, "reactivate", {
+        "name": f"{student['first_name']} {student['last_name']}"
+    }, user)
+    return {"message": "Student reactivated successfully", "student_id": student_id}
 
 
 @router.post("/students/{student_id}/reset-password")
