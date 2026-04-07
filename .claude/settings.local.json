@@ -133,7 +133,19 @@
       "Bash(mongosh --quiet --eval \"db.runCommand\\({ping:1}\\)\")",
       "Bash(mongosh --quiet --eval \"rs.status\\(\\).ok\")",
       "Bash(mkdir -p /tmp/shemford-mongo)",
-      "Bash(mongod --replSet rs0 --dbpath /tmp/shemford-mongo --port 27017 --bind_ip localhost --fork --logpath /tmp/shemford-mongo/mongod.log)"
+      "Bash(mongod --replSet rs0 --dbpath /tmp/shemford-mongo --port 27017 --bind_ip localhost --fork --logpath /tmp/shemford-mongo/mongod.log)",
+      "Bash(lsof:*)",
+      "Bash(xargs ps:*)",
+      "Bash(pkill -f \"python server.py\")",
+      "Bash(pkill -f \"uvicorn server\")",
+      "Bash(kill 3965 3994)",
+      "Bash(kill 3317 6380)",
+      "Bash(pkill -f \"expo\")",
+      "Bash(pkill -f \"react-native\")",
+      "Bash(kill -9 17591)",
+      "Read(//Users/ameyasomvanshi/Downloads/ShemfordSchool-main/**)",
+      "Bash(pkill -f \"react-scripts start\")",
+      "Bash(kill 29548 29550 29571 29574)"
     ]
   }
 }
