@@ -125,23 +125,23 @@ The app will open at `http://localhost:3000`.
 
 ## Environment Variables
 
-### Backend `.env`
+Create a `.env` file inside the `backend/` folder. **Never commit this file.**
 
-```env
-MONGO_URL=mongodb://localhost:27017
-DB_NAME=shemford_school
-JWT_SECRET=your_jwt_secret_key
-BACKEND_URL=http://localhost:8000
-CORS_ORIGINS=http://localhost:3000
+Copy the list below into your `.env` and fill in your actual values:
 
-# Razorpay (optional — for online payments)
-RAZORPAY_KEY_ID=your_key_id
-RAZORPAY_KEY_SECRET=your_key_secret
-
-# Email (optional — Resend)
-RESEND_API_KEY=your_resend_key
-FROM_EMAIL=no-reply@yourdomain.com
 ```
+MONGO_URL=
+DB_NAME=
+JWT_SECRET=
+BACKEND_URL=
+CORS_ORIGINS=
+RAZORPAY_KEY_ID=
+RAZORPAY_KEY_SECRET=
+RESEND_API_KEY=
+FROM_EMAIL=
+```
+
+The `.env` file is listed in `.gitignore` and will not be pushed to GitHub.
 
 ---
 
