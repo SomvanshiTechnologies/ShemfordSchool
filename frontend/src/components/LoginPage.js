@@ -113,7 +113,7 @@ const LoginPage = () => {
         <div className="absolute top-1/3 right-6 w-px h-32 bg-gradient-to-b from-transparent via-[#E88A1A]/30 to-transparent pointer-events-none" />
 
         {/* Logo */}
-        <img src={LOGO_URL} alt="Shemford" className="h-12 w-auto relative z-10" />
+        <img src={LOGO_URL} alt="Shemford" className="h-12 w-auto object-contain relative z-10" />
 
         {/* Main content */}
         <div className="relative z-10">
@@ -154,7 +154,7 @@ const LoginPage = () => {
 
           {/* Mobile logo */}
           <div className="lg:hidden mb-8">
-            <img src={LOGO_URL} alt="Shemford" className="h-10" />
+            <img src={LOGO_URL} alt="Shemford" className="h-10 w-auto object-contain" />
           </div>
 
           <div className="mb-8">

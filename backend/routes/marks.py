@@ -23,7 +23,7 @@ from reportlab.lib.enums import TA_CENTER
 
 from database import db
 from models import UserRole, ExamDefinition, MarkRecord
-from auth_utils import get_current_user, require_roles, calculate_grade, create_audit_log
+from auth_utils import get_current_user, require_roles, calculate_grade, create_audit_log, get_teacher_assigned_classes
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ async def create_exam(request: Request):
     exam_dict = exam.model_dump()
     exam_dict["created_at"] = exam_dict["created_at"].isoformat()
 
-    await db.exams.insert_one(exam_dict)
+    await db.exam_definitions.insert_one(exam_dict)
     exam_dict.pop("_id", None)
 
     await create_audit_log("exam", exam.exam_id, "create", {
@@ -67,7 +67,7 @@ async def get_exams(
     if user["role"] in [UserRole.STUDENT, UserRole.PARENT]:
         query["is_published"] = True
 
-    exams = await db.exams.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
+    exams = await db.exam_definitions.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
     return exams
 
 
@@ -77,15 +77,15 @@ async def update_exam(exam_id: str, request: Request):
     user = await require_roles(UserRole.ADMIN)(request)
     body = await request.json()
 
-    exam = await db.exams.find_one({"exam_id": exam_id}, {"_id": 0})
+    exam = await db.exam_definitions.find_one({"exam_id": exam_id}, {"_id": 0})
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
 
     body.pop("exam_id", None)
     body.pop("created_at", None)
 
-    await db.exams.update_one({"exam_id": exam_id}, {"$set": body})
-    updated = await db.exams.find_one({"exam_id": exam_id}, {"_id": 0})
+    await db.exam_definitions.update_one({"exam_id": exam_id}, {"$set": body})
+    updated = await db.exam_definitions.find_one({"exam_id": exam_id}, {"_id": 0})
     return updated
 
 
@@ -94,11 +94,11 @@ async def publish_exam(exam_id: str, request: Request):
     """Publish exam results — makes marks visible to parents/students."""
     user = await require_roles(UserRole.ADMIN)(request)
 
-    exam = await db.exams.find_one({"exam_id": exam_id}, {"_id": 0})
+    exam = await db.exam_definitions.find_one({"exam_id": exam_id}, {"_id": 0})
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
 
-    await db.exams.update_one({"exam_id": exam_id}, {"$set": {"is_published": True}})
+    await db.exam_definitions.update_one({"exam_id": exam_id}, {"$set": {"is_published": True}})
     await create_audit_log("exam", exam_id, "publish", {"name": exam["name"]}, user)
     return {"message": f"Exam '{exam['name']}' results published"}
 
@@ -108,8 +108,8 @@ async def lock_exam(exam_id: str, request: Request):
     """Lock exam — no more marks editing."""
     user = await require_roles(UserRole.ADMIN)(request)
 
-    await db.exams.update_one({"exam_id": exam_id}, {"$set": {"is_locked": True}})
-    await db.marks.update_many({"exam_id": exam_id}, {"$set": {"is_locked": True}})
+    await db.exam_definitions.update_one({"exam_id": exam_id}, {"$set": {"is_locked": True}})
+    await db.mark_records.update_many({"exam_id": exam_id}, {"$set": {"is_locked": True}})
 
     await create_audit_log("exam", exam_id, "lock", {}, user)
     return {"message": "Exam locked. No further edits allowed."}
@@ -120,8 +120,8 @@ async def unlock_exam(exam_id: str, request: Request):
     """Admin-only: unlock exam for re-editing."""
     user = await require_roles(UserRole.ADMIN)(request)
 
-    await db.exams.update_one({"exam_id": exam_id}, {"$set": {"is_locked": False}})
-    await db.marks.update_many({"exam_id": exam_id}, {"$set": {"is_locked": False}})
+    await db.exam_definitions.update_one({"exam_id": exam_id}, {"$set": {"is_locked": False}})
+    await db.mark_records.update_many({"exam_id": exam_id}, {"$set": {"is_locked": False}})
 
     await create_audit_log("exam", exam_id, "unlock", {}, user)
     return {"message": "Exam unlocked for editing"}
@@ -131,10 +131,10 @@ async def unlock_exam(exam_id: str, request: Request):
 async def unlock_single_mark(mark_id: str, request: Request):
     """Admin-only: unlock a single mark record for correction. (#22)"""
     user = await require_roles(UserRole.ADMIN)(request)
-    mark = await db.marks.find_one({"mark_id": mark_id}, {"_id": 0, "mark_id": 1, "student_id": 1, "subject": 1})
+    mark = await db.mark_records.find_one({"mark_id": mark_id}, {"_id": 0, "mark_id": 1, "student_id": 1, "subject": 1})
     if not mark:
         raise HTTPException(status_code=404, detail="Mark record not found")
-    await db.marks.update_one({"mark_id": mark_id}, {"$set": {"is_locked": False}})
+    await db.mark_records.update_one({"mark_id": mark_id}, {"$set": {"is_locked": False}})
     await create_audit_log("mark", mark_id, "unlock_single", {
         "student_id": mark["student_id"], "subject": mark["subject"]
     }, user)
@@ -155,12 +155,20 @@ async def add_marks(request: Request):
     if not exam_id:
         raise HTTPException(status_code=400, detail="exam_id is required")
 
-    exam = await db.exams.find_one({"exam_id": exam_id}, {"_id": 0})
+    exam = await db.exam_definitions.find_one({"exam_id": exam_id}, {"_id": 0})
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
 
     if exam.get("is_locked"):
         raise HTTPException(status_code=400, detail="This exam is locked. Contact admin to unlock.")
+
+    # Teachers can only enter marks for their assigned class
+    if user["role"] == UserRole.TEACHER:
+        assigned = await get_teacher_assigned_classes(user["user_id"])
+        if assigned:
+            allowed_classes = [a["class_name"] for a in assigned]
+            if exam.get("class_name") not in allowed_classes:
+                raise HTTPException(status_code=403, detail="You are not assigned to this class")
 
     # Build subject max marks map from exam definition
     subject_max = {}
@@ -203,7 +211,7 @@ async def add_marks(request: Request):
                 entered_by=user["user_id"]
             )
             # (#12) Prevent overwriting a locked individual mark record
-            existing_mark = await db.marks.find_one(
+            existing_mark = await db.mark_records.find_one(
                 {"student_id": mark.student_id, "exam_id": exam_id, "subject": subject, "is_locked": True},
                 {"_id": 0, "mark_id": 1}
             )
@@ -213,7 +221,7 @@ async def add_marks(request: Request):
             mark_dict = mark.model_dump()
             mark_dict["created_at"] = mark_dict["created_at"].isoformat()
 
-            await db.marks.update_one(
+            await db.mark_records.update_one(
                 {
                     "student_id": mark.student_id,
                     "exam_id": exam_id,
@@ -254,19 +262,28 @@ async def get_marks(
         else:
             return []
         # Only show published exams
-        published_exams = await db.exams.find({"is_published": True}, {"_id": 0, "exam_id": 1}).to_list(100)
+        published_exams = await db.exam_definitions.find({"is_published": True}, {"_id": 0, "exam_id": 1}).to_list(100)
         query["exam_id"] = {"$in": [e["exam_id"] for e in published_exams]}
 
     elif user["role"] == UserRole.PARENT:
-        children = await db.students.find({"parent_id": user["user_id"]}, {"_id": 0, "student_id": 1}).to_list(20)
+        children = await db.students.find(
+            {"$or": [{"parent_email": user.get("email", "")}, {"parent_id": user["user_id"]}], "is_active": True},
+            {"_id": 0, "student_id": 1}
+        ).to_list(20)
         child_ids = [c["student_id"] for c in children]
         if student_id and student_id in child_ids:
             query["student_id"] = student_id
         else:
             query["student_id"] = {"$in": child_ids}
-        published_exams = await db.exams.find({"is_published": True}, {"_id": 0, "exam_id": 1}).to_list(100)
+        published_exams = await db.exam_definitions.find({"is_published": True}, {"_id": 0, "exam_id": 1}).to_list(100)
         query["exam_id"] = {"$in": [e["exam_id"] for e in published_exams]}
 
+    elif user["role"] == UserRole.TEACHER:
+        assigned = await get_teacher_assigned_classes(user["user_id"])
+        if assigned:
+            query["class_name"] = {"$in": [a["class_name"] for a in assigned]}
+        if student_id:
+            query["student_id"] = student_id
     else:
         if student_id:
             query["student_id"] = student_id
@@ -282,7 +299,7 @@ async def get_marks(
     if academic_year:
         query["academic_year"] = academic_year
 
-    marks = await db.marks.find(query, {"_id": 0}).to_list(5000)
+    marks = await db.mark_records.find(query, {"_id": 0}).to_list(5000)
     return marks
 
 
@@ -293,7 +310,10 @@ async def get_marksheet(student_id: str, request: Request, exam_id: Optional[str
 
     # RBAC
     if user["role"] == UserRole.PARENT:
-        children = await db.students.find({"parent_id": user["user_id"]}, {"_id": 0, "student_id": 1}).to_list(20)
+        children = await db.students.find(
+            {"$or": [{"parent_email": user.get("email", "")}, {"parent_id": user["user_id"]}], "is_active": True},
+            {"_id": 0, "student_id": 1}
+        ).to_list(20)
         if student_id not in [c["student_id"] for c in children]:
             raise HTTPException(status_code=403, detail="Not authorized")
     elif user["role"] == UserRole.STUDENT:
@@ -309,7 +329,7 @@ async def get_marksheet(student_id: str, request: Request, exam_id: Optional[str
     if exam_id:
         query["exam_id"] = exam_id
 
-    marks = await db.marks.find(query, {"_id": 0}).to_list(100)
+    marks = await db.mark_records.find(query, {"_id": 0}).to_list(100)
 
     subjects = {}
     for m in marks:
@@ -351,7 +371,7 @@ async def download_marksheet_pdf(student_id: str, request: Request, exam_id: Opt
     if exam_id:
         query["exam_id"] = exam_id
 
-    marks = await db.marks.find(query, {"_id": 0}).to_list(100)
+    marks = await db.mark_records.find(query, {"_id": 0}).to_list(100)
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=0.5*inch, bottomMargin=0.5*inch)

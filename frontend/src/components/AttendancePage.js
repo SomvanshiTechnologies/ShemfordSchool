@@ -14,7 +14,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from './ui/table';
 import { toast } from 'sonner';
-import { Calendar, CheckCircle, XCircle, Clock, Lock, Unlock, Save, Loader2, AlertTriangle, Users, Plus, Trash2 } from 'lucide-react';
+import { Calendar, CheckCircle, XCircle, Clock, Lock, Unlock, Save, Loader2, AlertTriangle, Users, Plus, Trash2, Download } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -128,6 +128,11 @@ const MarkAttendanceView = () => {
   const [empAttData, setEmpAttData] = useState({});
   const [savingEmpAtt, setSavingEmpAtt] = useState(false);
 
+  // Employee attendance report
+  const [empReportMonth, setEmpReportMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [empReportData, setEmpReportData] = useState(null);
+  const [empReportLoading, setEmpReportLoading] = useState(false);
+
   // Holidays
   const [holidays, setHolidays] = useState([]);
   const [showHolidayDialog, setShowHolidayDialog] = useState(false);
@@ -234,6 +239,31 @@ const MarkAttendanceView = () => {
     finally { setAlertsLoading(false); }
   };
 
+  const downloadCSV = (rows, filename) => {
+    const csv = rows.map(r => r.map(cell => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const fetchEmployeeReport = async () => {
+    setEmpReportLoading(true);
+    try {
+      const res = await api.get('/attendance/employees', { params: { month: empReportMonth } });
+      const records = Array.isArray(res.data) ? res.data : [];
+      // Group by employee
+      const byEmp = {};
+      records.forEach(r => {
+        if (!byEmp[r.entity_id]) byEmp[r.entity_id] = { present: 0, absent: 0, leave: 0, total: 0, name: r.name || r.entity_id };
+        byEmp[r.entity_id][r.status] = (byEmp[r.entity_id][r.status] || 0) + 1;
+        byEmp[r.entity_id].total += 1;
+      });
+      setEmpReportData({ records, summary: byEmp });
+    } catch { toast.error('Failed to fetch employee report'); }
+    finally { setEmpReportLoading(false); }
+  };
+
   const saveEmployeeAttendance = async () => {
     setSavingEmpAtt(true);
     try {
@@ -292,9 +322,9 @@ const MarkAttendanceView = () => {
           <TabsTrigger value="mark" className="rounded-xl text-xs uppercase tracking-wider font-semibold" data-testid="mark-tab">Students</TabsTrigger>
           {isAdmin && <TabsTrigger value="employee" className="rounded-xl text-xs uppercase tracking-wider font-semibold" data-testid="employee-tab">Employees</TabsTrigger>}
           <TabsTrigger value="report" className="rounded-xl text-xs uppercase tracking-wider font-semibold" data-testid="report-tab">Report</TabsTrigger>
-          <TabsTrigger value="alerts" className="rounded-xl text-xs uppercase tracking-wider font-semibold" data-testid="alerts-tab">Alerts</TabsTrigger>
+          {/* <TabsTrigger value="alerts" className="rounded-xl text-xs uppercase tracking-wider font-semibold" data-testid="alerts-tab">Alerts</TabsTrigger> */}
           {isAdmin && <TabsTrigger value="holidays" className="rounded-xl text-xs uppercase tracking-wider font-semibold" data-testid="holidays-tab">Holidays</TabsTrigger>}
-          {isAdmin && <TabsTrigger value="bulk-unlock" className="rounded-xl text-xs uppercase tracking-wider font-semibold" data-testid="bulk-unlock-tab">Bulk Unlock</TabsTrigger>}
+          {/* {isAdmin && <TabsTrigger value="bulk-unlock" className="rounded-xl text-xs uppercase tracking-wider font-semibold" data-testid="bulk-unlock-tab">Bulk Unlock</TabsTrigger>} */}
         </TabsList>
 
         {/* ====== MARK STUDENT ATTENDANCE ====== */}
@@ -416,8 +446,9 @@ const MarkAttendanceView = () => {
         {/* ====== EMPLOYEE ATTENDANCE ====== */}
         {isAdmin && (
           <TabsContent value="employee">
+            {/* Controls */}
             <Card className="mb-6"><CardContent className="p-4">
-              <div className="flex flex-col sm:flex-row gap-4 items-end">
+              <div className="flex flex-col sm:flex-row gap-4 items-end flex-wrap">
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold uppercase tracking-wider text-slate-900">Date</label>
                   <input type="date" className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={empAttDate} onChange={e => setEmpAttDate(e.target.value)} data-testid="emp-att-date" />
@@ -428,56 +459,82 @@ const MarkAttendanceView = () => {
                   setEmpAttData(n);
                 }} data-testid="mark-all-emp-present"><CheckCircle className="h-4 w-4 mr-2" strokeWidth={1.5} /> Mark All Present</Button>
                 <Button onClick={saveEmployeeAttendance} disabled={savingEmpAtt} className="bg-slate-900 text-white hover:bg-slate-800 rounded-xl text-xs" data-testid="save-emp-attendance">
-                  {savingEmpAtt ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" strokeWidth={1.5} />} Submit
+                  {savingEmpAtt ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving...</> : <><Save className="h-4 w-4 mr-2" strokeWidth={1.5} />Submit & Save</>}
                 </Button>
               </div>
             </CardContent></Card>
 
+            {/* Mark Attendance Table */}
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
-              <Table>
-                <TableHeader><TableRow className="bg-slate-50">
-                  <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Employee</TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Designation</TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Status</TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Actions</TableHead>
-                </TableRow></TableHeader>
-                <TableBody>
-                  {employees.filter(e => e.is_active).length === 0 ? (
-                    <TableRow><TableCell colSpan={4} className="text-center py-8 text-slate-500"><Users className="h-8 w-8 mx-auto mb-2" strokeWidth={1} /><p>No employees found</p></TableCell></TableRow>
-                  ) : employees.filter(e => e.is_active).map(emp => {
-                    const status = empAttData[emp.employee_id] || '';
-                    const empStatusBtns = [
-                      { value: 'present', icon: CheckCircle, label: 'P', activeColor: 'bg-slate-900 text-white' },
-                      { value: 'absent', icon: XCircle, label: 'A', activeColor: 'bg-red-500 text-white' },
-                      { value: 'leave', icon: Clock, label: 'L', activeColor: 'bg-slate-500 text-white' },
-                    ];
-                    return (
-                      <TableRow key={emp.employee_id}>
-                        <TableCell><p className="font-medium text-slate-900">{emp.first_name} {emp.last_name}</p><p className="text-xs text-slate-500">{emp.employee_id}</p></TableCell>
-                        <TableCell className="text-sm text-slate-500">{emp.designation}</TableCell>
-                        <TableCell>
-                          {status ? <span className={`inline-flex items-center rounded px-2 py-0.5 text-[10px] uppercase tracking-wider font-bold ${status === 'present' ? 'bg-slate-900 text-white' : status === 'absent' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-500'}`}>{status}</span> : <span className="text-xs text-slate-500">—</span>}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex gap-1">
-                            {empStatusBtns.map(btn => {
-                              const Icon = btn.icon; const isActive = status === btn.value;
-                              return <Button key={btn.value} size="sm" variant={isActive ? 'default' : 'outline'} className={`h-8 px-2.5 rounded-xl text-xs font-bold gap-1 ${isActive ? btn.activeColor : 'hover:border-slate-900'}`} onClick={() => setEmpAttData(prev => ({ ...prev, [emp.employee_id]: btn.value }))}><Icon className="h-3.5 w-3.5" strokeWidth={2} />{btn.label}</Button>;
-                            })}
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+              {employees.filter(e => e.is_active).length === 0 ? (
+                <div className="text-center py-12 text-slate-500"><Users className="h-12 w-12 mx-auto mb-4" strokeWidth={1} /><p className="font-medium">No active employees found</p></div>
+              ) : (
+                <Table>
+                  <TableHeader><TableRow className="bg-slate-50">
+                    <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Emp. ID</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Name</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Designation</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Status</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Actions</TableHead>
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {employees.filter(e => e.is_active).map(emp => {
+                      const status = empAttData[emp.employee_id] || '';
+                      return (
+                        <TableRow key={emp.employee_id}>
+                          <TableCell className="font-mono text-xs text-slate-500">{emp.employee_id}</TableCell>
+                          <TableCell className="font-medium text-slate-900">{emp.first_name} {emp.last_name}</TableCell>
+                          <TableCell className="text-slate-500">{emp.designation || '-'}</TableCell>
+                          <TableCell>
+                            {status ? <span className={`inline-flex items-center rounded px-2 py-0.5 text-[10px] uppercase tracking-wider font-bold ${status === 'present' ? 'bg-slate-900 text-white' : status === 'absent' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-500'}`}>{status}</span> : <span className="text-xs text-slate-500">Not marked</span>}
+                          </TableCell>
+                          <TableCell>
+                            <TooltipProvider>
+                              <div className="flex gap-1">
+                                {[
+                                  { value: 'present', icon: CheckCircle, label: 'P', tooltip: 'Present', activeColor: 'bg-slate-900 text-white' },
+                                  { value: 'absent',  icon: XCircle,     label: 'A', tooltip: 'Absent',  activeColor: 'bg-red-500 text-white' },
+                                  { value: 'leave',   icon: Clock,        label: 'L', tooltip: 'Leave',   activeColor: 'bg-slate-500 text-white' },
+                                ].map(btn => {
+                                  const Icon = btn.icon; const isActive = status === btn.value;
+                                  return (
+                                    <Tooltip key={btn.value}>
+                                      <TooltipTrigger asChild>
+                                        <Button size="sm" variant={isActive ? 'default' : 'outline'} className={`h-8 px-2.5 rounded-xl text-xs font-bold gap-1 ${isActive ? btn.activeColor : 'hover:border-slate-900'}`} onClick={() => setEmpAttData(prev => ({ ...prev, [emp.employee_id]: btn.value }))}>
+                                          <Icon className="h-3.5 w-3.5" strokeWidth={2} />{btn.label}
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>{btn.tooltip}</TooltipContent>
+                                    </Tooltip>
+                                  );
+                                })}
+                              </div>
+                            </TooltipProvider>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
             </div>
           </TabsContent>
         )}
 
         {/* ====== REPORT TAB ====== */}
         <TabsContent value="report">
-          <Card className="mb-6"><CardContent className="p-4">
+
+          {/* ── Class Attendance Report ── */}
+          <div className="flex items-center gap-3 mb-4">
+            <div className="h-8 w-8 rounded-xl bg-orange-50 flex items-center justify-center shrink-0">
+              <Calendar className="h-4 w-4 text-[#E88A1A]" strokeWidth={1.5} />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-slate-900 tracking-tight">Class Attendance Report</h2>
+              <p className="text-[11px] text-slate-400">Filter by class and date to view student-wise attendance</p>
+            </div>
+          </div>
+          <Card className="mb-4"><CardContent className="p-4">
             <div className="flex flex-col sm:flex-row gap-4 items-end flex-wrap">
               <div className="space-y-1.5">
                 <label className="text-xs font-bold uppercase tracking-wider text-slate-900">Class</label>
@@ -490,15 +547,24 @@ const MarkAttendanceView = () => {
                 <label className="text-xs font-bold uppercase tracking-wider text-slate-900">Date</label>
                 <input type="date" className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={reportDate} onChange={e => setReportDate(e.target.value)} data-testid="report-date" />
               </div>
-              <Button onClick={fetchReport} disabled={reportLoading} className="bg-slate-900 text-white hover:bg-slate-800 rounded-xl text-xs" data-testid="generate-report-btn">
+              <Button onClick={fetchReport} disabled={reportLoading} className="bg-[#E88A1A] hover:bg-[#C97516] text-white rounded-xl text-xs" data-testid="generate-report-btn">
                 {reportLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null} Generate Report
               </Button>
+              {reportData && (
+                <Button variant="outline" className="rounded-xl text-xs border-[#E88A1A] text-[#E88A1A] hover:bg-orange-50" onClick={() => {
+                  const header = ['Student ID', 'Class', 'Section', 'Date', 'Status'];
+                  const rows = reportData.records?.map(r => [r.entity_id, r.class_name, r.section, r.date, r.status]) || [];
+                  downloadCSV([header, ...rows], `class-attendance-report-${reportDate || 'all'}.csv`);
+                }} data-testid="download-student-report">
+                  <Download className="h-4 w-4 mr-2" strokeWidth={1.5} /> Download CSV
+                </Button>
+              )}
             </div>
           </CardContent></Card>
           {reportData && (
-            <div className="space-y-6">
+            <div className="space-y-4 mb-10">
               <div className="grid gap-4 md:grid-cols-4">
-                <div className="bg-slate-900 p-5 rounded-2xl"><p className="stat-label-dark">Total</p><p className="text-2xl font-bold text-white">{reportData.total_records}</p></div>
+                <div className="bg-[#E88A1A] p-5 rounded-2xl"><p className="text-[10px] uppercase tracking-widest text-orange-100 font-bold">Total</p><p className="text-2xl font-bold text-white">{reportData.total_records}</p></div>
                 <div className="bg-white border border-slate-200 p-5 rounded-2xl"><p className="stat-label">Present</p><p className="text-2xl font-bold text-slate-900">{reportData.present}</p></div>
                 <div className="bg-white border border-slate-200 p-5 rounded-2xl"><p className="stat-label">Absent</p><p className="text-2xl font-bold text-slate-900">{reportData.absent}</p></div>
                 <div className="bg-white border border-slate-200 p-5 rounded-2xl"><p className="stat-label">Attendance %</p><p className="text-2xl font-bold text-slate-900">{reportData.percentage}%</p></div>
@@ -506,7 +572,7 @@ const MarkAttendanceView = () => {
               {reportData.records?.length > 0 && (
                 <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
                   <Table>
-                    <TableHeader><TableRow className="bg-slate-50">
+                    <TableHeader><TableRow className="bg-orange-50">
                       <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Student</TableHead>
                       <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Class</TableHead>
                       <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Date</TableHead>
@@ -527,10 +593,92 @@ const MarkAttendanceView = () => {
               )}
             </div>
           )}
+
+          {/* ── Divider ── */}
+          {isAdmin && <div className="border-t border-slate-200 my-8" />}
+
+          {/* ── Employee Attendance Report ── */}
+          {isAdmin && (<>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="h-8 w-8 rounded-xl bg-slate-100 flex items-center justify-center shrink-0">
+                <Users className="h-4 w-4 text-slate-600" strokeWidth={1.5} />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-slate-900 tracking-tight">Employee Attendance Report</h2>
+                <p className="text-[11px] text-slate-400">Monthly summary of employee-wise attendance</p>
+              </div>
+            </div>
+            <Card className="mb-4"><CardContent className="p-4">
+              <div className="flex flex-col sm:flex-row gap-4 items-end flex-wrap">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-900">Month</label>
+                  <input type="month" className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm" value={empReportMonth} onChange={e => setEmpReportMonth(e.target.value)} />
+                </div>
+                <Button onClick={fetchEmployeeReport} disabled={empReportLoading} className="bg-slate-900 text-white hover:bg-slate-800 rounded-xl text-xs" data-testid="generate-emp-report-btn">
+                  {empReportLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null} Generate Report
+                </Button>
+                {empReportData && (
+                  <Button variant="outline" className="rounded-xl text-xs border-slate-900 text-slate-900" onClick={() => {
+                    const header = ['Emp. ID', 'Name', 'Total Days', 'Present', 'Absent', 'Leave', 'Attendance %'];
+                    const rows = Object.entries(empReportData.summary).map(([empId, s]) => {
+                      const emp = employees.find(e => e.employee_id === empId);
+                      const name = emp ? `${emp.first_name} ${emp.last_name}` : empId;
+                      const pct = s.total > 0 ? Math.round((s.present / s.total) * 100) : 0;
+                      return [empId, name, s.total, s.present || 0, s.absent || 0, s.leave || 0, `${pct}%`];
+                    });
+                    downloadCSV([header, ...rows], `employee-attendance-report-${empReportMonth}.csv`);
+                  }} data-testid="download-emp-report">
+                    <Download className="h-4 w-4 mr-2" strokeWidth={1.5} /> Download CSV
+                  </Button>
+                )}
+              </div>
+            </CardContent></Card>
+            {empReportData && (
+              <div className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-4">
+                  <div className="bg-slate-900 p-5 rounded-2xl"><p className="stat-label-dark">Total Days</p><p className="text-2xl font-bold text-white">{Object.values(empReportData.summary).reduce((s, e) => s + e.total, 0)}</p></div>
+                  <div className="bg-white border border-slate-200 p-5 rounded-2xl"><p className="stat-label">Present</p><p className="text-2xl font-bold text-slate-900">{Object.values(empReportData.summary).reduce((s, e) => s + (e.present || 0), 0)}</p></div>
+                  <div className="bg-white border border-slate-200 p-5 rounded-2xl"><p className="stat-label">Absent</p><p className="text-2xl font-bold text-slate-900">{Object.values(empReportData.summary).reduce((s, e) => s + (e.absent || 0), 0)}</p></div>
+                  <div className="bg-white border border-slate-200 p-5 rounded-2xl"><p className="stat-label">Leave</p><p className="text-2xl font-bold text-slate-900">{Object.values(empReportData.summary).reduce((s, e) => s + (e.leave || 0), 0)}</p></div>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+                  <Table>
+                    <TableHeader><TableRow className="bg-slate-50">
+                      <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Employee</TableHead>
+                      <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Total Days</TableHead>
+                      <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Present</TableHead>
+                      <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Absent</TableHead>
+                      <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Leave</TableHead>
+                      <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Attendance %</TableHead>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {Object.entries(empReportData.summary).length === 0 ? (
+                        <TableRow><TableCell colSpan={6} className="text-center py-8 text-slate-500">No records for this month</TableCell></TableRow>
+                      ) : Object.entries(empReportData.summary).map(([empId, s]) => {
+                        const pct = s.total > 0 ? Math.round((s.present / s.total) * 100) : 0;
+                        const emp = employees.find(e => e.employee_id === empId);
+                        const name = emp ? `${emp.first_name} ${emp.last_name}` : empId;
+                        return (
+                          <TableRow key={empId}>
+                            <TableCell><p className="font-medium text-slate-900">{name}</p><p className="text-xs text-slate-500">{empId}</p></TableCell>
+                            <TableCell>{s.total}</TableCell>
+                            <TableCell><span className="font-semibold text-slate-900">{s.present || 0}</span></TableCell>
+                            <TableCell><span className="font-semibold text-red-600">{s.absent || 0}</span></TableCell>
+                            <TableCell><span className="font-semibold text-slate-500">{s.leave || 0}</span></TableCell>
+                            <TableCell><span className={`inline-flex items-center rounded px-2 py-0.5 text-[10px] font-bold ${pct >= 75 ? 'bg-slate-900 text-white' : 'bg-red-100 text-red-700'}`}>{pct}%</span></TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            )}
+          </>)}
         </TabsContent>
 
-        {/* ====== ALERTS TAB ====== */}
-        <TabsContent value="alerts">
+        {/* ====== ALERTS TAB (commented out) ====== */}
+        {false && <TabsContent value="alerts">
           <Card className="mb-6"><CardContent className="p-4">
             <div className="flex gap-4 items-end">
               <div className="space-y-1.5">
@@ -579,7 +727,7 @@ const MarkAttendanceView = () => {
               )}
             </div>
           )}
-        </TabsContent>
+        </TabsContent>}
 
         {/* ====== HOLIDAYS TAB ====== */}
         {isAdmin && (
@@ -651,8 +799,8 @@ const MarkAttendanceView = () => {
           </TabsContent>
         )}
 
-        {/* ====== BULK UNLOCK (#8) ====== */}
-        {isAdmin && (
+        {/* ====== BULK UNLOCK (#8) - commented out ====== */}
+        {false && isAdmin && (
           <TabsContent value="bulk-unlock">
             <Card>
               <CardContent className="p-6">

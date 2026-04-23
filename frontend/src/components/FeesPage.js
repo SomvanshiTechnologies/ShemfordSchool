@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -17,6 +17,7 @@ import {
   Clock, XCircle, Download, Plus, Edit2, RefreshCw, BookOpen
 } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
+import { RazorpayCheckout } from './RazorpayCheckout';
 
 const FEE_COMPONENTS = [
   { key: 'registration_fee', label: 'Registration Fee', type: 'one_time', tip: 'One-time fee at time of inquiry/registration' },
@@ -146,25 +147,25 @@ const FeesPage = () => {
   const fetchAdminData = useCallback(async () => {
     try {
       const [studRes, dueRes, concRes] = await Promise.all([
-        api.get('/students').catch(() => ({ data: [] })),
+        api.get('/students', { params: { is_active: true, limit: 500 } }).catch(() => ({ data: [] })),
         api.get('/fees/due-chart').catch(() => ({ data: [] })),
         api.get('/fees/concessions').catch(() => ({ data: [] })),
       ]);
-      setStudents(studRes.data);
-      setDueChart(dueRes.data);
-      setConcessions(concRes.data);
+      setStudents(Array.isArray(studRes.data) ? studRes.data : []);
+      setDueChart(Array.isArray(dueRes.data) ? dueRes.data : []);
+      setConcessions(Array.isArray(concRes.data) ? concRes.data : []);
     } catch {}
   }, []);
 
   const fetchParentData = useCallback(async () => {
     try {
       const res = await api.get('/students');
-      setMyChildren(res.data);
-      if (res.data.length > 0 && !selectedStudentId) {
-        setSelectedStudentId(res.data[0].student_id);
-      }
+      const list = Array.isArray(res.data) ? res.data : [];
+      setMyChildren(list);
+      // Only set default child once — use functional update to avoid stale closure
+      setSelectedStudentId(prev => prev || list[0]?.student_id || '');
     } catch {}
-  }, [selectedStudentId]);
+  }, []);
 
   useEffect(() => {
     setLoading(true);
@@ -185,11 +186,15 @@ const FeesPage = () => {
 
   useEffect(() => {
     if (!selectedStudentId) return;
+    setPayLedgerIds([]);
+    setStudentLedger(null);
     setLoadingLedger(true);
-    api.get(`/fees/ledger/${selectedStudentId}`)
+    const controller = new AbortController();
+    api.get(`/fees/ledger/${selectedStudentId}`, { signal: controller.signal })
       .then(res => setStudentLedger(res.data))
-      .catch(() => setStudentLedger(null))
-      .finally(() => setLoadingLedger(false));
+      .catch(err => { if (!controller.signal.aborted) setStudentLedger(null); })
+      .finally(() => { if (!controller.signal.aborted) setLoadingLedger(false); });
+    return () => controller.abort();
   }, [selectedStudentId]);
 
   // ── Config form helpers ───────────────────────────────────────────────────
@@ -208,8 +213,8 @@ const FeesPage = () => {
         annual_charge: 0, activity_fee: 0, exam_fee: 0, lab_fee: 0,
         monthly_tuition: 0, upgradation_fee: 0,
         due_day: 10, late_fee: 0, late_fee_enabled: false,
-        sibling_admission_discount_pct: 50,
-        sibling_tuition_discount_pct: 15,
+        sibling_admission_discount_amount: 0,
+        sibling_tuition_discount_amount: 0,
         notes: '',
       });
     }
@@ -290,9 +295,32 @@ const FeesPage = () => {
     } finally { setProcessingAdmissionPay(false); }
   };
 
-  const downloadReceipt = (paymentId) => {
-    window.open(`${process.env.REACT_APP_BACKEND_URL}/api/fees/receipt/${paymentId}/pdf`, '_blank');
+  const downloadReceipt = async (paymentId) => {
+    try {
+      const res = await api.get(`/fees/receipt/${paymentId}/pdf`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `receipt_${paymentId}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Failed to download receipt');
+    }
   };
+
+  const selectedStudentIdRef = useRef(selectedStudentId);
+  useEffect(() => { selectedStudentIdRef.current = selectedStudentId; }, [selectedStudentId]);
+
+  const handleRazorpaySuccess = useCallback(async () => {
+    const sid = selectedStudentIdRef.current;
+    if (sid) {
+      const lr = await api.get(`/fees/ledger/${sid}`).catch(() => null);
+      if (lr) setStudentLedger(lr.data);
+    }
+    if (isAdmin) fetchAdminData();
+    setPayLedgerIds([]);
+  }, [isAdmin, fetchAdminData]);
 
   const applyConcession = async () => {
     if (!concessionForm.student_id || !concessionForm.concession_percent) {
@@ -545,11 +573,13 @@ const FeesPage = () => {
               <LedgerView
                 ledger={studentLedger}
                 isAdmin={isAdmin}
+                studentId={selectedStudentId}
                 payLedgerIds={payLedgerIds}
                 setPayLedgerIds={setPayLedgerIds}
                 onPaySelected={() => setShowPayDialog(true)}
                 onPayAdmission={() => setShowAdmissionPayDialog(true)}
                 onDownloadReceipt={downloadReceipt}
+                onRazorpaySuccess={handleRazorpaySuccess}
               />
             )}
           </div>
@@ -715,11 +745,13 @@ const FeesPage = () => {
               <LedgerView
                 ledger={studentLedger}
                 isAdmin={isAdmin}
+                studentId={selectedStudentId}
                 payLedgerIds={payLedgerIds}
                 setPayLedgerIds={setPayLedgerIds}
                 onPaySelected={() => setShowPayDialog(true)}
                 onPayAdmission={() => setShowAdmissionPayDialog(true)}
                 onDownloadReceipt={downloadReceipt}
+                onRazorpaySuccess={handleRazorpaySuccess}
                 readOnly={isParent || isStudent}
               />
             )}
@@ -828,22 +860,28 @@ const FeesPage = () => {
                 />
               </div>
               <div>
-                <Label className="text-xs font-bold uppercase tracking-wider">Sibling — Admission Disc %</Label>
-                <Input
-                  type="number" min={0} max={100}
-                  className="mt-1 h-8 text-sm"
-                  value={configForm.sibling_admission_discount_pct ?? 50}
-                  onChange={e => setConfigForm(f => ({ ...f, sibling_admission_discount_pct: parseFloat(e.target.value) || 0 }))}
-                />
+                <Label className="text-xs font-bold uppercase tracking-wider">Sibling — Admission Disc ₹</Label>
+                <div className="flex items-center mt-1 gap-1.5">
+                  <span className="text-xs text-slate-500">₹</span>
+                  <Input
+                    type="number" min={0}
+                    className="mt-0 h-8 text-sm"
+                    value={configForm.sibling_admission_discount_amount ?? 0}
+                    onChange={e => setConfigForm(f => ({ ...f, sibling_admission_discount_amount: parseFloat(e.target.value) || 0 }))}
+                  />
+                </div>
               </div>
               <div>
-                <Label className="text-xs font-bold uppercase tracking-wider">Sibling — Tuition Disc %</Label>
-                <Input
-                  type="number" min={0} max={100}
-                  className="mt-1 h-8 text-sm"
-                  value={configForm.sibling_tuition_discount_pct ?? 15}
-                  onChange={e => setConfigForm(f => ({ ...f, sibling_tuition_discount_pct: parseFloat(e.target.value) || 0 }))}
-                />
+                <Label className="text-xs font-bold uppercase tracking-wider">Sibling — Tuition Disc ₹</Label>
+                <div className="flex items-center mt-1 gap-1.5">
+                  <span className="text-xs text-slate-500">₹</span>
+                  <Input
+                    type="number" min={0}
+                    className="mt-0 h-8 text-sm"
+                    value={configForm.sibling_tuition_discount_amount ?? 0}
+                    onChange={e => setConfigForm(f => ({ ...f, sibling_tuition_discount_amount: parseFloat(e.target.value) || 0 }))}
+                  />
+                </div>
               </div>
             </div>
 
@@ -1093,8 +1131,8 @@ const FeesPage = () => {
 // ─── Ledger View Component ────────────────────────────────────────────────────
 
 const LedgerView = ({
-  ledger, isAdmin, payLedgerIds, setPayLedgerIds,
-  onPaySelected, onPayAdmission, onDownloadReceipt, readOnly = false
+  ledger, isAdmin, studentId, payLedgerIds, setPayLedgerIds,
+  onPaySelected, onPayAdmission, onDownloadReceipt, onRazorpaySuccess, readOnly = false
 }) => {
   const [expandedSections, setExpandedSections] = useState({ one_time: true, yearly: true, monthly: true });
 
@@ -1180,15 +1218,52 @@ const LedgerView = ({
                 </Button>
               )}
               {payLedgerIds.length > 0 && (
-                <Button
-                  size="sm"
-                  className="bg-slate-900 hover:bg-slate-800 text-white text-xs h-8"
-                  onClick={onPaySelected}
-                >
-                  <CreditCard className="h-3 w-3 mr-1.5" />
-                  Pay Selected ({fmt(selectedTotal)})
-                </Button>
+                <>
+                  <Button
+                    size="sm"
+                    className="bg-slate-900 hover:bg-slate-800 text-white text-xs h-8"
+                    onClick={onPaySelected}
+                  >
+                    <CreditCard className="h-3 w-3 mr-1.5" />
+                    Record Cash/Offline ({fmt(selectedTotal)})
+                  </Button>
+                  <RazorpayCheckout
+                    studentId={studentId}
+                    ledgerIds={payLedgerIds}
+                    onSuccess={onRazorpaySuccess}
+                    onCancel={() => {}}
+                  >
+                    <CreditCard className="h-3 w-3 mr-1.5" />
+                    Pay Online ({fmt(selectedTotal)})
+                  </RazorpayCheckout>
+                </>
               )}
+            </div>
+          )}
+
+          {/* Parent / Student: Pay Online */}
+          {readOnly && summary.total_pending > 0 && (
+            <div className="mt-4 pt-3 border-t border-slate-100">
+              <p className="text-xs text-slate-500 mb-2">
+                Select entries below and pay online instantly via Razorpay.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {payLedgerIds.length > 0 ? (
+                  <RazorpayCheckout
+                    studentId={studentId}
+                    ledgerIds={payLedgerIds}
+                    onSuccess={onRazorpaySuccess}
+                    onCancel={() => {}}
+                  >
+                    <CreditCard className="h-4 w-4 mr-1.5" />
+                    Pay Selected {fmt(selectedTotal)} Online
+                  </RazorpayCheckout>
+                ) : (
+                  <p className="text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-md border border-amber-200">
+                    Select fee entries below to pay online
+                  </p>
+                )}
+              </div>
             </div>
           )}
         </CardContent>
@@ -1226,7 +1301,7 @@ const LedgerView = ({
               <Table>
                 <TableHeader>
                   <TableRow className="bg-white border-b border-slate-100">
-                    {isAdmin && !readOnly && <TableHead className="w-8"></TableHead>}
+                    {(isAdmin || readOnly) && <TableHead className="w-8"></TableHead>}
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Description</TableHead>
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Gross</TableHead>
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Discount</TableHead>
@@ -1241,16 +1316,16 @@ const LedgerView = ({
                   {entries.map(entry => (
                     <TableRow
                       key={entry.ledger_id}
-                      className={`hover:bg-slate-50 ${entry.status === 'overdue' ? 'bg-red-50/40' : ''}`}
+                      className={`hover:bg-slate-50 ${entry.status === 'overdue' ? 'bg-red-50/40 border-l-2 border-red-400' : ''}`}
                     >
-                      {isAdmin && !readOnly && (
+                      {(isAdmin || readOnly) && (
                         <TableCell>
-                          {entry.status !== 'paid' && (
+                          {entry.status !== 'paid' && entry.status !== 'waived' && (
                             <input
                               type="checkbox"
                               checked={payLedgerIds.includes(entry.ledger_id)}
                               onChange={() => toggleLedgerId(entry.ledger_id)}
-                              className="rounded"
+                              className="rounded cursor-pointer"
                             />
                           )}
                         </TableCell>
@@ -1269,7 +1344,9 @@ const LedgerView = ({
                         {entry.late_fee_applied > 0 ? `+${fmt(entry.late_fee_applied)}` : '—'}
                       </TableCell>
                       <TableCell className="font-bold text-sm">{fmt(entry.net_amount)}</TableCell>
-                      <TableCell className="text-xs text-slate-500">{entry.due_date}</TableCell>
+                      <TableCell className="text-xs text-slate-500">
+                        {entry.due_date ? new Date(entry.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
+                      </TableCell>
                       <TableCell><StatusBadge status={entry.status} /></TableCell>
                       {!readOnly && (
                         <TableCell>

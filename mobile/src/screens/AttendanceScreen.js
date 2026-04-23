@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import client from '../api/client';
-import { COLORS } from '../theme/colors';
+import { COLORS, RADIUS, SHADOW } from '../theme/colors';
 import { useAuth } from '../contexts/AuthContext';
 import { SectionTitle, CardDark, CardOrange, Badge } from '../components/UI';
 import { StatCard, StatGrid } from '../components/StatCard';
@@ -229,7 +229,7 @@ const AttendanceScreen = () => {
                       onPress={() => canEdit && setAttData(p => ({ ...p, [s.student_id]: 'leave' }))}
                       disabled={!canEdit}
                     >
-                      <Ionicons name="time" size={16} color={status === 'leave' ? COLORS.muted : COLORS.muted} />
+                      <Ionicons name="time" size={16} color={status === 'leave' ? COLORS.warning : COLORS.muted} />
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -249,19 +249,19 @@ const styles = StyleSheet.create({
   header: { paddingTop: 12, paddingBottom: 16 },
   h1: { fontSize: 24, fontWeight: '800', color: COLORS.black, letterSpacing: -0.5 },
   sub: { fontSize: 12, color: COLORS.muted, marginTop: 2 },
-  chip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: COLORS.border, backgroundColor: COLORS.white, marginRight: 8 },
+  chip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999, borderWidth: 1.5, borderColor: COLORS.border, backgroundColor: COLORS.white, marginRight: 8 },
   chipActive: { backgroundColor: COLORS.black, borderColor: COLORS.black },
   chipText: { fontSize: 13, fontWeight: '600', color: COLORS.muted },
   chipTextActive: { color: COLORS.white },
-  list: { backgroundColor: COLORS.white, borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border, marginBottom: 16 },
+  list: { backgroundColor: COLORS.white, borderRadius: RADIUS.xl, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border, marginBottom: 16, ...SHADOW.sm },
   listItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: COLORS.lightBg },
   attRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: COLORS.lightBg },
-  attBtn: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: COLORS.border, backgroundColor: COLORS.white },
-  attBtnPresent: { backgroundColor: COLORS.black, borderColor: COLORS.black },
-  attBtnAbsent: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
-  attBtnLeave: { backgroundColor: COLORS.lightBg, borderColor: COLORS.border },
-  actionBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, borderRadius: 10 },
-  unlockBtn: { backgroundColor: COLORS.primary, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  attBtn: { width: 38, height: 38, borderRadius: RADIUS.md, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: COLORS.border, backgroundColor: COLORS.white },
+  attBtnPresent: { backgroundColor: COLORS.success, borderColor: COLORS.success },
+  attBtnAbsent: { backgroundColor: COLORS.danger, borderColor: COLORS.danger },
+  attBtnLeave: { backgroundColor: '#FFFBEB', borderColor: '#FDE68A' },
+  actionBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: RADIUS.md },
+  unlockBtn: { backgroundColor: COLORS.primary, borderRadius: RADIUS.md, paddingVertical: 10, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 6 },
   empty: { alignItems: 'center', paddingVertical: 40 },
   emptyText: { fontSize: 14, color: COLORS.lightMuted, marginTop: 12 },
 });

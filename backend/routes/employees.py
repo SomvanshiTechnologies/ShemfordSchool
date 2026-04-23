@@ -2,21 +2,59 @@ from fastapi import APIRouter, HTTPException, Request
 from typing import Optional
 from datetime import datetime, timezone
 import secrets
+import re
+import logging
 
 from database import db
 from models import (
     UserRole, UserBase, EmployeeBase, EmployeeCreate
 )
 from auth_utils import (
-    hash_password, require_roles, create_audit_log
+    hash_password, require_roles, create_audit_log, get_current_user
 )
+from security import encrypt_bank_fields, decrypt_bank_fields, BANK_FIELDS, strip_pii_for_audit
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+# IFSC: 4 capital letters + '0' + 6 alphanumeric characters
+_IFSC_RE = re.compile(r'^[A-Z]{4}0[A-Z0-9]{6}$')
+# Bank account: 8–18 digits
+_ACCOUNT_RE = re.compile(r'^\d{8,18}$')
+
+
+def _validate_bank_fields(account: Optional[str], ifsc: Optional[str], holder: Optional[str]):
+    """Raise HTTPException if any mandatory bank field is missing or malformed."""
+    if not account or not account.strip():
+        raise HTTPException(status_code=400, detail="bank_account_number is required for payroll.")
+    if not _ACCOUNT_RE.match(account.strip()):
+        raise HTTPException(status_code=400, detail="bank_account_number must be 8–18 digits.")
+    if not ifsc or not ifsc.strip():
+        raise HTTPException(status_code=400, detail="bank_ifsc (IFSC code) is required for payroll.")
+    if not _IFSC_RE.match(ifsc.strip().upper()):
+        raise HTTPException(status_code=400, detail="Invalid IFSC code format. Expected: ABCD0123456.")
+    if not holder or not holder.strip():
+        raise HTTPException(status_code=400, detail="bank_account_holder (account holder name) is required for payroll.")
 
 
 @router.post("/employees")
 async def create_employee(employee: EmployeeCreate, request: Request):
     user = await require_roles(UserRole.ADMIN)(request)
+
+    # Validate mandatory bank details (required for payroll disbursement)
+    _validate_bank_fields(
+        employee.bank_account_number,
+        employee.bank_ifsc,
+        employee.bank_account_holder,
+    )
+
+    # Normalize IFSC to uppercase
+    if employee.bank_ifsc:
+        employee = employee.model_copy(update={"bank_ifsc": employee.bank_ifsc.strip().upper()})
+
+    # Ensure monthly_salary is set
+    if employee.monthly_salary <= 0 and (not employee.salary or employee.salary <= 0):
+        raise HTTPException(status_code=400, detail="monthly_salary must be greater than 0.")
 
     employee_obj = EmployeeBase(**employee.model_dump())
     employee_dict = employee_obj.model_dump()
@@ -50,12 +88,16 @@ async def create_employee(employee: EmployeeCreate, request: Request):
     # (#17) Pop temp password BEFORE inserting into DB so it's never stored
     temp_pw = employee_dict.pop("_temp_password", None)
 
+    # Encrypt PII bank fields before storage
+    encrypt_bank_fields(employee_dict)
+
     await db.employees.insert_one(employee_dict)
     employee_dict.pop("_id", None)
 
-    await create_audit_log("employee", employee_obj.employee_id, "create", {"employee": employee.model_dump()}, user)
+    await create_audit_log("employee", employee_obj.employee_id, "create",
+                          {"employee": strip_pii_for_audit(employee.model_dump())}, user)
 
-    result = employee_dict
+    result = decrypt_bank_fields(employee_dict)
     if temp_pw:
         result["linked_account"] = {
             "email": employee.email,
@@ -80,7 +122,54 @@ async def get_employees(
         query["is_active"] = is_active
 
     employees = await db.employees.find(query, {"_id": 0}).to_list(500)
-    return employees
+    return [decrypt_bank_fields(e) for e in employees]
+
+
+@router.get("/employees/me")
+async def get_my_employee_record(request: Request):
+    """Any logged-in user can fetch their own employee record (used by teachers for payroll)."""
+    user = await get_current_user(request)
+    employee = await db.employees.find_one(
+        {"$or": [{"user_id": user["user_id"]}, {"email": user["email"]}]},
+        {"_id": 0}
+    )
+    if not employee:
+        raise HTTPException(status_code=404, detail="No employee record linked to your account")
+    return decrypt_bank_fields(employee)
+
+
+@router.get("/employees/me/payroll")
+async def get_my_payroll(
+    request: Request,
+    year: Optional[int] = None,
+    limit: int = 24,
+):
+    """Employee: returns their own payroll records directly (no employee_id needed)."""
+    user = await get_current_user(request)
+    if user["role"] not in (UserRole.TEACHER, UserRole.ACCOUNTANT):
+        raise HTTPException(status_code=403, detail="Only employees can access this endpoint.")
+
+    emp = await db.employees.find_one(
+        {"$or": [{"user_id": user["user_id"]}, {"email": user["email"]}]},
+        {"_id": 0, "employee_id": 1, "first_name": 1, "last_name": 1, "designation": 1, "monthly_salary": 1}
+    )
+    if not emp:
+        raise HTTPException(status_code=404, detail="No employee record linked to your account.")
+
+    query: dict = {"employee_id": emp["employee_id"]}
+    if year:
+        query["year"] = year
+
+    records = await db.payroll.find(query, {"_id": 0}).sort(
+        [("year", -1), ("month", -1)]
+    ).limit(limit).to_list(limit)
+
+    logger.info("Self-payroll accessed by employee %s (user=%s)", emp["employee_id"], user["user_id"])
+    return {
+        "employee": emp,
+        "records": records,
+        "total": len(records),
+    }
 
 
 @router.get("/employees/{employee_id}")
@@ -89,7 +178,7 @@ async def get_employee(employee_id: str, request: Request):
     employee = await db.employees.find_one({"employee_id": employee_id}, {"_id": 0})
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
-    return employee
+    return decrypt_bank_fields(employee)
 
 
 @router.put("/employees/{employee_id}")
@@ -119,13 +208,27 @@ async def update_employee(employee_id: str, request: Request):
         if old_val != new_val:
             changes[key] = {"old": old_val, "new": new_val}
 
+    # Validate and normalize bank fields if any are being updated
+    if any(f in body for f in BANK_FIELDS):
+        # Only validate the specific fields being changed (allow partial bank updates)
+        new_account = body.get("bank_account_number")
+        new_ifsc    = body.get("bank_ifsc")
+        new_holder  = body.get("bank_account_holder")
+        if new_account and not _ACCOUNT_RE.match(new_account.strip()):
+            raise HTTPException(status_code=400, detail="bank_account_number must be 8–18 digits.")
+        if new_ifsc:
+            if not _IFSC_RE.match(new_ifsc.strip().upper()):
+                raise HTTPException(status_code=400, detail="Invalid IFSC code format. Expected: ABCD0123456.")
+            body["bank_ifsc"] = new_ifsc.strip().upper()
+        encrypt_bank_fields(body)
+
     await db.employees.update_one({"employee_id": employee_id}, {"$set": body})
     updated = await db.employees.find_one({"employee_id": employee_id}, {"_id": 0})
 
     if changes:
         await create_audit_log("employee", employee_id, "update", changes, user)
 
-    return updated
+    return decrypt_bank_fields(updated)
 
 
 

@@ -243,7 +243,7 @@ const ClassStructurePage = () => {
       </div>
 
       {/* Class Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-2">
         {classes.map(cls => (
           <Card key={cls.class_id} className="hover:shadow-md transition-shadow" data-testid={`class-card-${cls.name}`}>
             <CardHeader className="pb-3">

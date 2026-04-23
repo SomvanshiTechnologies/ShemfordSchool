@@ -1,12 +1,15 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Modal, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, Modal, StyleSheet, ActivityIndicator, Alert, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import client from '../api/client';
-import { COLORS } from '../theme/colors';
+import { COLORS, RADIUS, SHADOW } from '../theme/colors';
+import { API_ORIGIN } from '../config';
 import { useAuth } from '../contexts/AuthContext';
 import { CardDark, CardOrange, SectionTitle, Badge, Card } from '../components/UI';
 import { ScreenLoader } from '../components/LoadingSkeleton';
+
+const BACKEND_URL = API_ORIGIN; // same host as API but without /api
 
 const FeesScreen = () => {
   const { user } = useAuth();
@@ -22,6 +25,8 @@ const FeesScreen = () => {
   const [paying, setPaying] = useState(false);
   const [payMonths, setPayMonths] = useState(1);
   const [showPay, setShowPay] = useState(false);
+  const [selectedLedgerIds, setSelectedLedgerIds] = useState([]);
+  const pollRef = useRef(null);
 
   useEffect(() => {
     if (isParent || isStudent) {
@@ -42,6 +47,7 @@ const FeesScreen = () => {
     client.get(`/fees/student/${studentId}`).then(r => setFeeData(r.data)).finally(() => setLoading(false));
   };
 
+  // Legacy cash-record payment (admin only, kept for backward compat)
   const payFees = async () => {
     if (!feeData) return;
     setPaying(true);
@@ -59,6 +65,88 @@ const FeesScreen = () => {
       Alert.alert('Error', e.response?.data?.detail || 'Payment failed');
     } finally { setPaying(false); }
   };
+
+  // Poll order status after returning from browser (up to 30s)
+  const pollOrderStatus = (internalOrderId, studentId) => {
+    let attempts = 0;
+    const maxAttempts = 10;
+    const interval = setInterval(async () => {
+      attempts++;
+      try {
+        const res = await client.get(`/payments/razorpay/orders?student_id=${studentId}&status=VERIFIED_SUCCESS&limit=1`);
+        const verified = res.data.find(o => o.internal_order_id === internalOrderId);
+        if (verified) {
+          clearInterval(interval);
+          pollRef.current = null;
+          Alert.alert('Payment Successful!', `Receipt: ${verified.receipt_number}`);
+          loadFees(studentId);
+          return;
+        }
+      } catch (_) {}
+      if (attempts >= maxAttempts) {
+        clearInterval(interval);
+        pollRef.current = null;
+        // Let webhook handle it silently
+      }
+    }, 3000);
+    pollRef.current = interval;
+  };
+
+  const payOnline = async () => {
+    if (!selectedChild) return;
+    setPaying(true);
+    try {
+      // Get pending ledger entries (oldest first)
+      const ledgerRes = await client.get(`/fees/ledger/${selectedChild.student_id}`);
+      const ledger = ledgerRes.data?.ledger || {};
+      const allEntries = [
+        ...(ledger.one_time || []),
+        ...(ledger.yearly  || []),
+        ...(ledger.monthly || []),
+      ].filter(e => e.status === 'pending' || e.status === 'overdue')
+       .sort((a, b) => a.due_date.localeCompare(b.due_date))
+       .slice(0, payMonths);
+
+      if (!allEntries.length) {
+        Alert.alert('No Dues', 'No pending fee entries found.');
+        return;
+      }
+
+      const ledgerIds = allEntries.map(e => e.ledger_id);
+
+      // Create order on backend
+      const orderRes = await client.post('/payments/razorpay/create-order', {
+        student_id: selectedChild.student_id,
+        ledger_ids: ledgerIds,
+      });
+      const { internal_order_id } = orderRes.data;
+
+      // Open checkout page in system browser
+      const checkoutUrl = `${BACKEND_URL}/api/payments/razorpay/checkout-page/${internal_order_id}`;
+      const supported = await Linking.canOpenURL(checkoutUrl);
+      if (!supported) {
+        Alert.alert('Error', 'Cannot open browser. Please update your device.');
+        await client.post('/payments/razorpay/cancel', { internal_order_id });
+        return;
+      }
+
+      await Linking.openURL(checkoutUrl);
+      setShowPay(false);
+
+      // Start polling after browser opens
+      pollOrderStatus(internal_order_id, selectedChild.student_id);
+
+    } catch (e) {
+      Alert.alert('Error', e.response?.data?.detail || 'Could not start payment.');
+    } finally {
+      setPaying(false);
+    }
+  };
+
+  // Clean up polling on unmount
+  useEffect(() => {
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
 
   if (loading) return <SafeAreaView style={styles.safe}><ScreenLoader /></SafeAreaView>;
 
@@ -99,8 +187,16 @@ const FeesScreen = () => {
   }
 
   // Parent/Student view
+  // Backend returns `ledger` grouped by type; flatten for the monthly breakdown list.
+  // Legacy `installments` kept as a fallback for older backends.
   const summary = feeData?.summary;
-  const installments = feeData?.installments || [];
+  const ledger = feeData?.ledger || {};
+  const flatLedger = [
+    ...(ledger.one_time || []),
+    ...(ledger.yearly || []),
+    ...(ledger.monthly || []),
+  ];
+  const installments = flatLedger.length ? flatLedger : (feeData?.installments || []);
   const pending = installments.filter(i => i.status !== 'paid');
 
   return (
@@ -120,10 +216,10 @@ const FeesScreen = () => {
                   <Text style={styles.whiteValue}>₹{summary.total_pending.toLocaleString()}</Text>
                   <Text style={styles.whiteSub}>{summary.months_paid}/{summary.months_total} months paid</Text>
                 </View>
-                {isParent && (
+                {(isParent || isStudent) && (
                   <TouchableOpacity style={styles.payBtn} onPress={() => setShowPay(true)}>
                     <Ionicons name="card" size={14} color={COLORS.white} />
-                    <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.white }}>Pay Now</Text>
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.white }}>Pay Online</Text>
                   </TouchableOpacity>
                 )}
               </View>
@@ -147,21 +243,38 @@ const FeesScreen = () => {
           </Card>
         )}
 
-        <SectionTitle>Monthly Breakdown</SectionTitle>
+        <SectionTitle>Fee Breakdown</SectionTitle>
         <View style={styles.list}>
-          {installments.map(inst => (
-            <View key={inst.installment_id} style={styles.listItem}>
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontWeight: '600', fontSize: 13, color: COLORS.black }}>{inst.month}</Text>
-                <Text style={{ fontSize: 11, color: COLORS.muted }}>Due: {inst.due_date}</Text>
-                {inst.concession_amount > 0 && <Text style={{ fontSize: 10, color: COLORS.primary }}>Concession: -₹{inst.concession_amount}</Text>}
+          {installments.map(inst => {
+            const key = inst.ledger_id || inst.installment_id;
+            const amount = inst.net_amount ?? inst.total_due ?? 0;
+            const label = inst.description || inst.month || 'Fee';
+            return (
+              <View key={key} style={styles.listItem}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontWeight: '600', fontSize: 13, color: COLORS.black }}>{label}</Text>
+                  <Text style={{ fontSize: 11, color: COLORS.muted }}>Due: {inst.due_date}</Text>
+                  {(inst.concession_amount ?? 0) > 0 && (
+                    <Text style={{ fontSize: 10, color: COLORS.primary }}>Concession: -₹{inst.concession_amount}</Text>
+                  )}
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={{ fontWeight: '700', fontSize: 14, color: inst.status === 'paid' ? COLORS.black : COLORS.primary }}>
+                    ₹{Number(amount).toLocaleString()}
+                  </Text>
+                  <Badge
+                    text={inst.status}
+                    variant={inst.status === 'paid' ? 'success' : inst.status === 'overdue' ? 'danger' : 'muted'}
+                  />
+                </View>
               </View>
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={{ fontWeight: '700', fontSize: 14, color: inst.status === 'paid' ? COLORS.black : COLORS.primary }}>₹{inst.total_due.toLocaleString()}</Text>
-                <Badge text={inst.status} variant={inst.status === 'paid' ? 'dark' : inst.status === 'overdue' ? 'orange' : 'muted'} />
-              </View>
+            );
+          })}
+          {installments.length === 0 && (
+            <View style={{ paddingVertical: 24, alignItems: 'center' }}>
+              <Text style={{ fontSize: 13, color: COLORS.lightMuted }}>No fee entries yet</Text>
             </View>
-          ))}
+          )}
         </View>
 
         {feeData?.payments?.length > 0 && (
@@ -202,9 +315,11 @@ const FeesScreen = () => {
               <Text style={{ fontSize: 13, color: COLORS.muted }}>Amount</Text>
               <Text style={{ fontWeight: '800', fontSize: 18, color: COLORS.black }}>₹{pending.slice(0, payMonths).reduce((s, i) => s + i.total_due, 0).toLocaleString()}</Text>
             </View>
-            <TouchableOpacity style={[styles.payFullBtn]} onPress={payFees} disabled={paying}>
+            <TouchableOpacity style={[styles.payFullBtn]} onPress={payOnline} disabled={paying}>
               {paying ? <ActivityIndicator color={COLORS.white} /> : <Ionicons name="card" size={18} color={COLORS.white} />}
-              <Text style={{ fontSize: 14, fontWeight: '700', color: COLORS.white }}>{paying ? 'Processing...' : 'Confirm Payment'}</Text>
+              <Text style={{ fontSize: 14, fontWeight: '700', color: COLORS.white }}>
+                {paying ? 'Opening Payment...' : 'Pay via Razorpay'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -224,21 +339,21 @@ const styles = StyleSheet.create({
   whiteLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, color: 'rgba(255,255,255,0.7)' },
   whiteValue: { fontSize: 28, fontWeight: '800', color: COLORS.white, marginTop: 4 },
   whiteSub: { fontSize: 12, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
-  payBtn: { backgroundColor: COLORS.black, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 6 },
-  list: { backgroundColor: COLORS.white, borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border, marginBottom: 16 },
+  payBtn: { backgroundColor: COLORS.black, borderRadius: RADIUS.md, paddingVertical: 11, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  list: { backgroundColor: COLORS.white, borderRadius: RADIUS.xl, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border, marginBottom: 16, ...SHADOW.sm },
   listItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: COLORS.lightBg },
   empty: { alignItems: 'center', paddingVertical: 40 },
   emptyText: { fontSize: 14, color: COLORS.lightMuted, marginTop: 12 },
-  chip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: COLORS.border, backgroundColor: COLORS.white, marginRight: 8 },
+  chip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999, borderWidth: 1.5, borderColor: COLORS.border, backgroundColor: COLORS.white, marginRight: 8 },
   chipActive: { backgroundColor: COLORS.black, borderColor: COLORS.black },
   chipText: { fontSize: 13, fontWeight: '600', color: COLORS.muted },
   chipTextActive: { color: COLORS.white },
   modalOverlay: { flex: 1, justifyContent: 'flex-end' },
-  modalBg: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.5)' },
-  modalContent: { backgroundColor: COLORS.white, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24 },
-  modalHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E5E5E5', alignSelf: 'center', marginBottom: 20 },
-  amountBox: { backgroundColor: COLORS.lightBg, borderRadius: 12, padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  payFullBtn: { backgroundColor: COLORS.primary, borderRadius: 12, paddingVertical: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  modalBg: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15,23,42,0.55)' },
+  modalContent: { backgroundColor: COLORS.white, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, ...SHADOW.md },
+  modalHandle: { width: 44, height: 4, borderRadius: 2, backgroundColor: COLORS.border, alignSelf: 'center', marginBottom: 20 },
+  amountBox: { backgroundColor: COLORS.lightBg, borderRadius: RADIUS.lg, padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  payFullBtn: { backgroundColor: COLORS.primary, borderRadius: RADIUS.lg, paddingVertical: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, ...SHADOW.md },
 });
 
 export default FeesScreen;

@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TextInput, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import client from '../api/client';
-import { COLORS } from '../theme/colors';
+import { COLORS, RADIUS, SHADOW } from '../theme/colors';
 import { Avatar, Badge, EmptyState } from '../components/UI';
 import { ScreenLoader } from '../components/LoadingSkeleton';
 
@@ -69,8 +69,8 @@ const styles = StyleSheet.create({
   sub: { fontSize: 12, color: COLORS.muted, marginTop: 2 },
   searchWrap: { position: 'relative', marginBottom: 16 },
   searchIcon: { position: 'absolute', left: 14, top: 14, zIndex: 1 },
-  searchInput: { backgroundColor: COLORS.white, borderRadius: 12, paddingLeft: 38, paddingRight: 16, paddingVertical: 12, fontSize: 14, color: COLORS.black, borderWidth: 1.5, borderColor: COLORS.border },
-  list: { backgroundColor: COLORS.white, borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border, marginBottom: 16 },
+  searchInput: { backgroundColor: COLORS.white, borderRadius: RADIUS.lg, paddingLeft: 38, paddingRight: 16, paddingVertical: 12, fontSize: 14, color: COLORS.black, borderWidth: 1.5, borderColor: COLORS.border, ...SHADOW.sm },
+  list: { backgroundColor: COLORS.white, borderRadius: RADIUS.xl, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border, marginBottom: 16, ...SHADOW.sm },
   listItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: COLORS.lightBg },
 });
 

@@ -69,7 +69,11 @@ const EmployeesPage = () => {
     address: '',
     designation: '',
     department: '',
-    salary: ''
+    salary: '',
+    bank_account_number: '',
+    bank_ifsc: '',
+    bank_name: '',
+    bank_account_holder: ''
   });
   const [editData, setEditData] = useState({
     first_name: '',
@@ -132,7 +136,11 @@ const EmployeesPage = () => {
         address: '',
         designation: '',
         department: '',
-        salary: ''
+        salary: '',
+        bank_account_number: '',
+        bank_ifsc: '',
+        bank_name: '',
+        bank_account_holder: ''
       });
       fetchEmployees();
     } catch (error) {
@@ -364,6 +372,47 @@ const EmployeesPage = () => {
                     onChange={(e) => setFormData({...formData, address: e.target.value})}
                     data-testid="emp-address"
                   />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="bank_account_number">Bank Account Number</Label>
+                    <Input
+                      id="bank_account_number"
+                      value={formData.bank_account_number}
+                      onChange={(e) => setFormData({...formData, bank_account_number: e.target.value})}
+                      data-testid="emp-bank-account"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="bank_ifsc">IFSC Code</Label>
+                    <Input
+                      id="bank_ifsc"
+                      value={formData.bank_ifsc}
+                      onChange={(e) => setFormData({...formData, bank_ifsc: e.target.value.toUpperCase()})}
+                      placeholder="e.g. SBIN0001234"
+                      data-testid="emp-bank-ifsc"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="bank_name">Bank Name</Label>
+                    <Input
+                      id="bank_name"
+                      value={formData.bank_name}
+                      onChange={(e) => setFormData({...formData, bank_name: e.target.value})}
+                      data-testid="emp-bank-name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="bank_account_holder">Account Holder Name</Label>
+                    <Input
+                      id="bank_account_holder"
+                      value={formData.bank_account_holder}
+                      onChange={(e) => setFormData({...formData, bank_account_holder: e.target.value})}
+                      data-testid="emp-bank-holder"
+                    />
+                  </div>
                 </div>
               </div>
               <DialogFooter>

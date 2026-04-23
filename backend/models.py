@@ -181,7 +181,14 @@ class EmployeeBase(BaseModel):
     designation: str
     department: str
     joining_date: str = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-    salary: Optional[float] = None
+    # Salary
+    salary: Optional[float] = None          # legacy field — kept for compat
+    monthly_salary: float = 0.0             # canonical payroll salary
+    # Bank details
+    bank_account_number: Optional[str] = None
+    bank_ifsc: Optional[str] = None
+    bank_name: Optional[str] = None
+    bank_account_holder: Optional[str] = None
     is_active: bool = True
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -197,6 +204,11 @@ class EmployeeCreate(BaseModel):
     designation: str
     department: str
     salary: Optional[float] = None
+    monthly_salary: float = 0.0
+    bank_account_number: Optional[str] = None
+    bank_ifsc: Optional[str] = None
+    bank_name: Optional[str] = None
+    bank_account_holder: Optional[str] = None
 
 
 # ===================== FEE MODELS (COMPONENT-BASED) =====================
@@ -229,9 +241,9 @@ class FeeComponentConfig(BaseModel):
     due_day: int = 10
     late_fee: float = 0
     late_fee_enabled: bool = False
-    # Sibling discount (school policy)
-    sibling_admission_discount_pct: float = 50  # 50% off admission fee for siblings
-    sibling_tuition_discount_pct: float = 15   # 15% off monthly tuition for siblings
+    # Sibling discount (school policy) — fixed amounts in ₹
+    sibling_admission_discount_amount: float = 0  # Fixed discount amount for admission fee for siblings
+    sibling_tuition_discount_amount: float = 0    # Fixed discount amount for monthly tuition for siblings
     is_active: bool = True
     notes: Optional[str] = None
     created_by: Optional[str] = None
@@ -261,11 +273,20 @@ class StudentLedgerEntry(BaseModel):
     late_fee_applied: float = 0
     net_amount: float   # gross - concession + late_fee
     due_date: str
-    status: str = "pending"  # pending, paid, overdue, waived
+    status: str = "pending"  # pending, paid, overdue, waived, partially_paid
     payment_id: Optional[str] = None
     receipt_number: Optional[str] = None
     paid_date: Optional[str] = None
+    # Partial payment support
+    amount_paid: float = 0          # how much has been paid so far
+    remaining_balance: float = 0    # net_amount - amount_paid (0 when fully paid)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @model_validator(mode='after')
+    def init_remaining_balance(self) -> 'StudentLedgerEntry':
+        if self.remaining_balance == 0 and self.amount_paid == 0 and self.net_amount > 0:
+            self.remaining_balance = self.net_amount
+        return self
 
 
 class StudentDocument(BaseModel):
@@ -531,6 +552,111 @@ class ClassStructure(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+# ===================== PAYROLL MODELS =====================
+
+class PayrollStatus:
+    DRAFT    = "draft"      # generated, not yet approved
+    APPROVED = "approved"   # approved by admin, ready to pay
+    PAID     = "paid"       # salary disbursed
+
+
+class PayrollRecord(BaseModel):
+    """
+    One row = one employee's salary for one month.
+    Unique constraint on (employee_id, month_year).
+    """
+    model_config = ConfigDict(extra="ignore")
+    payroll_id: str = Field(default_factory=lambda: f"pay_{uuid.uuid4().hex[:14]}")
+    employee_id: str
+    month: int          # 1–12
+    year: int           # e.g. 2026
+    month_year: str     # "YYYY-MM" — indexed for fast queries
+
+    # Salary snapshot at time of generation (frozen so historical records stay accurate)
+    monthly_salary: float       # gross monthly salary from employee record
+    per_day_salary: float       # monthly_salary / total_days_in_month
+
+    # Day breakdown
+    total_days: int             # calendar days in the month
+    working_days: int           # days employee was expected to work (after mid-month join)
+    lwp_days: float             # Leave Without Pay days (can be fractional)
+    present_days: float         # working_days - lwp_days
+
+    # Calculation
+    gross_salary: float         # (working_days / total_days) * monthly_salary
+    lwp_deduction: float        # lwp_days * per_day_salary
+    other_deductions: float = 0.0
+    deduction_remarks: Optional[str] = None
+    total_deductions: float     # lwp_deduction + other_deductions
+    net_salary: float           # gross_salary - total_deductions
+
+    # Flags
+    is_mid_month_join: bool = False   # True if employee joined this month
+
+    # Workflow
+    status: str = PayrollStatus.DRAFT
+    generated_by: str
+    approved_by: Optional[str] = None
+    approved_at: Optional[str] = None
+    paid_at: Optional[str] = None
+    payment_reference: Optional[str] = None  # bank transfer ref / UTR
+    remarks: Optional[str] = None
+
+    # Bank snapshot (frozen at payment time for audit)
+    bank_account_number: Optional[str] = None
+    bank_ifsc: Optional[str] = None
+    bank_name: Optional[str] = None
+
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# ===================== RAZORPAY MODELS =====================
+
+class RazorpayOrderStatus:
+    CREATED                     = "CREATED"
+    INITIATED                   = "INITIATED"
+    SUCCESS_PENDING_VERIFICATION = "SUCCESS_PENDING_VERIFICATION"
+    VERIFIED_SUCCESS            = "VERIFIED_SUCCESS"
+    FAILED                      = "FAILED"
+    CANCELLED                   = "CANCELLED"
+
+
+class RazorpayOrder(BaseModel):
+    """
+    Tracks the full lifecycle of one Razorpay payment attempt.
+    One record per checkout session — never reused.
+    """
+    model_config = ConfigDict(extra="ignore")
+    internal_order_id: str = Field(default_factory=lambda: f"rzpord_{uuid.uuid4().hex[:14]}")
+    rzp_order_id: str                          # order_xxx returned by Razorpay API
+    rzp_payment_id: Optional[str] = None       # pay_xxx — set after payment attempt
+    rzp_signature: Optional[str] = None        # HMAC signature from Razorpay
+    student_id: str
+    ledger_ids: List[str]                      # fee ledger entries being paid
+    amount_paise: int                          # amount in paise (integer, no floats)
+    amount_rupees: float
+    status: str = RazorpayOrderStatus.CREATED
+    created_by: str
+    failure_reason: Optional[str] = None
+    receipt_number: Optional[str] = None
+    fee_payment_id: Optional[str] = None
+    # Webhook fields
+    webhook_verified: bool = False
+    webhook_event_id: Optional[str] = None
+    # Refund fields
+    refund_id: Optional[str] = None
+    refund_amount: Optional[float] = None
+    refund_status: Optional[str] = None
+    refund_initiated_by: Optional[str] = None
+    refund_initiated_at: Optional[str] = None
+    # Partial payment
+    is_partial: bool = False
+    partial_amount_paise: Optional[int] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class AuditLog(BaseModel):
     model_config = ConfigDict(extra="ignore")
     log_id: str = Field(default_factory=lambda: f"audit_{uuid.uuid4().hex[:10]}")
@@ -556,6 +682,8 @@ class OnboardingApplication(BaseModel):
     parent_name: Optional[str] = None
     parent_phone: Optional[str] = None
     parent_email: Optional[EmailStr] = None
+    mother_name: Optional[str] = None
+    mother_phone: Optional[str] = None
     class_name: Optional[str] = None
     section: Optional[str] = None
     stream: Optional[str] = None  # for class 11/12

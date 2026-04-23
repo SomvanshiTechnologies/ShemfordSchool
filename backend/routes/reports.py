@@ -17,7 +17,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from database import db
 from models import UserRole
 from auth_utils import (
-    get_current_user, require_roles, calculate_grade, create_audit_log
+    get_current_user, require_roles, calculate_grade, create_audit_log, get_teacher_assigned_classes
 )
 
 router = APIRouter()
@@ -69,6 +69,11 @@ async def get_dashboard_stats(request: Request):
         if student:
             stats["fee_status"] = student["fee_status"]
             stats["app_locked"] = student.get("app_locked", False)
+            stats["class_name"] = student.get("class_name", "")
+            stats["section"] = student.get("section", "")
+            stats["roll_number"] = student.get("roll_number", "")
+            stats["admission_number"] = student.get("admission_number", "")
+            stats["stream"] = student.get("stream", "")
             attendance = await db.attendance.find({
                 "entity_type": "student", "entity_id": student["student_id"]
             }, {"_id": 0}).to_list(1000)
@@ -79,7 +84,10 @@ async def get_dashboard_stats(request: Request):
                 stats["attendance_percentage"] = 0
 
     if user["role"] == UserRole.PARENT:
-        children = await db.students.find({"parent_id": user["user_id"]}, {"_id": 0}).to_list(10)
+        children = await db.students.find(
+            {"$or": [{"parent_email": user.get("email", "")}, {"parent_id": user["user_id"]}], "is_active": True},
+            {"_id": 0}
+        ).to_list(10)
         stats["children_count"] = len(children)
         stats["children"] = children
         # Check if any child is app_locked
@@ -292,8 +300,19 @@ async def get_attendance_report(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ):
-    await require_roles(UserRole.ADMIN, UserRole.TEACHER)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.TEACHER)(request)
     query = {"entity_type": "student"}
+
+    # Teachers can only see their assigned class's attendance report
+    if user["role"] == UserRole.TEACHER:
+        assigned = await get_teacher_assigned_classes(user["user_id"])
+        if assigned:
+            allowed_classes = [a["class_name"] for a in assigned]
+            if class_name and class_name not in allowed_classes:
+                raise HTTPException(status_code=403, detail="You are not assigned to this class")
+            if not class_name:
+                query["$or"] = [{"class_name": a["class_name"], "section": a["section"]} for a in assigned]
+
     if class_name:
         query["class_name"] = class_name
     if date:
@@ -331,8 +350,16 @@ async def export_attendance_report(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ):
-    await require_roles(UserRole.ADMIN, UserRole.TEACHER)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.TEACHER)(request)
     query = {"entity_type": "student"}
+    if user["role"] == UserRole.TEACHER:
+        assigned = await get_teacher_assigned_classes(user["user_id"])
+        if assigned:
+            allowed_classes = [a["class_name"] for a in assigned]
+            if class_name and class_name not in allowed_classes:
+                raise HTTPException(status_code=403, detail="You are not assigned to this class")
+            if not class_name:
+                query["$or"] = [{"class_name": a["class_name"], "section": a["section"]} for a in assigned]
     if class_name:
         query["class_name"] = class_name
     if date:

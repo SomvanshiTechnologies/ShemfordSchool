@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
 import client from '../../api/client';
 import { COLORS } from '../../theme/colors';
 import { StatCard, StatGrid } from '../../components/StatCard';
@@ -20,15 +19,16 @@ const AdminDashboard = ({ navigation }) => {
       client.get('/fees/due-chart').catch(() => ({ data: [] })),
       client.get('/reports/financial').catch(() => ({ data: {} })),
     ]).then(([s, e, d, f]) => {
-      const totalDue = d.data.reduce((sum, x) => sum + (x.total_due || 0), 0);
-      const overdueCount = d.data.filter(x => x.months_overdue > 0).length;
+      const due = d.data || [];
+      const totalDue = due.reduce((sum, x) => sum + (x.total_due || 0), 0);
+      const overdueCount = due.filter(x => (x.months_overdue || 0) > 0).length;
       setStats({
-        students: s.data.length,
-        employees: e.data.length,
+        students:        (s.data || []).length,
+        employees:       (e.data || []).length,
         totalDue,
         overdueStudents: overdueCount,
-        totalCollection: f.data.total_collection || 0,
-        pending: f.data.total_pending || 0,
+        totalCollection: f.data?.total_collection || 0,
+        pending:         f.data?.total_pending   || 0,
       });
     }).finally(() => setLoading(false));
   }, []);
@@ -53,30 +53,26 @@ const AdminDashboard = ({ navigation }) => {
         </CardDark>
 
         <StatGrid>
-          <StatCard label="Students" value={stats.students} />
-          <StatCard label="Staff" value={stats.employees} />
-          <StatCard label="Overdue" value={stats.overdueStudents} accent />
-          <StatCard label="Pending Dues" value={`₹${Math.round(stats.totalDue / 1000)}k`} />
+          <StatCard label="Students"     value={stats.students}        icon="school"        tint="blue" />
+          <StatCard label="Staff"        value={stats.employees}       icon="people"        tint="violet" />
+          <StatCard label="Overdue"      value={stats.overdueStudents} icon="alert-circle" tint="red" />
+          <StatCard label="Pending Dues" value={`₹${Math.round(stats.totalDue / 1000)}k`} icon="cash" tint="orange" />
         </StatGrid>
 
         <SectionTitle>Quick Actions</SectionTitle>
         <ActionGrid>
-          <ActionButton icon={<Ionicons name="calendar" size={18} color={COLORS.primary} />} label="Attendance" onPress={() => navigation.navigate('Attendance')} />
-          <ActionButton icon={<Ionicons name="card" size={18} color={COLORS.primary} />} label="Fees" onPress={() => navigation.navigate('Fees')} />
-          <ActionButton icon={<Ionicons name="people" size={18} color={COLORS.primary} />} label="Students" onPress={() => navigation.navigate('Students')} />
+          <ActionButton icon="calendar-outline" tint="emerald" title="Mark Attendance" desc="Today's attendance" onPress={() => navigation.navigate('Attendance')} />
+          <ActionButton icon="card-outline"     tint="orange"  title="Collect Fees"    desc="Record payments"    onPress={() => navigation.navigate('Fees')} />
+          <ActionButton icon="people-outline"   tint="blue"    title="Students"        desc="Manage admissions"  onPress={() => navigation.navigate('Students')} />
         </ActionGrid>
 
         <SectionTitle>Management</SectionTitle>
-        <View style={styles.menuGrid}>
-          <TouchableOpacity style={styles.menuItem} onPress={() => navigation.navigate('Reports')}>
-            <View style={styles.menuIcon}><Ionicons name="bar-chart" size={18} color={COLORS.primary} /></View>
-            <Text style={styles.menuLabel}>Reports</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.menuItem} onPress={() => navigation.navigate('More')}>
-            <View style={styles.menuIcon}><Ionicons name="notifications" size={18} color={COLORS.primary} /></View>
-            <Text style={styles.menuLabel}>Notices</Text>
-          </TouchableOpacity>
-        </View>
+        <ActionGrid>
+          <ActionButton icon="bar-chart-outline"    tint="purple" title="Reports"       desc="Analytics & exports"      onPress={() => navigation.navigate('Reports')} />
+          <ActionButton icon="notifications-outline" tint="amber"  title="Notices"       desc="Announcements"            onPress={() => navigation.navigate('Notices')} />
+          <ActionButton icon="ellipsis-horizontal"  tint="slate"  title="More"          desc="Messages, marks, settings" onPress={() => navigation.navigate('More')} />
+        </ActionGrid>
+
         <View style={{ height: 20 }} />
       </ScrollView>
     </SafeAreaView>
@@ -87,15 +83,11 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: COLORS.bg },
   scroll: { flex: 1, paddingHorizontal: 16 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 12, paddingBottom: 16 },
-  h1: { fontSize: 24, fontWeight: '800', color: COLORS.black, letterSpacing: -0.5 },
-  sub: { fontSize: 12, color: COLORS.muted, marginTop: 2 },
-  darkLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, color: COLORS.muted, marginBottom: 4 },
-  darkValue: { fontSize: 28, fontWeight: '800', color: COLORS.white, letterSpacing: -0.5 },
-  darkSub: { fontSize: 12, color: COLORS.muted, marginTop: 4 },
-  menuGrid: { flexDirection: 'row', gap: 12 },
-  menuItem: { flex: 1, alignItems: 'center', gap: 8, paddingVertical: 20, borderRadius: 14, backgroundColor: COLORS.white, borderWidth: 1, borderColor: COLORS.border },
-  menuIcon: { width: 36, height: 36, borderRadius: 10, backgroundColor: COLORS.lightBg, alignItems: 'center', justifyContent: 'center' },
-  menuLabel: { fontSize: 11, fontWeight: '600', color: COLORS.black },
+  h1: { fontSize: 26, fontWeight: '800', color: COLORS.black, letterSpacing: -0.5 },
+  sub: { fontSize: 13, color: COLORS.muted, marginTop: 2 },
+  darkLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, color: 'rgba(255,255,255,0.6)', marginBottom: 6 },
+  darkValue: { fontSize: 30, fontWeight: '800', color: COLORS.white, letterSpacing: -0.8 },
+  darkSub: { fontSize: 13, color: 'rgba(255,255,255,0.6)', marginTop: 4 },
 });
 
 export default AdminDashboard;

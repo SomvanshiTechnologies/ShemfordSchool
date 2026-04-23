@@ -107,6 +107,7 @@ const StudentsPage = () => {
     first_name: '', last_name: '', email: '', phone: '',
     date_of_birth: '', gender: 'male', address: '',
     parent_name: '', parent_phone: '', parent_email: '',
+    mother_name: '', mother_phone: '',
     is_sibling: false, sibling_student_id: '',
   });
   const [onbClassData, setOnbClassData] = useState({ class_name: '', section: '', stream: '' });
@@ -146,6 +147,7 @@ const StudentsPage = () => {
       first_name: '', last_name: '', email: '', phone: '',
       date_of_birth: '', gender: 'male', address: '',
       parent_name: '', parent_phone: '', parent_email: '',
+      mother_name: '', mother_phone: '',
       is_sibling: false, sibling_student_id: '',
     });
     setOnbClassData({ class_name: '', section: '', stream: '' });
@@ -166,6 +168,8 @@ const StudentsPage = () => {
     if (!onbData.date_of_birth) errors.date_of_birth = 'Date of Birth is required';
     if (!onbData.parent_name?.trim()) errors.parent_name = 'Father / Guardian Name is required';
     if (!onbData.parent_phone?.trim()) errors.parent_phone = 'Contact Number is required';
+    if (!onbData.mother_name?.trim()) errors.mother_name = 'Mother Name is required';
+    if (!onbData.mother_phone?.trim()) errors.mother_phone = 'Mother Contact Number is required';
     setOnbErrors(errors);
     if (Object.keys(errors).length > 0) {
       toast.error('Please fill in all required fields');
@@ -223,9 +227,7 @@ const StudentsPage = () => {
       // Step 1: upload the file to get a stored URL
       const fd = new FormData();
       fd.append('file', file);
-      const uploadRes = await api.post('/upload', fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+      const uploadRes = await api.post('/upload', fd);
       const { file_url, file_name } = uploadRes.data;
 
       // Step 2: register the document against this onboarding application
@@ -359,7 +361,7 @@ const StudentsPage = () => {
     const fd = new FormData();
     fd.append('file', file);
     try {
-      const response = await api.post('/students/upload-csv', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const response = await api.post('/students/upload-csv', fd);
       setUploadResult(response.data);
       if (response.data.success > 0) { toast.success(`Added ${response.data.success} students`); fetchStudents(); }
       if (response.data.failed > 0) toast.warning(`${response.data.failed} failed`);
@@ -422,7 +424,7 @@ const StudentsPage = () => {
       fd.append('class_name', csvClass);
       fd.append('section', csvSection);
       if (csvStream) fd.append('stream', csvStream);
-      const res = await api.post('/students/csv-preview', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const res = await api.post('/students/csv-preview', fd);
       setCsvPreview(res.data);
       setCsvStep(2);
     } catch (err) {
@@ -921,6 +923,21 @@ const StudentsPage = () => {
                   </div>
                 </div>
               </div>
+              <div className="border-t pt-4">
+                <h4 className="font-medium mb-3 text-foreground">Mother Details</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <Label>Mother Name <span className="text-red-500">*</span></Label>
+                    <Input value={onbData.mother_name} onChange={(e) => { setOnbData({...onbData, mother_name: e.target.value}); setOnbErrors(p => ({...p, mother_name: ''})); }} className={onbErrors.mother_name ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-mother-name" />
+                    {onbErrors.mother_name && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.mother_name}</p>}
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Mother Contact Number <span className="text-red-500">*</span></Label>
+                    <Input value={onbData.mother_phone} onChange={(e) => { setOnbData({...onbData, mother_phone: e.target.value}); setOnbErrors(p => ({...p, mother_phone: ''})); }} className={onbErrors.mother_phone ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-mother-phone" />
+                    {onbErrors.mother_phone && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.mother_phone}</p>}
+                  </div>
+                </div>
+              </div>
               <DialogFooter>
                 <Button variant="outline" onClick={resetOnboarding}>Cancel</Button>
                 <Button onClick={handleOnbStep1} disabled={onbLoading} data-testid="onb-next-1">Next <ArrowRight className="h-4 w-4 ml-1" /></Button>
@@ -979,7 +996,7 @@ const StudentsPage = () => {
                   <label htmlFor="is_sibling" className="text-sm font-medium text-blue-900 cursor-pointer">
                     This student has a sibling already enrolled
                   </label>
-                  <p className="text-xs text-blue-700 mt-0.5">50% off Admission Fee · 15% off Monthly Tuition</p>
+                  <p className="text-xs text-blue-700 mt-0.5">Sibling discount applied to Admission Fee & Monthly Tuition</p>
                 </div>
               </div>
               {onbData.is_sibling && (
@@ -1123,9 +1140,9 @@ const StudentsPage = () => {
                         <tr key={idx} className="border-b border-slate-50">
                           <td className="px-3 py-2">
                             {fee.label}
-                            {fee.sibling_discount_pct > 0 && (
+                            {fee.sibling_discount_amount > 0 && (
                               <span className="ml-1 text-[10px] text-blue-600 font-semibold">
-                                (Sibling -{fee.sibling_discount_pct}%)
+                                (Sibling -₹{fee.sibling_discount_amount.toLocaleString()})
                               </span>
                             )}
                           </td>

@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from database import db
 from models import UserRole, AttendanceRecord, AttendanceSession, Holiday
-from auth_utils import get_current_user, require_roles, create_audit_log
+from auth_utils import get_current_user, require_roles, create_audit_log, get_teacher_assigned_classes
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -73,6 +73,12 @@ async def submit_attendance(request: Request):
         raise HTTPException(status_code=400, detail="class_name and section are required")
     if not records:
         raise HTTPException(status_code=400, detail="No attendance records provided")
+
+    # Teachers can only mark attendance for their assigned class/section
+    if user["role"] == UserRole.TEACHER:
+        assigned = await get_teacher_assigned_classes(user["user_id"])
+        if assigned and not any(a["class_name"] == class_name and a["section"] == section for a in assigned):
+            raise HTTPException(status_code=403, detail=f"You are not assigned as class teacher for {class_name}-{section}")
 
     # Check if date is a holiday
     holiday = await db.holidays.find_one({"date": date, "is_active": True}, {"_id": 0})
@@ -180,12 +186,21 @@ async def get_attendance(
         else:
             return []
     elif user["role"] == UserRole.PARENT:
-        children = await db.students.find({"parent_id": user["user_id"]}, {"_id": 0, "student_id": 1}).to_list(20)
+        children = await db.students.find(
+            {"$or": [{"parent_email": user.get("email", "")}, {"parent_id": user["user_id"]}], "is_active": True},
+            {"_id": 0, "student_id": 1}
+        ).to_list(20)
         child_ids = [c["student_id"] for c in children]
         if entity_id and entity_id in child_ids:
             query["entity_id"] = entity_id
         else:
             query["entity_id"] = {"$in": child_ids}
+    elif user["role"] == UserRole.TEACHER:
+        assigned = await get_teacher_assigned_classes(user["user_id"])
+        if assigned:
+            query["$or"] = [{"class_name": a["class_name"], "section": a["section"]} for a in assigned]
+        if entity_id:
+            query["entity_id"] = entity_id
     else:
         if entity_id:
             query["entity_id"] = entity_id
@@ -524,7 +539,10 @@ async def get_attendance_report(
 async def get_student_attendance_summary(student_id: str, request: Request, month: Optional[str] = None):
     user = await get_current_user(request)
     if user["role"] == UserRole.PARENT:
-        children = await db.students.find({"parent_id": user["user_id"]}, {"_id": 0, "student_id": 1}).to_list(20)
+        children = await db.students.find(
+            {"$or": [{"parent_email": user.get("email", "")}, {"parent_id": user["user_id"]}], "is_active": True},
+            {"_id": 0, "student_id": 1}
+        ).to_list(20)
         child_ids = [c["student_id"] for c in children]
         if student_id not in child_ids:
             raise HTTPException(status_code=403, detail="Not authorized")

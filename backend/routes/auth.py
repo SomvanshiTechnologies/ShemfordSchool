@@ -12,9 +12,15 @@ from models import (
     UserRole, UserBase, UserCreate, UserLogin, UserResponse, PasswordReset
 )
 from auth_utils import (
-    hash_password, verify_password, create_jwt_token, get_current_user,
-    require_roles, create_audit_log
+    hash_password, verify_password, create_jwt_token, decode_jwt_token,
+    get_current_user, require_roles, create_audit_log,
+    create_refresh_token_db, verify_refresh_token,
+    revoke_refresh_token, revoke_all_refresh_tokens, revoke_jti,
 )
+
+def _system_actor(user_id: str, name: str = "system") -> dict:
+    """Minimal user dict for audit logs that don't have a session user."""
+    return {"user_id": user_id, "name": name}
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +83,7 @@ router = APIRouter()
 
 @router.post("/auth/register")
 async def register_user(user: UserCreate):
+    user.email = (user.email or "").strip().lower()
     existing = await db.users.find_one({"email": user.email}, {"_id": 0})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -100,12 +107,18 @@ async def register_user(user: UserCreate):
     user_dict.pop("_id", None)
 
     token = create_jwt_token(user_obj.user_id, allowed_public_role)
-    return {"token": token, "user": UserResponse(**user_obj.model_dump()).model_dump()}
+    refresh_token = await create_refresh_token_db(user_obj.user_id, allowed_public_role)
+    return {
+        "token": token,
+        "refresh_token": refresh_token,
+        "user": UserResponse(**user_obj.model_dump()).model_dump(),
+    }
 
 
 @router.post("/auth/create-user")
 async def admin_create_user(user: UserCreate, request: Request):
-    await require_roles(UserRole.ADMIN)(request)
+    admin = await require_roles(UserRole.ADMIN)(request)
+    user.email = (user.email or "").strip().lower()
     existing = await db.users.find_one({"email": user.email}, {"_id": 0})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -125,6 +138,10 @@ async def admin_create_user(user: UserCreate, request: Request):
     await db.users.insert_one(user_dict)
     user_dict.pop("_id", None)
 
+    await create_audit_log("user", user_obj.user_id, "admin_create",
+                           {"email": user.email, "role": user.role, "name": user.name}, admin)
+    logger.info("Admin %s created user %s (role=%s)", admin["user_id"], user_obj.user_id, user.role)
+
     return {"message": "User created successfully", "user": UserResponse(**user_obj.model_dump()).model_dump()}
 
 
@@ -134,7 +151,11 @@ _RESET_WINDOW_SECONDS = 60 * 60  # 1 hour
 
 @router.post("/auth/login")
 async def login_user(credentials: UserLogin):
-    email = credentials.email
+    # Normalise email: trim whitespace, lowercase so that typing variations
+    # ("  student@shemford.edu" / "Student@Shemford.edu") still match the
+    # stored record. Emails are always stored lowercased by our seed/register
+    # flows, but real users and autocorrect frequently add case or spaces.
+    email = (credentials.email or "").strip().lower()
 
     user = await db.users.find_one({"email": email}, {"_id": 0})
     if not user or not verify_password(credentials.password, user.get("password_hash", "")):
@@ -149,11 +170,16 @@ async def login_user(credentials: UserLogin):
     user["last_login"] = now_iso
 
     token = create_jwt_token(user["user_id"], user["role"])
+    refresh_token = await create_refresh_token_db(user["user_id"], user["role"])
 
     if isinstance(user.get("created_at"), str):
         user["created_at"] = datetime.fromisoformat(user["created_at"])
 
-    return {"token": token, "user": UserResponse(**user).model_dump()}
+    return {
+        "token": token,
+        "refresh_token": refresh_token,
+        "user": UserResponse(**user).model_dump(),
+    }
 
 
 @router.post("/auth/session")
@@ -230,11 +256,88 @@ async def get_current_user_info(request: Request):
 
 @router.post("/auth/logout")
 async def logout(request: Request, response: Response):
-    token = request.cookies.get("session_token")
-    if token:
-        await db.user_sessions.delete_one({"session_token": token})
-    response.delete_cookie("session_token", path="/", secure=True, samesite="none")
-    return {"message": "Logged out successfully"}
+    """
+    Logout endpoint — clears session and revokes tokens.
+    Works even with expired tokens (graceful degradation).
+    """
+    try:
+        # 1. Clear OAuth session cookie
+        cookie_token = request.cookies.get("session_token")
+        if cookie_token:
+            try:
+                await db.user_sessions.delete_one({"session_token": cookie_token})
+            except Exception:
+                pass  # Ignore errors deleting session
+        
+        response.delete_cookie("session_token", path="/", secure=True, samesite="none")
+
+        # 2. Revoke the JWT (add its JTI to the blocklist)
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            jwt_token = auth_header[7:]
+            try:
+                payload = decode_jwt_token(jwt_token)
+                jti = payload.get("jti")
+                exp = payload.get("exp")
+                if jti and exp:
+                    expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+                    await revoke_jti(jti, expires_at)
+            except Exception:
+                pass  # Already expired tokens or invalid tokens don't need special handling
+
+        # 3. Revoke the refresh token if provided
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass  # No JSON body provided
+        
+        refresh_token = body.get("refresh_token")
+        if refresh_token:
+            try:
+                await revoke_refresh_token(refresh_token)
+            except Exception:
+                pass  # Ignore errors revoking refresh token
+
+        return {"message": "Logged out successfully", "status": "ok"}
+    except Exception as e:
+        # Even if something goes wrong, return success to frontend
+        # The important thing is clearing the cookie, which we already did
+        logger.warning(f"Logout error: {str(e)}")
+        return {"message": "Logged out successfully", "status": "ok"}
+
+
+@router.post("/auth/refresh")
+async def refresh_access_token(request: Request):
+    """
+    Exchange a valid refresh token for a new access token + rotated refresh token.
+    Old refresh token is revoked immediately (rotation prevents replay attacks).
+    """
+    body = await request.json()
+    old_refresh_token = body.get("refresh_token")
+    if not old_refresh_token:
+        raise HTTPException(status_code=400, detail="refresh_token is required")
+
+    # Validate the incoming refresh token
+    token_doc = await verify_refresh_token(old_refresh_token)
+    user_id = token_doc["user_id"]
+    role = token_doc["role"]
+
+    # Rotate: revoke old, issue new
+    await revoke_refresh_token(old_refresh_token)
+    new_refresh_token = await create_refresh_token_db(user_id, role)
+    new_access_token = create_jwt_token(user_id, role)
+
+    # Confirm user still active
+    user = await db.users.find_one({"user_id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user or not user.get("is_active", True):
+        await revoke_refresh_token(new_refresh_token)
+        raise HTTPException(status_code=403, detail="Account is deactivated. Contact admin.")
+
+    return {
+        "token": new_access_token,
+        "refresh_token": new_refresh_token,
+    }
 
 
 # ==================== PASSWORD RESET ====================
@@ -242,7 +345,7 @@ async def logout(request: Request, response: Response):
 @router.post("/auth/forgot-password")
 async def forgot_password(request: Request):
     body = await request.json()
-    email = body.get("email")
+    email = (body.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="Email is required")
 
@@ -318,9 +421,14 @@ async def reset_password(request: Request):
         {"user_id": reset["user_id"]},
         {"$set": {"password_hash": hash_password(new_password)}}
     )
-
     await db.password_resets.update_one({"token": token}, {"$set": {"used": True}})
     await db.reset_attempts.delete_one({"email": reset["email"]})
+
+    # Revoke all refresh tokens — force re-login everywhere after password reset
+    await revoke_all_refresh_tokens(reset["user_id"])
+    await create_audit_log("user", reset["user_id"], "password_reset",
+                           {"email": reset["email"]}, _system_actor(reset["user_id"], "password_reset"))
+    logger.info("Password reset and all tokens revoked for user %s", reset["user_id"])
 
     return {"message": "Password has been reset successfully. Please login with your new password."}
 
@@ -341,12 +449,17 @@ async def change_password(request: Request):
 
     full_user = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
     if not verify_password(current_password, full_user.get("password_hash", "")):
+        logger.warning("Failed password change attempt for user %s", user["user_id"])
         raise HTTPException(status_code=401, detail="Current password is incorrect")
 
     await db.users.update_one(
         {"user_id": user["user_id"]},
         {"$set": {"password_hash": hash_password(new_password)}}
     )
+    # Invalidate all existing refresh tokens — force re-login on all devices
+    await revoke_all_refresh_tokens(user["user_id"])
+    await create_audit_log("user", user["user_id"], "password_change", {}, user)
+    logger.info("Password changed and all refresh tokens revoked for user %s", user["user_id"])
 
     return {"message": "Password changed successfully"}
 
@@ -366,18 +479,32 @@ async def get_users(request: Request, role: Optional[str] = None):
     return [UserResponse(**u).model_dump() for u in users]
 
 
+_USER_UPDATABLE_FIELDS = {"name", "phone", "picture", "is_active"}
+
 @router.put("/users/{user_id}")
 async def update_user(user_id: str, request: Request):
     current_user = await require_roles(UserRole.ADMIN)(request)
     body = await request.json()
 
-    if user_id == current_user["user_id"] and "role" in body:
-        del body["role"]
+    # Whitelist: never allow direct writes to security-sensitive fields via this endpoint
+    _FORBIDDEN = {"password_hash", "user_id", "role", "email", "created_at"}
+    for field in _FORBIDDEN:
+        body.pop(field, None)
 
-    if body:
-        await db.users.update_one({"user_id": user_id}, {"$set": body})
+    # Admin cannot change their own active status
+    if user_id == current_user["user_id"]:
+        body.pop("is_active", None)
+
+    allowed_body = {k: v for k, v in body.items() if k in _USER_UPDATABLE_FIELDS}
+    if not allowed_body:
+        raise HTTPException(status_code=400, detail="No valid updatable fields provided.")
+
+    await db.users.update_one({"user_id": user_id}, {"$set": allowed_body})
+    await create_audit_log("user", user_id, "update", allowed_body, current_user)
 
     updated = await db.users.find_one({"user_id": user_id}, {"_id": 0, "password_hash": 0})
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found.")
     if isinstance(updated.get("created_at"), str):
         updated["created_at"] = datetime.fromisoformat(updated["created_at"])
     return UserResponse(**updated)
@@ -385,20 +512,35 @@ async def update_user(user_id: str, request: Request):
 
 @router.put("/users/{user_id}/role")
 async def update_user_role(user_id: str, request: Request):
-    await require_roles(UserRole.ADMIN)(request)
+    admin = await require_roles(UserRole.ADMIN)(request)
     body = await request.json()
     new_role = body.get("role")
 
     if new_role not in [UserRole.ADMIN, UserRole.TEACHER, UserRole.STUDENT, UserRole.PARENT, UserRole.ACCOUNTANT]:
         raise HTTPException(status_code=400, detail="Invalid role")
 
+    # Prevent admin from demoting themselves
+    if user_id == admin["user_id"]:
+        raise HTTPException(status_code=400, detail="You cannot change your own role.")
+
+    existing = await db.users.find_one({"user_id": user_id}, {"_id": 0, "role": 1})
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    old_role = existing.get("role")
     await db.users.update_one({"user_id": user_id}, {"$set": {"role": new_role}})
+    await create_audit_log("user", user_id, "role_change",
+                           {"old_role": old_role, "new_role": new_role}, admin)
+    logger.info("Role changed: user=%s %s → %s by admin=%s", user_id, old_role, new_role, admin["user_id"])
     return {"message": "Role updated"}
 
 
 @router.get("/users/search")
 async def search_users(request: Request, q: Optional[str] = None, role: Optional[str] = None):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    # Only staff can enumerate users — students/parents must not be able to query emails
+    if user["role"] not in (UserRole.ADMIN, UserRole.TEACHER, UserRole.ACCOUNTANT):
+        raise HTTPException(status_code=403, detail="Access denied.")
     query = {"is_active": True}
     if q:
         query["$or"] = [

@@ -1,25 +1,45 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, Alert } from 'react-native';
+import {
+  View, Text, TextInput, TouchableOpacity, StyleSheet,
+  KeyboardAvoidingView, Platform, ActivityIndicator, Alert,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { COLORS } from '../theme/colors';
+import { Ionicons } from '@expo/vector-icons';
+import { COLORS, RADIUS, SHADOW } from '../theme/colors';
 import { useAuth } from '../contexts/AuthContext';
 
 const LoginScreen = () => {
   const { login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
-    if (!email || !password) {
-      Alert.alert('Error', 'Please enter email and password');
+    const cleanEmail = (email || '').trim().toLowerCase();
+    const cleanPw = password || '';
+    if (!cleanEmail || !cleanPw) {
+      Alert.alert('Missing fields', 'Please enter your email and password.');
       return;
     }
     setLoading(true);
     try {
-      await login(email, password);
+      await login(cleanEmail, cleanPw);
     } catch (e) {
-      Alert.alert('Login Failed', e.response?.data?.detail || 'Invalid credentials');
+      // Distinguish server-rejected creds from unreachable backend so the
+      // user knows what to fix instead of staring at "Invalid credentials".
+      if (!e.response) {
+        Alert.alert(
+          'Cannot reach server',
+          'The app could not reach the backend. Check that your phone and PC are on the same Wi-Fi, and that port 8000 is allowed through the firewall.'
+        );
+      } else if (e.response.status === 401) {
+        Alert.alert('Invalid email or password', 'Please check your credentials and try again.');
+      } else if (e.response.status === 429) {
+        Alert.alert('Too many attempts', 'Please wait a minute and try again.');
+      } else {
+        Alert.alert('Login failed', e.response?.data?.detail || `Server returned ${e.response.status}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -27,7 +47,10 @@ const LoginScreen = () => {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
         <View style={styles.header}>
           <View style={styles.logo}>
             <Text style={styles.logoText}>SF</Text>
@@ -38,28 +61,37 @@ const LoginScreen = () => {
 
         <View style={styles.form}>
           <Text style={styles.label}>EMAIL</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Enter your email"
-            placeholderTextColor={COLORS.lightMuted}
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
+          <View style={styles.inputWrap}>
+            <Ionicons name="mail-outline" size={18} color={COLORS.lightMuted} style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder="you@shemford.edu"
+              placeholderTextColor={COLORS.lightMuted}
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </View>
 
           <Text style={[styles.label, { marginTop: 16 }]}>PASSWORD</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Enter your password"
-            placeholderTextColor={COLORS.lightMuted}
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-          />
+          <View style={styles.inputWrap}>
+            <Ionicons name="lock-closed-outline" size={18} color={COLORS.lightMuted} style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder="Enter your password"
+              placeholderTextColor={COLORS.lightMuted}
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry={!showPw}
+            />
+            <TouchableOpacity onPress={() => setShowPw(v => !v)} style={styles.eyeBtn} hitSlop={8}>
+              <Ionicons name={showPw ? 'eye-off-outline' : 'eye-outline'} size={18} color={COLORS.lightMuted} />
+            </TouchableOpacity>
+          </View>
 
-          <TouchableOpacity style={styles.btn} onPress={handleLogin} disabled={loading} activeOpacity={0.8}>
+          <TouchableOpacity style={styles.btn} onPress={handleLogin} disabled={loading} activeOpacity={0.85}>
             {loading ? (
               <ActivityIndicator color={COLORS.white} />
             ) : (
@@ -79,23 +111,29 @@ const styles = StyleSheet.create({
   container: { flex: 1, justifyContent: 'center', paddingHorizontal: 24 },
   header: { alignItems: 'center', marginBottom: 40 },
   logo: {
-    width: 64, height: 64, borderRadius: 18, backgroundColor: COLORS.primary,
-    alignItems: 'center', justifyContent: 'center', marginBottom: 16,
+    width: 72, height: 72, borderRadius: 22, backgroundColor: COLORS.primary,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 18,
+    ...SHADOW.md,
   },
-  logoText: { fontSize: 24, fontWeight: '800', color: COLORS.white },
-  title: { fontSize: 28, fontWeight: '800', color: COLORS.black, letterSpacing: -0.5 },
-  subtitle: { fontSize: 14, color: COLORS.muted, marginTop: 2 },
+  logoText: { fontSize: 26, fontWeight: '800', color: COLORS.white, letterSpacing: -0.5 },
+  title:    { fontSize: 30, fontWeight: '800', color: COLORS.black, letterSpacing: -0.6 },
+  subtitle: { fontSize: 14, color: COLORS.muted, marginTop: 4 },
   form: { marginBottom: 32 },
   label: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, color: COLORS.lightMuted, marginBottom: 8 },
-  input: {
-    backgroundColor: COLORS.white, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14,
-    fontSize: 16, color: COLORS.black, borderWidth: 1.5, borderColor: COLORS.border,
+  inputWrap: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: COLORS.white, borderRadius: RADIUS.lg,
+    borderWidth: 1.5, borderColor: COLORS.border,
+    paddingHorizontal: 14, ...SHADOW.sm,
   },
+  inputIcon: { marginRight: 10 },
+  input: { flex: 1, paddingVertical: 14, fontSize: 15, color: COLORS.black },
+  eyeBtn: { paddingHorizontal: 4, paddingVertical: 6 },
   btn: {
-    backgroundColor: COLORS.primary, borderRadius: 12, paddingVertical: 16,
-    alignItems: 'center', marginTop: 24,
+    backgroundColor: COLORS.primary, borderRadius: RADIUS.lg, paddingVertical: 16,
+    alignItems: 'center', marginTop: 24, ...SHADOW.md,
   },
-  btnText: { fontSize: 16, fontWeight: '700', color: COLORS.white },
+  btnText: { fontSize: 16, fontWeight: '700', color: COLORS.white, letterSpacing: 0.2 },
   footer: { textAlign: 'center', fontSize: 12, color: COLORS.lightMuted },
 });
 

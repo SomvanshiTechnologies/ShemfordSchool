@@ -92,11 +92,15 @@ export const AuthProvider = ({ children }) => {
 
   const logout = async () => {
     try {
-      await axios.post(`${API}/auth/logout`, {}, { withCredentials: true });
+      const response = await axios.post(`${API}/auth/logout`, {}, { withCredentials: true });
+      console.log('Logout successful:', response.data);
     } catch (error) {
-      console.error('Logout error:', error);
+      // Even if logout fails, clear local token and session
+      // Backend now handles graceful logout even with expired tokens
+      console.warn('Logout error (clearing session anyway):', error.message);
     }
     localStorage.removeItem('auth_token');
+    localStorage.removeItem('refresh_token');
     setToken(null);
     setUser(null);
   };

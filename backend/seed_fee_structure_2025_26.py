@@ -33,8 +33,8 @@ COMMON = {
     "due_day": 10,
     "late_fee": 0,
     "late_fee_enabled": False,
-    "sibling_admission_discount_pct": 50,
-    "sibling_tuition_discount_pct": 15,
+    "sibling_admission_discount_amount": 1000,
+    "sibling_tuition_discount_amount": 300,
 }
 
 # class_name → class-specific overrides

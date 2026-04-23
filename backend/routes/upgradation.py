@@ -69,7 +69,8 @@ async def upgrade_student(student_id: str, request: Request):
         raise HTTPException(
             status_code=400,
             detail=f"No fee config for {to_class}" + (f" ({to_stream})" if to_stream else "") +
-                   f" in {academic_year}. Configure fees first."
+                   f" in {academic_year}. " +
+                   "Please run POST /fees/components/ensure-defaults to create default fee configurations."
         )
 
     from_class = student["class_name"]

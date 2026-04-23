@@ -21,7 +21,7 @@ from database import db
 from models import UserRole, StudentBase, StudentCreate, CLASSES_WITH_STREAMS
 from auth_utils import (
     get_current_user, require_roles, generate_admission_number, create_audit_log,
-    hash_password
+    hash_password, get_teacher_assigned_classes
 )
 
 router = APIRouter()
@@ -202,11 +202,15 @@ async def get_students(
     elif user["role"] == UserRole.PARENT:
         query["parent_id"] = user["user_id"]
     elif user["role"] == UserRole.TEACHER:
-        # Teachers see students in classes they teach (based on attendance history)
-        taught = await db.attendance.distinct("class_name", {"marked_by": user["user_id"]})
-        if taught:
-            query["class_name"] = {"$in": taught}
-        # Also allow explicit class filter
+        # Teachers see only students in their assigned class/section
+        assigned = await get_teacher_assigned_classes(user["user_id"])
+        if assigned:
+            query["$or"] = [{"class_name": a["class_name"], "section": a["section"]} for a in assigned]
+        else:
+            # Fallback if no class assigned yet: use attendance history
+            taught = await db.attendance.distinct("class_name", {"marked_by": user["user_id"]})
+            if taught:
+                query["class_name"] = {"$in": taught}
     # Admin and Accountant see all
 
     if class_name:

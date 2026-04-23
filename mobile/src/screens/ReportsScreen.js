@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import client from '../api/client';
-import { COLORS } from '../theme/colors';
+import { COLORS, RADIUS, SHADOW } from '../theme/colors';
 import { CardDark, SectionTitle, EmptyState } from '../components/UI';
 import { StatCard, StatGrid } from '../components/StatCard';
 import { ScreenLoader } from '../components/LoadingSkeleton';
@@ -87,11 +87,11 @@ const styles = StyleSheet.create({
   scroll: { flex: 1, paddingHorizontal: 16 },
   header: { paddingTop: 12, paddingBottom: 16 },
   h1: { fontSize: 24, fontWeight: '800', color: COLORS.black, letterSpacing: -0.5 },
-  chip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: COLORS.border, backgroundColor: COLORS.white, marginRight: 8 },
+  chip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999, borderWidth: 1.5, borderColor: COLORS.border, backgroundColor: COLORS.white, marginRight: 8 },
   chipActive: { backgroundColor: COLORS.black, borderColor: COLORS.black },
   chipText: { fontSize: 13, fontWeight: '600', color: COLORS.muted },
   chipTextActive: { color: COLORS.white },
-  list: { backgroundColor: COLORS.white, borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border, marginBottom: 16 },
+  list: { backgroundColor: COLORS.white, borderRadius: RADIUS.xl, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border, marginBottom: 16, ...SHADOW.sm },
   listItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: COLORS.lightBg },
 });
 

@@ -1022,8 +1022,8 @@ async def seed_fee_component_configs():
         due_day=10,
         late_fee=0,
         late_fee_enabled=False,
-        sibling_admission_discount_pct=50,
-        sibling_tuition_discount_pct=15,
+        sibling_admission_discount_amount=1000,
+        sibling_tuition_discount_amount=300,
     )
 
     # class_name → class-specific fee overrides
@@ -1041,6 +1041,8 @@ async def seed_fee_component_configs():
         "8th":     dict(activity_fee=3900, exam_fee=300,  lab_fee=1500, ai_robotics_fee=0,    monthly_tuition=1400),
         "9th":     dict(activity_fee=4500, exam_fee=450,  lab_fee=1500, ai_robotics_fee=2400, monthly_tuition=1900),
         "10th":    dict(activity_fee=4500, exam_fee=450,  lab_fee=1500, ai_robotics_fee=2400, monthly_tuition=1900),
+        "11th":    dict(activity_fee=5000, exam_fee=600,  lab_fee=2500, ai_robotics_fee=2500, monthly_tuition=2200),
+        "12th":    dict(activity_fee=5000, exam_fee=600,  lab_fee=2500, ai_robotics_fee=2500, monthly_tuition=2300),
     }
 
     now = datetime.now(timezone.utc).isoformat()
@@ -1097,6 +1099,15 @@ async def main():
 
     print("[7/9] Announcements")
     await seed_announcements(admin_user_id)
+
+    print("[7b] Syllabus")
+    await seed_syllabus(admin_user_id)
+
+    print("[7c] Issues")
+    await seed_issues(student_docs, teacher_ids, admin_user_id)
+
+    print("[7d] Messages")
+    await seed_messages(student_docs, teacher_ids, admin_user_id)
 
     print("[8/9] Holidays")
     await seed_holidays()

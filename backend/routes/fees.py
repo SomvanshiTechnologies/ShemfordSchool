@@ -213,8 +213,8 @@ def build_admission_fee_breakdown(cfg: dict, is_sibling: bool) -> List[dict]:
     Build the full fee breakdown for admission time:
     one-time fees + yearly fees + 1st month tuition.
     """
-    sibling_adm_disc = cfg.get("sibling_admission_discount_pct", 50) if is_sibling else 0
-    sibling_tuit_disc = cfg.get("sibling_tuition_discount_pct", 15) if is_sibling else 0
+    sibling_adm_disc = cfg.get("sibling_admission_discount_amount", 0) if is_sibling else 0
+    sibling_tuit_disc = cfg.get("sibling_tuition_discount_amount", 0) if is_sibling else 0
 
     items = []
     # One-time fees
@@ -227,7 +227,7 @@ def build_admission_fee_breakdown(cfg: dict, is_sibling: bool) -> List[dict]:
         if amount > 0:
             discount = 0
             if cfg_field == "admission_fee" and sibling_adm_disc:
-                discount = round(amount * sibling_adm_disc / 100, 2)
+                discount = min(sibling_adm_disc, amount)  # Don't discount more than the fee amount
             items.append({
                 "fee_component": CFG_FIELD_TO_COMPONENT[cfg_field],
                 "fee_type": "one_time",
@@ -235,7 +235,7 @@ def build_admission_fee_breakdown(cfg: dict, is_sibling: bool) -> List[dict]:
                 "gross_amount": amount,
                 "discount_amount": discount,
                 "net_amount": amount - discount,
-                "sibling_discount_pct": sibling_adm_disc if cfg_field == "admission_fee" else 0,
+                "sibling_discount_amount": discount if cfg_field == "admission_fee" else 0,
             })
     # Yearly fees
     for comp, label in [
@@ -254,12 +254,12 @@ def build_admission_fee_breakdown(cfg: dict, is_sibling: bool) -> List[dict]:
                 "gross_amount": amount,
                 "discount_amount": 0,
                 "net_amount": amount,
-                "sibling_discount_pct": 0,
+                "sibling_discount_amount": 0,
             })
     # 1st month tuition
     tuition = cfg.get("monthly_tuition", 0)
     if tuition > 0:
-        disc = round(tuition * sibling_tuit_disc / 100, 2) if sibling_tuit_disc else 0
+        disc = min(sibling_tuit_disc, tuition) if sibling_tuit_disc else 0  # Don't discount more than tuition
         items.append({
             "fee_component": "tuition",
             "fee_type": "monthly",
@@ -267,7 +267,7 @@ def build_admission_fee_breakdown(cfg: dict, is_sibling: bool) -> List[dict]:
             "gross_amount": tuition,
             "discount_amount": disc,
             "net_amount": tuition - disc,
-            "sibling_discount_pct": sibling_tuit_disc,
+            "sibling_discount_amount": disc,
         })
     return items
 
@@ -287,8 +287,8 @@ async def create_admission_ledger(student: dict, cfg: dict, academic_year: str, 
     is_sibling = student.get("is_sibling", False)
     due_day = cfg.get("due_day", 10)
 
-    sibling_adm_disc_pct = cfg.get("sibling_admission_discount_pct", 50) if is_sibling else 0
-    sibling_tuit_disc_pct = cfg.get("sibling_tuition_discount_pct", 15) if is_sibling else 0
+    sibling_adm_disc = cfg.get("sibling_admission_discount_amount", 0) if is_sibling else 0
+    sibling_tuit_disc = cfg.get("sibling_tuition_discount_amount", 0) if is_sibling else 0
 
     all_months = get_academic_year_months(academic_year)
     # Month index of admission month
@@ -305,8 +305,11 @@ async def create_admission_ledger(student: dict, cfg: dict, academic_year: str, 
         gross = cfg.get(cfg_field, 0)
         if gross <= 0:
             continue
-        disc = round(gross * sibling_adm_disc_pct / 100, 2) if cfg_field == "admission_fee" else 0
-        disc_reason = f"Sibling discount ({sibling_adm_disc_pct}%)" if disc > 0 else None
+        disc = 0
+        disc_reason = None
+        if cfg_field == "admission_fee" and sibling_adm_disc > 0:
+            disc = min(sibling_adm_disc, gross)  # Don't discount more than the fee
+            disc_reason = f"Sibling discount (₹{disc})" if disc > 0 else None
         net = gross - disc
         yr, mn = admission_month.split("-")
         due_date = f"{yr}-{mn}-{str(due_day).zfill(2)}"
@@ -360,9 +363,8 @@ async def create_admission_ledger(student: dict, cfg: dict, academic_year: str, 
     # — Monthly tuition (all remaining months) —
     tuition = cfg.get("monthly_tuition", 0)
     if tuition > 0:
-        disc_pct = sibling_tuit_disc_pct
-        disc_amt = round(tuition * disc_pct / 100, 2)
-        disc_reason = f"Sibling discount ({disc_pct}%)" if disc_amt > 0 else None
+        disc_amt = min(sibling_tuit_disc, tuition) if sibling_tuit_disc > 0 else 0  # Don't discount more than tuition
+        disc_reason = f"Sibling discount (₹{disc_amt})" if disc_amt > 0 else None
         net_tuition = tuition - disc_amt
 
         for month_str in remaining_months:
@@ -469,8 +471,8 @@ async def create_fee_component_config(request: Request):
         due_day=int(body.get("due_day", 10)),
         late_fee=float(body.get("late_fee", 0)),
         late_fee_enabled=bool(body.get("late_fee_enabled", False)),
-        sibling_admission_discount_pct=float(body.get("sibling_admission_discount_pct", 50)),
-        sibling_tuition_discount_pct=float(body.get("sibling_tuition_discount_pct", 15)),
+        sibling_admission_discount_amount=float(body.get("sibling_admission_discount_amount", 0)),
+        sibling_tuition_discount_amount=float(body.get("sibling_tuition_discount_amount", 0)),
         notes=body.get("notes"),
         created_by=user["user_id"],
     )
@@ -501,7 +503,7 @@ async def update_fee_component_config(config_id: str, request: Request):
         "annual_charge", "activity_fee", "exam_fee", "lab_fee", "ai_robotics_fee",
         "monthly_tuition", "upgradation_fee",
         "due_day", "late_fee", "late_fee_enabled",
-        "sibling_admission_discount_pct", "sibling_tuition_discount_pct", "notes"
+        "sibling_admission_discount_amount", "sibling_tuition_discount_amount", "notes"
     ]
     update = {k: body[k] for k in allowed_fields if k in body}
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -574,6 +576,94 @@ async def apply_annual_increase(request: Request):
     }
 
 
+@router.post("/fees/components/ensure-defaults")
+async def ensure_default_fee_configs(request: Request):
+    """
+    Ensure fee configurations exist for all classes in current academic year.
+    If missing, creates them from default seed data.
+    Useful when upgrading or fixing missing fee configs.
+    """
+    user = await require_roles(UserRole.ADMIN)(request)
+    academic_year = current_academic_year()
+    
+    # Default fee configuration values (from seed_fee_structure_2025_26.py)
+    COMMON = {
+        "registration_fee": 500,
+        "admission_fee": 2500,
+        "caution_deposit": 1000,
+        "annual_charge": 3600,
+        "upgradation_fee": 0,
+        "due_day": 10,
+        "late_fee": 0,
+        "late_fee_enabled": False,
+        "sibling_admission_discount_amount": 1000,
+        "sibling_tuition_discount_amount": 300,
+    }
+    
+    CLASS_FEES = {
+        "SF. SR.": {"activity_fee": 1500, "exam_fee": 300, "lab_fee": 0, "ai_robotics_fee": 0, "monthly_tuition": 1000},
+        "LKG": {"activity_fee": 2000, "exam_fee": 300, "lab_fee": 0, "ai_robotics_fee": 0, "monthly_tuition": 1100},
+        "UKG": {"activity_fee": 2000, "exam_fee": 300, "lab_fee": 0, "ai_robotics_fee": 0, "monthly_tuition": 1100},
+        "1st": {"activity_fee": 2400, "exam_fee": 300, "lab_fee": 1500, "ai_robotics_fee": 0, "monthly_tuition": 1150},
+        "2nd": {"activity_fee": 2400, "exam_fee": 300, "lab_fee": 1500, "ai_robotics_fee": 0, "monthly_tuition": 1150},
+        "3rd": {"activity_fee": 2900, "exam_fee": 300, "lab_fee": 1500, "ai_robotics_fee": 0, "monthly_tuition": 1250},
+        "4th": {"activity_fee": 2900, "exam_fee": 300, "lab_fee": 1500, "ai_robotics_fee": 0, "monthly_tuition": 1250},
+        "5th": {"activity_fee": 3400, "exam_fee": 300, "lab_fee": 1500, "ai_robotics_fee": 0, "monthly_tuition": 1350},
+        "6th": {"activity_fee": 3400, "exam_fee": 300, "lab_fee": 1500, "ai_robotics_fee": 0, "monthly_tuition": 1350},
+        "7th": {"activity_fee": 3900, "exam_fee": 300, "lab_fee": 1500, "ai_robotics_fee": 0, "monthly_tuition": 1400},
+        "8th": {"activity_fee": 3900, "exam_fee": 300, "lab_fee": 1500, "ai_robotics_fee": 0, "monthly_tuition": 1400},
+        "9th": {"activity_fee": 4500, "exam_fee": 450, "lab_fee": 1500, "ai_robotics_fee": 2400, "monthly_tuition": 1900},
+        "10th": {"activity_fee": 4500, "exam_fee": 450, "lab_fee": 1500, "ai_robotics_fee": 2400, "monthly_tuition": 1900},
+    }
+    
+    now = datetime.now(timezone.utc).isoformat()
+    created = 0
+    skipped = 0
+    
+    for class_name, overrides in CLASS_FEES.items():
+        # Check if config already exists
+        existing = await db.fee_component_configs.find_one({
+            "class_name": class_name,
+            "stream": None,
+            "academic_year": academic_year,
+            "is_active": True
+        }, {"_id": 0})
+        
+        if existing:
+            skipped += 1
+            continue
+        
+        # Create new config
+        cfg = {
+            "config_id": f"fcc_{uuid.uuid4().hex[:10]}",
+            "class_name": class_name,
+            "stream": None,
+            "academic_year": academic_year,
+            **COMMON,
+            **overrides,
+            "is_active": True,
+            "notes": "Auto-created by ensure-defaults endpoint",
+            "created_by": user["user_id"],
+            "created_at": now,
+        }
+        await db.fee_component_configs.insert_one(cfg)
+        created += 1
+        logger.info(f"Created missing fee config for {class_name}")
+    
+    await create_audit_log("fee_component_config", "batch", "ensure_defaults", {
+        "academic_year": academic_year,
+        "created": created,
+        "skipped": skipped
+    }, user)
+    
+    return {
+        "message": f"Ensured fee configs for {academic_year}",
+        "created": created,
+        "skipped": skipped,
+        "academic_year": academic_year
+    }
+
+
 # ─── Student Ledger endpoints ─────────────────────────────────────────────────
 
 @router.get("/fees/ledger/{student_id}")
@@ -582,15 +672,19 @@ async def get_student_ledger(student_id: str, request: Request):
 
     # Role checks
     if user["role"] == UserRole.PARENT:
-        children = await db.students.find({"parent_id": user["user_id"]}, {"_id": 0, "student_id": 1}).to_list(20)
-        if student_id not in [c["student_id"] for c in children]:
-            raise HTTPException(status_code=403, detail="Not authorized")
+        # Use both parent_email (primary) and parent_id (legacy fallback) to locate children
+        children = await db.students.find(
+            {"$or": [{"parent_email": user["email"]}, {"parent_id": user["user_id"]}], "is_active": True},
+            {"_id": 0, "student_id": 1}
+        ).to_list(20)
+        if student_id not in {c["student_id"] for c in children}:
+            raise HTTPException(status_code=403, detail="Not authorized. This student is not linked to your account.")
     elif user["role"] == UserRole.STUDENT:
         stu = await db.students.find_one({"user_id": user["user_id"]}, {"_id": 0, "student_id": 1})
         if not stu or stu["student_id"] != student_id:
-            raise HTTPException(status_code=403, detail="Not authorized")
+            raise HTTPException(status_code=403, detail="Not authorized. You can only view your own fees.")
     elif user["role"] == UserRole.TEACHER:
-        raise HTTPException(status_code=403, detail="Teachers cannot access fee data")
+        raise HTTPException(status_code=403, detail="Teachers cannot access student fee data.")
 
     student = await db.students.find_one({"student_id": student_id}, {"_id": 0})
     if not student:
@@ -611,6 +705,23 @@ async def get_student_ledger(student_id: str, request: Request):
         {"student_id": student_id}, {"_id": 0}
     ).sort([("fee_type", 1), ("due_date", 1)]).to_list(500)
 
+    # Auto-generate ledger entries when a student has none (e.g. seeded before fee config existed)
+    if not entries:
+        academic_year_val = student.get("academic_year", current_academic_year())
+        cfg = await get_fee_config(student["class_name"], academic_year_val, student.get("stream"))
+        if cfg:
+            admission_date = student.get("admission_date", datetime.now().strftime("%Y-%m-%d"))
+            admission_month = admission_date[:7]
+            generated = await create_admission_ledger(student, cfg, academic_year_val, admission_month)
+            if generated > 0:
+                entries = await db.student_ledger.find(
+                    {"student_id": student_id}, {"_id": 0}
+                ).sort([("fee_type", 1), ("due_date", 1)]).to_list(500)
+                logger.info("Auto-generated %d ledger entries for student %s", generated, student_id)
+        else:
+            logger.warning("No fee config found for student %s class=%s year=%s — cannot auto-generate ledger",
+                           student_id, student["class_name"], student.get("academic_year"))
+
     payments = await db.fee_payments.find(
         {"student_id": student_id}, {"_id": 0}
     ).sort("payment_date", -1).to_list(500)
@@ -622,10 +733,14 @@ async def get_student_ledger(student_id: str, request: Request):
     total_gross = round(sum(e["gross_amount"] for e in entries), 2)
     total_concession = round(sum(e.get("concession_amount", 0) for e in entries), 2)
     total_paid_amount = round(sum(p["amount"] for p in payments), 2)
-    total_pending = _sum(entries, ["pending", "overdue"])
+    total_pending = round(
+        _sum(entries, ["pending", "overdue"]) +
+        sum(e.get("remaining_balance", 0) for e in entries if e["status"] == "partially_paid"),
+        2
+    )
     total_overdue = _sum(entries, ["overdue"])
     months_paid = sum(1 for e in entries if e["fee_component"] == "tuition" and e["status"] == "paid")
-    months_pending = sum(1 for e in entries if e["fee_component"] == "tuition" and e["status"] in ["pending", "overdue"])
+    months_pending = sum(1 for e in entries if e["fee_component"] == "tuition" and e["status"] in ["pending", "overdue", "partially_paid"])
 
     # Group by fee_type for display
     grouped = {"one_time": [], "yearly": [], "monthly": []}
@@ -656,6 +771,17 @@ async def get_student_ledger(student_id: str, request: Request):
         "ledger": grouped,
         "payments": payments,
     }
+
+
+@router.post("/fees/clear-locks/{student_id}")
+async def clear_payment_locks(student_id: str, request: Request):
+    """Admin: release all stale payment locks for a student."""
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    result = await db.student_ledger.update_many(
+        {"student_id": student_id, "payment_lock": {"$exists": True}},
+        {"$unset": {"payment_lock": ""}}
+    )
+    return {"cleared": result.modified_count}
 
 
 @router.post("/fees/ledger/generate/{student_id}")
@@ -838,8 +964,8 @@ async def generate_monthly_fees(request: Request):
 
         is_sibling = student.get("is_sibling", False)
         tuition = cfg["monthly_tuition"]
-        disc_pct = cfg.get("sibling_tuition_discount_pct", 15) if is_sibling else 0
-        disc_amt = round(tuition * disc_pct / 100, 2)
+        disc_amt = cfg.get("sibling_tuition_discount_amount", 0) if is_sibling else 0
+        disc_amt = min(disc_amt, tuition)  # Don't discount more than tuition
         net = tuition - disc_amt
         due_day = cfg.get("due_day", 10)
         due_date = f"{yr}-{mn}-{str(due_day).zfill(2)}"
@@ -856,7 +982,7 @@ async def generate_monthly_fees(request: Request):
             month=month_str,
             gross_amount=tuition,
             concession_amount=disc_amt,
-            concession_reason=f"Sibling discount ({disc_pct}%)" if disc_amt > 0 else None,
+            concession_reason=f"Sibling discount (₹{disc_amt})" if disc_amt > 0 else None,
             net_amount=net,
             due_date=due_date,
             status="pending",
@@ -896,9 +1022,12 @@ async def pay_fee(request: Request):
 
     # Auth
     if user["role"] == UserRole.PARENT:
-        children = await db.students.find({"parent_id": user["user_id"]}, {"_id": 0, "student_id": 1}).to_list(20)
-        if student_id not in [c["student_id"] for c in children]:
-            raise HTTPException(status_code=403, detail="Not authorized")
+        children = await db.students.find(
+            {"$or": [{"parent_email": user["email"]}, {"parent_id": user["user_id"]}], "is_active": True},
+            {"_id": 0, "student_id": 1}
+        ).to_list(20)
+        if student_id not in {c["student_id"] for c in children}:
+            raise HTTPException(status_code=403, detail="Not authorized.")
     elif user["role"] not in [UserRole.ADMIN, UserRole.ACCOUNTANT]:
         raise HTTPException(status_code=403, detail="Insufficient permissions")
 
@@ -1321,20 +1450,25 @@ async def get_fee_payments(request: Request, student_id: Optional[str] = None):
     query = {}
 
     if user["role"] == UserRole.PARENT:
-        children = await db.students.find({"parent_id": user["user_id"]}, {"_id": 0, "student_id": 1}).to_list(20)
+        children = await db.students.find(
+            {"$or": [{"parent_email": user.get("email", "")}, {"parent_id": user["user_id"]}], "is_active": True},
+            {"_id": 0, "student_id": 1}
+        ).to_list(20)
         child_ids = [c["student_id"] for c in children]
+        if not child_ids:
+            return []
         query["student_id"] = student_id if student_id and student_id in child_ids else {"$in": child_ids}
     elif user["role"] == UserRole.STUDENT:
         stu = await db.students.find_one({"user_id": user["user_id"]}, {"_id": 0, "student_id": 1})
-        query["student_id"] = stu["student_id"] if stu else None
+        if not stu:
+            return []
+        query["student_id"] = stu["student_id"]
     elif user["role"] in [UserRole.ADMIN, UserRole.ACCOUNTANT]:
         if student_id:
             query["student_id"] = student_id
+        # No student_id = admin sees all payments (no filter)
     elif user["role"] == UserRole.TEACHER:
         raise HTTPException(status_code=403, detail="Teachers cannot access fee data")
-
-    if query.get("student_id") is None:
-        return []
 
     return await db.fee_payments.find(query, {"_id": 0}).sort("payment_date", -1).to_list(1000)
 

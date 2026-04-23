@@ -344,6 +344,34 @@ const StudentDashboard = ({ stats }) => (
       </div>
     )}
 
+    {/* Class info card */}
+    {stats.class_name && (
+      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="h-10 w-10 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+            <School className="h-5 w-5 text-blue-600" strokeWidth={1.5} />
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">My Class</p>
+            <p className="text-lg font-bold text-slate-900">
+              Class {stats.class_name} — Section {stats.section}
+              {stats.stream && <span className="text-sm font-medium text-slate-500 ml-2 capitalize">({stats.stream})</span>}
+            </p>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="bg-slate-50 rounded-xl p-3">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Admission No.</p>
+            <p className="text-sm font-bold text-slate-900 mt-0.5 font-mono">{stats.admission_number || '—'}</p>
+          </div>
+          <div className="bg-slate-50 rounded-xl p-3">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Roll No.</p>
+            <p className="text-sm font-bold text-slate-900 mt-0.5">{stats.roll_number || '—'}</p>
+          </div>
+        </div>
+      </div>
+    )}
+
     <div className="grid gap-4 md:grid-cols-3">
       <Stat label="Fee Status"  value={stats.fee_status || 'N/A'} />
       <Stat label="Attendance"  value={`${stats.attendance_percentage || 0}%`} />

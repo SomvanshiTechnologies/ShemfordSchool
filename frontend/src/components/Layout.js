@@ -8,7 +8,7 @@ import api from '../lib/api';
 import {
   LayoutDashboard, Users, GraduationCap, UserCog, Calendar,
   CreditCard, FileText, Bell, BookOpen, TicketCheck, MessageSquare,
-  BarChart3, LogOut, Menu, X, School, AlertTriangle, ArrowUpCircle, Settings
+  BarChart3, LogOut, Menu, X, School, AlertTriangle, ArrowUpCircle, Settings, Wallet
 } from 'lucide-react';
 
 const LOGO_URL = "/logo.webp";
@@ -25,6 +25,7 @@ const ALL_MENU_ITEMS = [
   { name: 'Syllabus',               icon: BookOpen,         path: '/syllabus',            roles: ['admin', 'teacher', 'student', 'parent'] },
   { name: 'Fees',                   icon: CreditCard,       path: '/fees',                roles: ['admin', 'accountant'] },
   { name: 'My Fees',                icon: CreditCard,       path: '/my-fees',             roles: ['student', 'parent'] },
+  { name: 'Payroll',                icon: Wallet,           path: '/payroll',             roles: ['admin', 'accountant', 'teacher'] },
   { name: 'Employees',              icon: UserCog,          path: '/employees',           roles: ['admin'] },
   { name: 'Users',                  icon: Users,            path: '/users',               roles: ['admin'] },
   { name: 'Announcements',          icon: Bell,             path: '/announcements',       roles: ['admin', 'teacher'] },
@@ -38,7 +39,7 @@ const ALL_MENU_ITEMS = [
 const SIDEBAR_SECTIONS = [
   { label: null,             names: ['Dashboard'] },
   { label: 'Academic',      names: ['Students', 'Classes', 'Attendance', 'My Attendance', "Children's Attendance", 'Marks', 'My Marks', 'Syllabus'] },
-  { label: 'Finance',       names: ['Fees', 'My Fees'] },
+  { label: 'Finance',       names: ['Fees', 'My Fees', 'Payroll'] },
   { label: 'Administration',names: ['Employees', 'Users', 'Announcements', 'Reports', 'Upgradation'] },
   { label: 'Community',     names: ['Issues', 'Messages'] },
   { label: null,             names: ['Settings'] },
@@ -94,11 +95,11 @@ const Sidebar = ({ isOpen, onClose }) => {
           {/* ── Navigation ── */}
           <ScrollArea className="flex-1 py-2">
             <nav className="px-1">
-              {SIDEBAR_SECTIONS.map((section) => {
+              {SIDEBAR_SECTIONS.map((section, sectionIdx) => {
                 const sectionItems = menuItems.filter(item => section.names.includes(item.name));
                 if (!sectionItems.length) return null;
                 return (
-                  <div key={section.label || 'overview'}>
+                  <div key={section.label || `section-${sectionIdx}`}>
                     {section.label && (
                       <p className="sidebar-section-label">{section.label}</p>
                     )}

@@ -43,7 +43,14 @@ def needs_stream(class_name: str) -> bool:
 @router.post("/onboarding/start")
 async def start_onboarding(request: Request):
     user = await require_roles(UserRole.ADMIN)(request)
-    body = await request.json()
+    
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid request format. Please check the submitted data."
+        )
 
     # ── Required field validation ───────────────────────────────────────────
     REQUIRED_FIELDS = {
@@ -53,39 +60,46 @@ async def start_onboarding(request: Request):
         "date_of_birth": "Date of Birth",
         "parent_name": "Father / Guardian Name",
         "parent_phone": "Contact Number",
+        "mother_name": "Mother Name",
+        "mother_phone": "Mother Contact Number",
     }
     validation_errors = {}
     for field, label in REQUIRED_FIELDS.items():
         val = body.get(field)
         if not val or (isinstance(val, str) and not val.strip()):
             validation_errors[field] = f"{label} is required"
+    
     if validation_errors:
+        error_messages = " | ".join([f"{k}: {v}" for k, v in validation_errors.items()])
         raise HTTPException(
-            status_code=422,
-            detail={"validation_errors": validation_errors}
+            status_code=400,
+            detail=f"Missing required fields: {error_messages}"
         )
 
-    # Duplicate check in existing students
+    # Duplicate check in existing students and onboarding applications
+    # Run both queries in parallel for better performance
     if body.get("date_of_birth"):
-        existing = await db.students.find_one({
-            "first_name": body.get("first_name", ""),
-            "last_name": body.get("last_name", ""),
-            "date_of_birth": body["date_of_birth"],
-            "is_active": True
-        }, {"_id": 0})
-        if existing:
+        import asyncio
+        existing_student, existing_onb = await asyncio.gather(
+            db.students.find_one({
+                "first_name": body.get("first_name", ""),
+                "last_name": body.get("last_name", ""),
+                "date_of_birth": body["date_of_birth"],
+                "is_active": True
+            }, {"_id": 0}),
+            db.onboarding.find_one({
+                "first_name": body.get("first_name", ""),
+                "last_name": body.get("last_name", ""),
+                "date_of_birth": body["date_of_birth"],
+                "status": {"$nin": ["rejected", "completed"]}
+            }, {"_id": 0})
+        )
+        if existing_student:
             raise HTTPException(
                 status_code=400,
-                detail=f"Duplicate student: {existing['first_name']} {existing['last_name']} "
-                       f"(Admission: {existing['admission_number']})"
+                detail=f"Duplicate student: {existing_student['first_name']} {existing_student['last_name']} "
+                       f"(Admission: {existing_student['admission_number']})"
             )
-        # Duplicate check in active onboarding applications
-        existing_onb = await db.onboarding.find_one({
-            "first_name": body.get("first_name", ""),
-            "last_name": body.get("last_name", ""),
-            "date_of_birth": body["date_of_birth"],
-            "status": {"$nin": ["rejected", "completed"]}
-        }, {"_id": 0})
         if existing_onb:
             raise HTTPException(
                 status_code=400,
@@ -193,7 +207,9 @@ async def set_onboarding_class(onboarding_id: str, request: Request):
             status_code=400,
             detail=f"No fee configuration found for {class_name}"
                    + (f" ({stream})" if stream else "")
-                   + f" for {academic_year}. Please configure fees first."
+                   + f" for {academic_year}. "
+                   + "Please contact admin to configure fees. "
+                   + "Admin can run POST /fees/components/ensure-defaults to auto-create default fees."
         )
 
     is_sibling = app.get("is_sibling", False)
@@ -545,3 +561,26 @@ async def get_onboarding_application(onboarding_id: str, request: Request):
     docs = await db.student_documents.find({"onboarding_id": onboarding_id}, {"_id": 0}).to_list(50)
     app["documents"] = docs
     return app
+
+
+@router.get("/onboarding/draft/list")
+async def list_draft_onboarding_applications(request: Request):
+    """
+    Get all draft onboarding applications (students not yet fully enrolled).
+    These are student profiles that have been created but not completed onboarding.
+    """
+    await require_roles(UserRole.ADMIN)(request)
+    apps = await db.onboarding.find(
+        {"status": "draft"},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(500)
+    
+    # Enrich with document count
+    for app in apps:
+        doc_count = await db.student_documents.count_documents({"onboarding_id": app["onboarding_id"]})
+        app["document_count"] = doc_count
+    
+    return {
+        "total": len(apps),
+        "draft_applications": apps
+    }

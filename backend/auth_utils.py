@@ -3,7 +3,9 @@ Shemford Futuristic School — Auth Utilities
 
 Security standards:
 - Passwords hashed with bcrypt (cost factor 12)
-- JWT HS256, 24-hour expiry
+- JWT HS256 access tokens (configurable expiry, default 15 min)
+- Refresh tokens: opaque 256-bit random token, stored in DB, rotate on use
+- JTI blocklist: revoked access tokens stored in DB with TTL index
 - Atomic admission number generation (no race condition)
 - No plaintext passwords stored
 - All critical actions audit-logged
@@ -12,6 +14,7 @@ import bcrypt
 import jwt
 import os
 import uuid
+import secrets
 import logging
 from datetime import datetime, timezone, timedelta
 from fastapi import HTTPException, Request
@@ -25,7 +28,8 @@ if not JWT_SECRET:
     raise RuntimeError("JWT_SECRET environment variable is required and must not be empty")
 
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRATION_HOURS = 24
+ACCESS_TOKEN_MINUTES = int(os.environ.get("ACCESS_TOKEN_MINUTES", "15"))
+REFRESH_TOKEN_DAYS = int(os.environ.get("REFRESH_TOKEN_DAYS", "30"))
 
 
 # ─── Password utilities ────────────────────────────────────────────────────────
@@ -43,15 +47,16 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
-# ─── JWT utilities ─────────────────────────────────────────────────────────────
+# ─── Access token (JWT) utilities ──────────────────────────────────────────────
 
 def create_jwt_token(user_id: str, role: str) -> str:
+    now = datetime.now(timezone.utc)
     payload = {
         "user_id": user_id,
         "role": role,
-        "iat": datetime.now(timezone.utc),
-        "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRATION_HOURS),
-        "jti": uuid.uuid4().hex,  # unique token ID for revocation support
+        "iat": now,
+        "exp": now + timedelta(minutes=ACCESS_TOKEN_MINUTES),
+        "jti": uuid.uuid4().hex,  # unique token ID for revocation
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
@@ -65,6 +70,84 @@ def decode_jwt_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Invalid authentication token.")
 
 
+# ─── Refresh token utilities ───────────────────────────────────────────────────
+
+async def create_refresh_token_db(user_id: str, role: str) -> str:
+    """
+    Generate a new opaque refresh token, persist to DB, and return the raw token.
+    Old un-revoked tokens for the same user are left intact (multi-device support).
+    """
+    token = secrets.token_urlsafe(48)  # 48 bytes → 64-char URL-safe string
+    expires_at = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_DAYS)
+    await db.refresh_tokens.insert_one({
+        "token": token,
+        "user_id": user_id,
+        "role": role,
+        "is_revoked": False,
+        "created_at": datetime.now(timezone.utc),
+        "expires_at": expires_at,   # BSON date — TTL index will auto-clean
+    })
+    return token
+
+
+async def verify_refresh_token(token: str) -> dict:
+    """
+    Validate a refresh token.
+    Returns the stored document on success.
+    Raises 401 if invalid, revoked, or expired.
+    """
+    doc = await db.refresh_tokens.find_one({"token": token, "is_revoked": False}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token.")
+    expires_at = doc.get("expires_at")
+    if isinstance(expires_at, str):
+        expires_at = datetime.fromisoformat(expires_at)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=401, detail="Refresh token has expired. Please log in again.")
+    return doc
+
+
+async def revoke_refresh_token(token: str) -> None:
+    """Mark a single refresh token as revoked."""
+    await db.refresh_tokens.update_one({"token": token}, {"$set": {"is_revoked": True}})
+
+
+async def revoke_all_refresh_tokens(user_id: str) -> None:
+    """Revoke all refresh tokens for a user (e.g., on password change or admin action)."""
+    await db.refresh_tokens.update_many(
+        {"user_id": user_id, "is_revoked": False},
+        {"$set": {"is_revoked": True}}
+    )
+
+
+# ─── JTI blocklist (revoked access tokens) ────────────────────────────────────
+
+async def revoke_jti(jti: str, expires_at: datetime) -> None:
+    """
+    Add a JTI to the blocklist until its natural expiry.
+    TTL index on the collection automatically removes the document after expiry.
+    Idempotent — inserting a duplicate JTI is silently ignored.
+    """
+    try:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        await db.jti_blocklist.insert_one({
+            "jti": jti,
+            "expires_at": expires_at,   # BSON date for TTL index
+        })
+    except Exception:
+        # DuplicateKeyError means it was already revoked — safe to ignore
+        pass
+
+
+async def is_jti_revoked(jti: str) -> bool:
+    """Return True if the JTI is present in the blocklist."""
+    doc = await db.jti_blocklist.find_one({"jti": jti}, {"_id": 1})
+    return doc is not None
+
+
 # ─── Current user extraction ───────────────────────────────────────────────────
 
 async def get_current_user(request: Request) -> dict:
@@ -72,6 +155,9 @@ async def get_current_user(request: Request) -> dict:
     Extract and validate the current user from:
     1. session_token cookie (OAuth / web sessions)
     2. Authorization: Bearer <jwt> header (API / mobile)
+
+    For JWT tokens: also checks the JTI blocklist so revoked tokens
+    (e.g., from logout) are rejected even within their validity window.
     """
     token = request.cookies.get("session_token")
     if not token:
@@ -101,6 +187,12 @@ async def get_current_user(request: Request) -> dict:
 
     # Fall back to JWT
     payload = decode_jwt_token(token)
+
+    # Check JTI blocklist — catches tokens invalidated by logout before expiry
+    jti = payload.get("jti")
+    if jti and await is_jti_revoked(jti):
+        raise HTTPException(status_code=401, detail="Token has been revoked. Please log in again.")
+
     user = await db.users.find_one({"user_id": payload["user_id"]}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User account not found.")
@@ -188,3 +280,32 @@ async def create_audit_log(
         await db.audit_logs.insert_one(log_dict)
     except Exception as e:
         logger.error(f"Audit log write failed for {entity_type}/{entity_id}/{action}: {e}")
+
+
+def get_rid(request: Request) -> str:
+    """Return the request correlation ID attached by the middleware, or '-' if absent."""
+    return getattr(request.state, "request_id", "-")
+
+
+async def get_teacher_assigned_classes(user_id: str) -> list:
+    """
+    Return [{class_name, section}] for a teacher based on class_structures assignment.
+    Returns empty list if no assignment found (caller should fall back to permissive mode).
+    """
+    employee = await db.employees.find_one(
+        {"user_id": user_id, "is_active": True},
+        {"_id": 0, "employee_id": 1}
+    )
+    if not employee:
+        return []
+    emp_id = employee["employee_id"]
+    classes = await db.class_structures.find(
+        {"is_active": True},
+        {"_id": 0, "name": 1, "sections": 1}
+    ).to_list(100)
+    assigned = []
+    for cls in classes:
+        for sec in cls.get("sections", []):
+            if sec.get("class_teacher_id") == emp_id:
+                assigned.append({"class_name": cls["name"], "section": sec["section_name"]})
+    return assigned

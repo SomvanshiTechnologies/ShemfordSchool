@@ -61,6 +61,8 @@ async def create_indexes(db):
         db.fee_payments.create_index([("payment_id", ASCENDING)], unique=True, background=True),
         db.fee_payments.create_index([("student_id", ASCENDING), ("payment_date", DESCENDING)], background=True),
         db.fee_payments.create_index([("receipt_number", ASCENDING)], unique=True, sparse=True, background=True),
+        # Idempotency: one Razorpay/Stripe payment_id can only ever produce one fee_payment record
+        db.fee_payments.create_index([("transaction_id", ASCENDING)], unique=True, sparse=True, background=True),
         db.fee_payments.create_index([("payment_date", DESCENDING)], background=True),
         db.fee_payments.create_index([("academic_year", ASCENDING), ("payment_date", DESCENDING)], background=True),
 
@@ -119,6 +121,8 @@ async def create_indexes(db):
         # ── employees ────────────────────────────────────────────────────────
         db.employees.create_index([("employee_id", ASCENDING)], unique=True, background=True),
         db.employees.create_index([("email", ASCENDING)], unique=True, background=True),
+        db.employees.create_index([("user_id", ASCENDING)], unique=True, sparse=True, background=True),
+        db.employees.create_index([("is_active", ASCENDING), ("department", ASCENDING)], background=True),
 
         # ── audit_logs ────────────────────────────────────────────────────────
         db.audit_logs.create_index([("entity_type", ASCENDING), ("entity_id", ASCENDING), ("created_at", DESCENDING)], background=True),
@@ -126,6 +130,37 @@ async def create_indexes(db):
         db.audit_logs.create_index([("created_at", DESCENDING)], background=True),
         # TTL index: auto-delete audit logs older than 3 years
         db.audit_logs.create_index([("created_at", ASCENDING)], expireAfterSeconds=94608000, background=True),
+
+        # ── payroll ───────────────────────────────────────────────────────────
+        # Prevent duplicate payroll generation for the same employee+month
+        db.payroll.create_index([("employee_id", ASCENDING), ("month_year", ASCENDING)], unique=True, background=True),
+        db.payroll.create_index([("payroll_id", ASCENDING)], unique=True, background=True),
+        db.payroll.create_index([("month_year", ASCENDING), ("status", ASCENDING)], background=True),
+        db.payroll.create_index([("employee_id", ASCENDING), ("year", ASCENDING), ("month", ASCENDING)], background=True),
+        db.payroll.create_index([("status", ASCENDING), ("created_at", DESCENDING)], background=True),
+
+        # ── razorpay_orders ───────────────────────────────────────────────────
+        db.razorpay_orders.create_index([("internal_order_id", ASCENDING)], unique=True, background=True),
+        db.razorpay_orders.create_index([("rzp_order_id", ASCENDING)], unique=True, background=True),
+        # Idempotency: one payment_id can only ever appear once
+        db.razorpay_orders.create_index([("rzp_payment_id", ASCENDING)], unique=True, sparse=True, background=True),
+        db.razorpay_orders.create_index([("student_id", ASCENDING), ("status", ASCENDING), ("created_at", DESCENDING)], background=True),
+        db.razorpay_orders.create_index([("webhook_event_id", ASCENDING)], sparse=True, background=True),
+        db.razorpay_orders.create_index([("receipt_number", ASCENDING)], sparse=True, background=True),
+        # TTL: auto-delete CANCELLED/FAILED orders older than 90 days to keep collection clean
+        db.razorpay_orders.create_index([("created_at", ASCENDING)], expireAfterSeconds=7776000,
+                                        partialFilterExpression={"status": {"$in": ["CANCELLED", "FAILED"]}},
+                                        background=True),
+
+        # ── job_queue (durable background jobs) ──────────────────────────────
+        db.jobs.create_index([("job_id", ASCENDING)], unique=True, background=True),
+        # Worker claims via status + next_run_at + $expr(attempts < max_attempts)
+        db.jobs.create_index([("status", ASCENDING), ("next_run_at", ASCENDING)], background=True),
+        # Idempotency key dedup (PENDING/RUNNING state check)
+        db.jobs.create_index([("idempotency_key", ASCENDING)], sparse=True, background=True),
+        # TTL: auto-purge completed/failed jobs after 30 days to prevent unbounded growth
+        db.jobs.create_index([("completed_at", ASCENDING)], expireAfterSeconds=2592000,
+                             sparse=True, background=True),
 
         # ── counters (receipts / admission numbers) ───────────────────────────
         db.counters.create_index([("_id", ASCENDING)], unique=True, background=True),
@@ -152,6 +187,17 @@ async def create_indexes(db):
         # ── password_resets ───────────────────────────────────────────────────
         db.password_resets.create_index([("token", ASCENDING)], unique=True, sparse=True, background=True),
         db.password_resets.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0, background=True),
+
+        # ── jti_blocklist (revoked access tokens) ─────────────────────────────
+        # Unique on jti to prevent duplicate inserts; TTL removes entries after natural token expiry
+        db.jti_blocklist.create_index([("jti", ASCENDING)], unique=True, background=True),
+        db.jti_blocklist.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0, background=True),
+
+        # ── refresh_tokens ────────────────────────────────────────────────────
+        db.refresh_tokens.create_index([("token", ASCENDING)], unique=True, background=True),
+        db.refresh_tokens.create_index([("user_id", ASCENDING), ("is_revoked", ASCENDING)], background=True),
+        # TTL: auto-delete expired refresh tokens
+        db.refresh_tokens.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0, background=True),
     ]
 
     results = await asyncio.gather(*idx_tasks, return_exceptions=True)

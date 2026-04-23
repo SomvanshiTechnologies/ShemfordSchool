@@ -1,28 +1,52 @@
 import React from 'react';
 import { TouchableOpacity, View, Text, StyleSheet } from 'react-native';
-import { COLORS } from '../theme/colors';
+import { Ionicons } from '@expo/vector-icons';
+import { COLORS, TINTS, RADIUS, SHADOW } from '../theme/colors';
 
-export const ActionButton = ({ icon, label, onPress }) => (
-  <TouchableOpacity style={styles.btn} onPress={onPress} activeOpacity={0.7}>
-    <View style={styles.iconWrap}>{icon}</View>
-    <Text style={styles.label}>{label}</Text>
-  </TouchableOpacity>
-);
+/**
+ * Web-style action row: [icon tile] [title / desc] [chevron]
+ * Pass `icon` (Ionicons name), `title`, optional `desc`, optional `tint`.
+ */
+export const ActionButton = ({ icon, title, desc, tint = 'orange', onPress, label }) => {
+  const t = TINTS[tint] || TINTS.orange;
+  const displayTitle = title || label;
+  return (
+    <TouchableOpacity style={styles.btn} onPress={onPress} activeOpacity={0.7}>
+      <View style={[styles.iconWrap, { backgroundColor: t.bg }]}>
+        <Ionicons name={icon} size={18} color={t.fg} />
+      </View>
+      <View style={styles.textWrap}>
+        <Text style={styles.title}>{displayTitle}</Text>
+        {desc ? <Text style={styles.desc} numberOfLines={1}>{desc}</Text> : null}
+      </View>
+      <Ionicons name="chevron-forward" size={16} color={COLORS.lightMuted} />
+    </TouchableOpacity>
+  );
+};
 
 export const ActionGrid = ({ children }) => (
   <View style={styles.grid}>{children}</View>
 );
 
 const styles = StyleSheet.create({
-  grid: { flexDirection: 'row', gap: 10, marginBottom: 20 },
+  grid: { gap: 10, marginBottom: 20 },
   btn: {
-    flex: 1, alignItems: 'center', justifyContent: 'center', gap: 6,
-    paddingVertical: 16, paddingHorizontal: 8, borderRadius: 14,
-    backgroundColor: COLORS.white, borderWidth: 1, borderColor: COLORS.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: RADIUS.xl,
+    backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    ...SHADOW.sm,
   },
   iconWrap: {
-    width: 28, height: 28, borderRadius: 10, backgroundColor: COLORS.lightBg,
+    width: 40, height: 40, borderRadius: RADIUS.md,
     alignItems: 'center', justifyContent: 'center',
   },
-  label: { fontSize: 11, fontWeight: '600', color: COLORS.black },
+  textWrap: { flex: 1 },
+  title: { fontSize: 14, fontWeight: '700', color: COLORS.black },
+  desc:  { fontSize: 12, color: COLORS.muted, marginTop: 2 },
 });

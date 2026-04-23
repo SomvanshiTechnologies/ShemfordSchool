@@ -3,7 +3,7 @@ import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import client from '../api/client';
-import { COLORS } from '../theme/colors';
+import { COLORS, RADIUS, SHADOW } from '../theme/colors';
 import { Avatar, EmptyState } from '../components/UI';
 import { ScreenLoader } from '../components/LoadingSkeleton';
 
@@ -53,7 +53,7 @@ const styles = StyleSheet.create({
   header: { paddingTop: 12, paddingBottom: 16 },
   h1: { fontSize: 24, fontWeight: '800', color: COLORS.black, letterSpacing: -0.5 },
   sub: { fontSize: 12, color: COLORS.muted, marginTop: 2 },
-  list: { backgroundColor: COLORS.white, borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border, marginBottom: 16 },
+  list: { backgroundColor: COLORS.white, borderRadius: RADIUS.xl, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border, marginBottom: 16, ...SHADOW.sm },
   listItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: COLORS.lightBg },
 });
 

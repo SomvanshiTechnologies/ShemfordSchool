@@ -22,6 +22,7 @@ import UsersPage from "./components/UsersPage";
 import ParentAttendancePage from "./components/ParentAttendancePage";
 import ClassStructurePage from "./components/ClassStructurePage";
 import SettingsPage from "./components/SettingsPage";
+import PayrollPage from "./components/PayrollPage";
 import MobileApp from "./mobile/MobileApp";
 import { useMobile } from "./hooks/useMobile";
 import "./mobile/mobile.css";
@@ -35,8 +36,8 @@ function MobileRedirect({ children }) {
   const { user } = useAuth();
 
   React.useEffect(() => {
-    // Only redirect if on mobile, logged in, and NOT already on /m/ or /login
-    if (isMobile && user && !location.pathname.startsWith('/m') && location.pathname !== '/login' && !location.hash?.includes('session_id=')) {
+    const isTouchDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    if (isMobile && isTouchDevice && user && !location.pathname.startsWith('/m') && location.pathname !== '/login' && !location.hash?.includes('session_id=')) {
       navigate('/m', { replace: true });
     }
   }, [isMobile, user, location.pathname, location.hash, navigate]);
@@ -270,6 +271,17 @@ function AppRouter() {
         }
       />
       
+      <Route
+        path="/payroll"
+        element={
+          <ProtectedRoute allowedRoles={['admin', 'accountant', 'teacher']}>
+            <Layout>
+              <PayrollPage />
+            </Layout>
+          </ProtectedRoute>
+        }
+      />
+
       <Route
         path="/settings"
         element={
