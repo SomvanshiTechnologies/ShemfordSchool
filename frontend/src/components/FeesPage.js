@@ -14,7 +14,8 @@ import { toast } from 'sonner';
 import {
   Search, CreditCard, FileText, AlertTriangle, Loader2, Mail,
   Settings, TrendingUp, ChevronDown, ChevronRight, CheckCircle2,
-  Clock, XCircle, Download, Plus, Edit2, RefreshCw, BookOpen
+  Clock, XCircle, Download, Plus, Edit2, RefreshCw, BookOpen,
+  Smartphone, Wifi, WifiOff, X
 } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { RazorpayCheckout } from './RazorpayCheckout';
@@ -130,6 +131,24 @@ const FeesPage = () => {
 
   // Refresh overdue
   const [refreshingOverdue, setRefreshingOverdue] = useState(false);
+
+  // Student search bar (Collect tab)
+  const [studentSearch, setStudentSearch] = useState('');
+  const [studentSearchResults, setStudentSearchResults] = useState([]);
+  const [searchingStudents, setSearchingStudents] = useState(false);
+  const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+  const searchDebounceRef = useRef(null);
+  const searchInputRef = useRef(null);
+
+  // POS terminal payment
+  const [showPosDialog, setShowPosDialog] = useState(false);
+  const [posForm, setPosForm] = useState({ device_id: '', mode: 'ALL' });
+  const [posOrderId, setPosOrderId] = useState(null);
+  const [posStatus, setPosStatus] = useState('idle'); // idle|polling|success|failed|cancelled
+  const [posReceipt, setPosReceipt] = useState(null);
+  const [posPaymentId, setPosPaymentId] = useState(null);
+  const [posMessage, setPosMessage] = useState('');
+  const posPollingRef = useRef(null);
 
   // ── Fetch data ────────────────────────────────────────────────────────────
 
@@ -364,6 +383,148 @@ const FeesPage = () => {
     } finally { setRefreshingOverdue(false); }
   };
 
+  // ── Student search helpers ────────────────────────────────────────────────
+
+  const handleStudentSearch = (value) => {
+    setStudentSearch(value);
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    if (!value.trim()) {
+      setStudentSearchResults([]);
+      setShowSearchDropdown(false);
+      return;
+    }
+    searchDebounceRef.current = setTimeout(async () => {
+      setSearchingStudents(true);
+      try {
+        const res = await api.get('/fees/search-students', { params: { q: value } });
+        setStudentSearchResults(res.data || []);
+        setShowSearchDropdown(true);
+      } catch {
+        setStudentSearchResults([]);
+      } finally {
+        setSearchingStudents(false);
+      }
+    }, 400);
+  };
+
+  const selectSearchResult = (student) => {
+    setSelectedStudentId(student.student_id);
+    setStudentSearch(`${student.name} (${student.admission_number || student.roll_number || student.student_id})`);
+    setShowSearchDropdown(false);
+    setStudentSearchResults([]);
+  };
+
+  const clearStudentSearch = () => {
+    setStudentSearch('');
+    setStudentSearchResults([]);
+    setShowSearchDropdown(false);
+    setSelectedStudentId('');
+    if (searchInputRef.current) searchInputRef.current.focus();
+  };
+
+  // ── POS payment helpers ───────────────────────────────────────────────────
+
+  const stopPosPolling = () => {
+    if (posPollingRef.current) {
+      clearInterval(posPollingRef.current);
+      posPollingRef.current = null;
+    }
+  };
+
+  const initiatePosPayment = async () => {
+    if (!payLedgerIds.length) { toast.error('Select at least one fee entry'); return; }
+    if (!posForm.device_id.trim()) { toast.error('Enter POS device ID'); return; }
+
+    // Calculate total due for selected ledger entries
+    const allEntries = [
+      ...(studentLedger?.ledger?.one_time || []),
+      ...(studentLedger?.ledger?.yearly || []),
+      ...(studentLedger?.ledger?.monthly || []),
+    ];
+    const selected = allEntries.filter(e => payLedgerIds.includes(e.ledger_id));
+    const totalRupees = selected.reduce((s, e) => s + (Number(e.remaining_balance || e.net_amount) || 0), 0);
+    const totalPaise = Math.round(totalRupees * 100);
+
+    // Save device_id to localStorage for next time
+    localStorage.setItem('pos_device_id', posForm.device_id);
+
+    setPosStatus('polling');
+    setPosMessage('Sending payment request to POS terminal...');
+    setPosReceipt(null);
+    setPosPaymentId(null);
+
+    try {
+      const res = await api.post('/payments/pos/initiate', {
+        student_id: selectedStudentId,
+        ledger_ids: payLedgerIds,
+        amount_paise: totalPaise,
+        device_id: posForm.device_id,
+        mode: posForm.mode,
+      });
+      const orderId = res.data.pos_order_id;
+      setPosOrderId(orderId);
+      setPosMessage('Waiting for payment on POS terminal...');
+
+      // Poll every 3 seconds, timeout after 90 seconds
+      let elapsed = 0;
+      posPollingRef.current = setInterval(async () => {
+        elapsed += 3;
+        if (elapsed >= 90) {
+          stopPosPolling();
+          setPosStatus('failed');
+          setPosMessage('Payment timed out. Please retry or cancel.');
+          return;
+        }
+        try {
+          const statusRes = await api.post('/payments/pos/status', { pos_order_id: orderId });
+          const s = statusRes.data.status;
+          if (s === 'SUCCESS') {
+            stopPosPolling();
+            setPosStatus('success');
+            setPosReceipt(statusRes.data.receipt_number);
+            setPosPaymentId(statusRes.data.fee_payment_id);
+            setPosMessage(`Payment successful! Receipt: ${statusRes.data.receipt_number}`);
+            toast.success(`POS payment successful — ${statusRes.data.receipt_number}`);
+            // Refresh ledger
+            const lr = await api.get(`/fees/ledger/${selectedStudentId}`).catch(() => null);
+            if (lr) setStudentLedger(lr.data);
+            if (isAdmin) fetchAdminData();
+            setPayLedgerIds([]);
+          } else if (s === 'FAILED' || s === 'CANCELLED') {
+            stopPosPolling();
+            setPosStatus('failed');
+            setPosMessage(statusRes.data.message || 'Payment failed on POS device.');
+          }
+        } catch { /* ignore transient network errors during polling */ }
+      }, 3000);
+    } catch (e) {
+      setPosStatus('failed');
+      setPosMessage(e.response?.data?.detail || 'Failed to send payment to POS device.');
+      stopPosPolling();
+    }
+  };
+
+  const cancelPosPayment = async () => {
+    stopPosPolling();
+    if (posOrderId) {
+      try {
+        await api.post('/payments/pos/cancel', { pos_order_id: posOrderId, reason: 'Cancelled by operator' });
+      } catch { /* best-effort */ }
+    }
+    setPosStatus('cancelled');
+    setPosMessage('POS payment cancelled.');
+  };
+
+  const openPosDialog = () => {
+    const savedDevice = localStorage.getItem('pos_device_id') || '';
+    setPosForm(f => ({ ...f, device_id: savedDevice }));
+    setPosOrderId(null);
+    setPosStatus('idle');
+    setPosReceipt(null);
+    setPosMessage('');
+    setShowPosDialog(true);
+  };
+
   // ── Loading state ─────────────────────────────────────────────────────────
 
   if (loading) return (
@@ -545,21 +706,63 @@ const FeesPage = () => {
         {/* ════════════ COLLECT TAB ════════════ */}
         <TabsContent value="collect">
           <div className="space-y-4">
-            <div className="flex gap-4 items-end">
-              <div className="flex-1 max-w-sm">
-                <Label className="text-xs font-bold uppercase tracking-wider text-slate-900">Select Student</Label>
-                <Select value={selectedStudentId} onValueChange={setSelectedStudentId}>
-                  <SelectTrigger className="mt-1">
-                    <SelectValue placeholder="Choose a student…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {students.map(s => (
-                      <SelectItem key={s.student_id} value={s.student_id}>
-                        {s.first_name} {s.last_name} ({s.admission_number || 'No Adm#'}) — {s.class_name}-{s.section}
-                      </SelectItem>
+            {/* Student search bar */}
+            <div className="flex gap-4 items-start">
+              <div className="flex-1 max-w-md relative">
+                <Label className="text-xs font-bold uppercase tracking-wider text-slate-900">Search Student</Label>
+                <div className="relative mt-1">
+                  <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400 pointer-events-none" strokeWidth={1.5} />
+                  <input
+                    ref={searchInputRef}
+                    type="text"
+                    className="w-full pl-9 pr-9 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent"
+                    placeholder="Search by name, roll number, or admission number…"
+                    value={studentSearch}
+                    onChange={e => handleStudentSearch(e.target.value)}
+                    onFocus={() => studentSearchResults.length > 0 && setShowSearchDropdown(true)}
+                    onKeyDown={e => {
+                      if (e.key === 'Escape') setShowSearchDropdown(false);
+                    }}
+                    autoComplete="off"
+                  />
+                  {(searchingStudents) && (
+                    <Loader2 className="absolute right-3 top-2.5 h-4 w-4 animate-spin text-slate-400" />
+                  )}
+                  {(!searchingStudents && studentSearch) && (
+                    <button
+                      className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-700"
+                      onClick={clearStudentSearch}
+                      tabIndex={-1}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                {/* Results dropdown */}
+                {showSearchDropdown && (
+                  <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+                    {studentSearchResults.length === 0 ? (
+                      <div className="px-4 py-3 text-sm text-slate-500">No students found</div>
+                    ) : studentSearchResults.map(s => (
+                      <button
+                        key={s.student_id}
+                        className="w-full text-left px-4 py-2.5 hover:bg-slate-50 border-b border-slate-100 last:border-0 focus:bg-slate-50 focus:outline-none"
+                        onClick={() => selectSearchResult(s)}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="font-semibold text-sm text-slate-900">{s.name}</span>
+                            <span className="ml-2 text-xs text-slate-500">{s.class_name}-{s.section}{s.stream ? ` (${s.stream})` : ''}</span>
+                          </div>
+                          <div className="text-right text-xs text-slate-500">
+                            <div>Adm: {s.admission_number || '—'}</div>
+                            <div>Roll: {s.roll_number || '—'}</div>
+                          </div>
+                        </div>
+                      </button>
                     ))}
-                  </SelectContent>
-                </Select>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -635,15 +838,29 @@ const FeesPage = () => {
                       <TableCell className="text-xs text-slate-500">{d.oldest_due || '—'}</TableCell>
                       <TableCell><StatusBadge status={d.fee_status} /></TableCell>
                       <TableCell>
-                        <Button
-                          variant="ghost" size="sm" className="text-xs h-7 px-2"
-                          onClick={() => {
-                            setSelectedStudentId(d.student_id);
-                            setActiveTab('collect');
-                          }}
-                        >
-                          View
-                        </Button>
+                        <div className="flex gap-1">
+                          <Button
+                            variant="ghost" size="sm" className="text-xs h-7 px-2"
+                            onClick={() => {
+                              setSelectedStudentId(d.student_id);
+                              setStudentSearch('');
+                              setActiveTab('collect');
+                            }}
+                          >
+                            View
+                          </Button>
+                          <Button
+                            size="sm" className="text-xs h-7 px-2 bg-slate-900 hover:bg-slate-800 text-white"
+                            onClick={() => {
+                              setSelectedStudentId(d.student_id);
+                              setStudentSearch('');
+                              setActiveTab('collect');
+                            }}
+                          >
+                            <CreditCard className="h-3 w-3 mr-1" />
+                            Collect
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -716,22 +933,50 @@ const FeesPage = () => {
                 </Select>
               </div>
             )}
-            {/* Admin selecting student in "Student View" */}
+            {/* Admin / Accountant: search bar (same as Collect tab) */}
             {isAdmin && (
-              <div className="max-w-sm">
-                <Label className="text-xs font-bold uppercase tracking-wider">Select Student</Label>
-                <Select value={selectedStudentId} onValueChange={setSelectedStudentId}>
-                  <SelectTrigger className="mt-1">
-                    <SelectValue placeholder="Choose a student…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {students.map(s => (
-                      <SelectItem key={s.student_id} value={s.student_id}>
-                        {s.first_name} {s.last_name} ({s.admission_number || 'No Adm#'}) — {s.class_name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="max-w-md relative">
+                <Label className="text-xs font-bold uppercase tracking-wider">Search Student</Label>
+                <div className="relative mt-1">
+                  <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400 pointer-events-none" strokeWidth={1.5} />
+                  <input
+                    type="text"
+                    className="w-full pl-9 pr-9 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-transparent"
+                    placeholder="Search by name, roll number, or admission number…"
+                    value={studentSearch}
+                    onChange={e => handleStudentSearch(e.target.value)}
+                    onFocus={() => studentSearchResults.length > 0 && setShowSearchDropdown(true)}
+                    onKeyDown={e => { if (e.key === 'Escape') setShowSearchDropdown(false); }}
+                    autoComplete="off"
+                  />
+                  {searchingStudents && <Loader2 className="absolute right-3 top-2.5 h-4 w-4 animate-spin text-slate-400" />}
+                  {(!searchingStudents && studentSearch) && (
+                    <button className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-700" onClick={clearStudentSearch} tabIndex={-1}>
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                {showSearchDropdown && (
+                  <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+                    {studentSearchResults.length === 0
+                      ? <div className="px-4 py-3 text-sm text-slate-500">No students found</div>
+                      : studentSearchResults.map(s => (
+                        <button key={s.student_id} className="w-full text-left px-4 py-2.5 hover:bg-slate-50 border-b border-slate-100 last:border-0 focus:bg-slate-50 focus:outline-none" onClick={() => selectSearchResult(s)}>
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="font-semibold text-sm text-slate-900">{s.name}</span>
+                              <span className="ml-2 text-xs text-slate-500">{s.class_name}-{s.section}{s.stream ? ` (${s.stream})` : ''}</span>
+                            </div>
+                            <div className="text-right text-xs text-slate-500">
+                              <div>Adm: {s.admission_number || '—'}</div>
+                              <div>Roll: {s.roll_number || '—'}</div>
+                            </div>
+                          </div>
+                        </button>
+                      ))
+                    }
+                  </div>
+                )}
               </div>
             )}
 
@@ -969,40 +1214,178 @@ const FeesPage = () => {
                   <SelectItem value="cheque">Cheque</SelectItem>
                   <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
                   <SelectItem value="online">Online / UPI</SelectItem>
+                  <SelectItem value="pos_terminal">POS Terminal (Ezetap)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            {payForm.method !== 'cash' && (
+            {payForm.method === 'pos_terminal' ? (
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm text-slate-700">
+                <p className="font-medium flex items-center gap-2"><Smartphone className="h-4 w-4" /> POS Terminal Payment</p>
+                <p className="text-xs text-slate-500 mt-1">Click "Send to POS" below to open the POS terminal dialog.</p>
+              </div>
+            ) : (
+              payForm.method !== 'cash' && (
+                <div>
+                  <Label className="text-xs font-bold uppercase tracking-wider">Transaction ID / Ref No.</Label>
+                  <Input
+                    className="mt-1 h-9 text-sm"
+                    value={payForm.transaction_id}
+                    onChange={e => setPayForm(f => ({ ...f, transaction_id: e.target.value }))}
+                    placeholder="UTR / Cheque no."
+                  />
+                </div>
+              )
+            )}
+            {payForm.method !== 'pos_terminal' && (
               <div>
-                <Label className="text-xs font-bold uppercase tracking-wider">Transaction ID / Ref No.</Label>
+                <Label className="text-xs font-bold uppercase tracking-wider">Remarks</Label>
                 <Input
                   className="mt-1 h-9 text-sm"
-                  value={payForm.transaction_id}
-                  onChange={e => setPayForm(f => ({ ...f, transaction_id: e.target.value }))}
-                  placeholder="UTR / Cheque no."
+                  value={payForm.remarks}
+                  onChange={e => setPayForm(f => ({ ...f, remarks: e.target.value }))}
+                  placeholder="Optional"
                 />
               </div>
             )}
-            <div>
-              <Label className="text-xs font-bold uppercase tracking-wider">Remarks</Label>
-              <Input
-                className="mt-1 h-9 text-sm"
-                value={payForm.remarks}
-                onChange={e => setPayForm(f => ({ ...f, remarks: e.target.value }))}
-                placeholder="Optional"
-              />
-            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowPayDialog(false)}>Cancel</Button>
-            <Button
-              onClick={paySelected}
-              disabled={processingPayment}
-              className="bg-slate-900 hover:bg-slate-800 text-white"
-            >
-              {processingPayment ? <Loader2 className="h-3 w-3 mr-2 animate-spin" /> : <CreditCard className="h-3 w-3 mr-2" />}
-              Record Payment
-            </Button>
+            {payForm.method === 'pos_terminal' ? (
+              <Button
+                onClick={() => { setShowPayDialog(false); openPosDialog(); }}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white"
+              >
+                <Smartphone className="h-3 w-3 mr-2" />
+                Send to POS
+              </Button>
+            ) : (
+              <Button
+                onClick={paySelected}
+                disabled={processingPayment}
+                className="bg-slate-900 hover:bg-slate-800 text-white"
+              >
+                {processingPayment ? <Loader2 className="h-3 w-3 mr-2 animate-spin" /> : <CreditCard className="h-3 w-3 mr-2" />}
+                Record Payment
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* POS Terminal Dialog */}
+      <Dialog open={showPosDialog} onOpenChange={v => { if (!v) stopPosPolling(); setShowPosDialog(v); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Smartphone className="h-5 w-5 text-indigo-600" />
+              POS Terminal Payment
+            </DialogTitle>
+            <DialogDescription>
+              Sends payment request to your Ezetap card/UPI terminal.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-3 space-y-4">
+            {posStatus === 'idle' && (
+              <>
+                <div>
+                  <Label className="text-xs font-bold uppercase tracking-wider">Device ID *</Label>
+                  <Input
+                    className="mt-1 h-9 text-sm font-mono"
+                    value={posForm.device_id}
+                    onChange={e => setPosForm(f => ({ ...f, device_id: e.target.value }))}
+                    placeholder="e.g. 10200000001"
+                  />
+                  <p className="text-xs text-slate-500 mt-1">Printed on the back of the Ezetap device.</p>
+                </div>
+                <div>
+                  <Label className="text-xs font-bold uppercase tracking-wider">Payment Mode</Label>
+                  <Select value={posForm.mode} onValueChange={v => setPosForm(f => ({ ...f, mode: v }))}>
+                    <SelectTrigger className="mt-1 h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ALL">All modes</SelectItem>
+                      <SelectItem value="CARD">Card only</SelectItem>
+                      <SelectItem value="UPI">UPI only</SelectItem>
+                      <SelectItem value="BHARATQR">BharatQR</SelectItem>
+                      <SelectItem value="CASH">Cash (via POS)</SelectItem>
+                      <SelectItem value="CHEQUE">Cheque (via POS)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            )}
+
+            {posStatus === 'polling' && (
+              <div className="flex flex-col items-center py-4 gap-4">
+                <div className="relative">
+                  <Wifi className="h-12 w-12 text-indigo-500" />
+                  <Loader2 className="absolute -bottom-1 -right-1 h-5 w-5 animate-spin text-indigo-600" />
+                </div>
+                <p className="text-sm font-medium text-slate-700 text-center">{posMessage}</p>
+                <div className="flex gap-2 text-xs text-slate-500">
+                  <span className="inline-flex items-center gap-1 bg-indigo-50 px-2 py-1 rounded-full text-indigo-700">
+                    <span className="h-1.5 w-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                    Checking every 3 seconds…
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {posStatus === 'success' && (
+              <div className="flex flex-col items-center py-4 gap-3">
+                <CheckCircle2 className="h-12 w-12 text-emerald-500" />
+                <p className="text-sm font-semibold text-emerald-700">{posMessage}</p>
+                {posReceipt && (
+                  <p className="text-xs text-slate-500">Receipt: <strong>{posReceipt}</strong></p>
+                )}
+                {posPaymentId && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-xs"
+                    onClick={() => downloadReceipt(posPaymentId)}
+                  >
+                    <Download className="h-3 w-3 mr-1.5" />
+                    Download Receipt
+                  </Button>
+                )}
+              </div>
+            )}
+
+            {(posStatus === 'failed' || posStatus === 'cancelled') && (
+              <div className="flex flex-col items-center py-4 gap-3">
+                <WifiOff className="h-12 w-12 text-red-400" />
+                <p className="text-sm font-medium text-red-600 text-center">{posMessage}</p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            {posStatus === 'idle' && (
+              <>
+                <Button variant="outline" onClick={() => setShowPosDialog(false)}>Cancel</Button>
+                <Button onClick={initiatePosPayment} className="bg-indigo-600 hover:bg-indigo-700 text-white">
+                  <Smartphone className="h-3 w-3 mr-2" />
+                  Send to POS
+                </Button>
+              </>
+            )}
+            {posStatus === 'polling' && (
+              <Button variant="destructive" onClick={cancelPosPayment}>
+                <XCircle className="h-3 w-3 mr-2" />
+                Cancel Transaction
+              </Button>
+            )}
+            {(posStatus === 'success' || posStatus === 'failed' || posStatus === 'cancelled') && (
+              <Button onClick={() => { stopPosPolling(); setShowPosDialog(false); }}>
+                Close
+              </Button>
+            )}
+            {(posStatus === 'failed') && (
+              <Button variant="outline" onClick={() => { setPosStatus('idle'); setPosOrderId(null); }}>
+                Retry
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1140,20 +1523,30 @@ const LedgerView = ({
 
   const { student, summary, ledger: grouped, payments } = ledger;
 
+  const allEntries = [
+    ...(grouped.one_time || []),
+    ...(grouped.yearly  || []),
+    ...(grouped.monthly || []),
+  ];
+
+  const payableEntries   = allEntries.filter(e => ['pending', 'overdue', 'partially_paid'].includes(e.status));
+  const overdueEntries   = allEntries.filter(e => e.status === 'overdue');
+
   const hasAdmissionPending = (
     (grouped.one_time || []).some(e => e.status === 'pending') ||
-    (grouped.yearly || []).some(e => e.status === 'pending')
+    (grouped.yearly   || []).some(e => e.status === 'pending')
   );
 
-  const toggleLedgerId = (id) => {
-    setPayLedgerIds(prev =>
-      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-    );
-  };
+  const toggleLedgerId = (id) =>
+    setPayLedgerIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
-  const selectedTotal = [...(grouped.one_time || []), ...(grouped.yearly || []), ...(grouped.monthly || [])]
+  const selectAll     = () => setPayLedgerIds(payableEntries.map(e => e.ledger_id));
+  const selectOverdue = () => setPayLedgerIds(overdueEntries.map(e => e.ledger_id));
+  const clearAll      = () => setPayLedgerIds([]);
+
+  const selectedTotal = allEntries
     .filter(e => payLedgerIds.includes(e.ledger_id))
-    .reduce((s, e) => s + e.net_amount, 0);
+    .reduce((s, e) => s + (e.remaining_balance > 0 ? e.remaining_balance : e.net_amount), 0);
 
   return (
     <div className="space-y-4">
@@ -1204,66 +1597,132 @@ const LedgerView = ({
             <StatusBadge status={student.fee_status} />
           </div>
 
-          {/* Admin actions */}
+          {/* ── Admin / Accountant: Collect Payment ───────────────────────── */}
           {isAdmin && !readOnly && (
-            <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-slate-100">
-              {hasAdmissionPending && (
-                <Button
-                  size="sm"
-                  className="bg-slate-900 hover:bg-slate-800 text-white text-xs h-8"
-                  onClick={onPayAdmission}
-                >
-                  <CreditCard className="h-3 w-3 mr-1.5" />
-                  Collect Admission Fee
-                </Button>
+            <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
+
+              {/* Quick-select row */}
+              {payableEntries.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Quick select:</span>
+                  <button
+                    onClick={selectAll}
+                    className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium transition"
+                  >
+                    All due ({payableEntries.length})
+                  </button>
+                  {overdueEntries.length > 0 && (
+                    <button
+                      onClick={selectOverdue}
+                      className="text-xs px-2.5 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 font-medium transition"
+                    >
+                      Overdue only ({overdueEntries.length})
+                    </button>
+                  )}
+                  {payLedgerIds.length > 0 && (
+                    <button onClick={clearAll} className="text-xs px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-400 font-medium transition">
+                      Clear
+                    </button>
+                  )}
+                </div>
               )}
-              {payLedgerIds.length > 0 && (
-                <>
+
+              {/* Action buttons */}
+              <div className="flex flex-wrap items-center gap-2">
+                {hasAdmissionPending && (
                   <Button
                     size="sm"
-                    className="bg-slate-900 hover:bg-slate-800 text-white text-xs h-8"
-                    onClick={onPaySelected}
+                    variant="outline"
+                    className="text-xs h-9 border-slate-300"
+                    onClick={onPayAdmission}
                   >
                     <CreditCard className="h-3 w-3 mr-1.5" />
-                    Record Cash/Offline ({fmt(selectedTotal)})
+                    Collect Admission Fee
                   </Button>
-                  <RazorpayCheckout
-                    studentId={studentId}
-                    ledgerIds={payLedgerIds}
-                    onSuccess={onRazorpaySuccess}
-                    onCancel={() => {}}
-                  >
-                    <CreditCard className="h-3 w-3 mr-1.5" />
-                    Pay Online ({fmt(selectedTotal)})
-                  </RazorpayCheckout>
-                </>
-              )}
+                )}
+
+                {payLedgerIds.length > 0 ? (
+                  <>
+                    <Button
+                      size="sm"
+                      className="bg-slate-900 hover:bg-slate-800 text-white text-xs h-9"
+                      onClick={onPaySelected}
+                    >
+                      <CreditCard className="h-3 w-3 mr-1.5" />
+                      Collect Cash / Offline — {fmt(selectedTotal)}
+                    </Button>
+                    <RazorpayCheckout
+                      studentId={studentId}
+                      ledgerIds={payLedgerIds}
+                      onSuccess={onRazorpaySuccess}
+                      onCancel={() => {}}
+                    >
+                      <CreditCard className="h-3 w-3 mr-1.5" />
+                      Collect via Razorpay — {fmt(selectedTotal)}
+                    </RazorpayCheckout>
+                  </>
+                ) : payableEntries.length > 0 ? (
+                  <p className="text-xs text-slate-400 italic">
+                    ↑ Tick entries above or use quick-select to collect payment
+                  </p>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> All fees paid
+                  </span>
+                )}
+              </div>
             </div>
           )}
 
-          {/* Parent / Student: Pay Online */}
-          {readOnly && summary.total_pending > 0 && (
-            <div className="mt-4 pt-3 border-t border-slate-100">
-              <p className="text-xs text-slate-500 mb-2">
-                Select entries below and pay online instantly via Razorpay.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {payLedgerIds.length > 0 ? (
-                  <RazorpayCheckout
-                    studentId={studentId}
-                    ledgerIds={payLedgerIds}
-                    onSuccess={onRazorpaySuccess}
-                    onCancel={() => {}}
-                  >
-                    <CreditCard className="h-4 w-4 mr-1.5" />
-                    Pay Selected {fmt(selectedTotal)} Online
-                  </RazorpayCheckout>
-                ) : (
-                  <p className="text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-md border border-amber-200">
-                    Select fee entries below to pay online
-                  </p>
-                )}
-              </div>
+          {/* ── Parent / Student: Pay Online ──────────────────────────────── */}
+          {readOnly && (
+            <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
+              {payableEntries.length > 0 ? (
+                <>
+                  {/* Quick-select */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Pay:</span>
+                    <button
+                      onClick={selectAll}
+                      className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium transition"
+                    >
+                      All due ({payableEntries.length} entries — {fmt(payableEntries.reduce((s, e) => s + (e.remaining_balance > 0 ? e.remaining_balance : e.net_amount), 0))})
+                    </button>
+                    {overdueEntries.length > 0 && (
+                      <button
+                        onClick={selectOverdue}
+                        className="text-xs px-2.5 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 font-medium transition"
+                      >
+                        Overdue only ({overdueEntries.length})
+                      </button>
+                    )}
+                    {payLedgerIds.length > 0 && (
+                      <button onClick={clearAll} className="text-xs text-slate-400 underline">Clear</button>
+                    )}
+                  </div>
+
+                  {/* Pay button */}
+                  {payLedgerIds.length > 0 ? (
+                    <RazorpayCheckout
+                      studentId={studentId}
+                      ledgerIds={payLedgerIds}
+                      onSuccess={onRazorpaySuccess}
+                      onCancel={() => {}}
+                    >
+                      <CreditCard className="h-4 w-4 mr-2" />
+                      Pay {fmt(selectedTotal)} Online — Razorpay
+                    </RazorpayCheckout>
+                  ) : (
+                    <p className="text-xs text-slate-400 italic">
+                      ↑ Click "All due" above or tick entries below to pay
+                    </p>
+                  )}
+                </>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> No pending fees — you're all clear!
+                </span>
+              )}
             </div>
           )}
         </CardContent>

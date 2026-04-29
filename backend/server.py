@@ -48,6 +48,8 @@ from routes.settings import router as settings_router
 from routes.razorpay_payments import router as razorpay_router
 from routes.payroll import router as payroll_router
 from routes.admin import router as admin_router
+from routes.pos_payments import router as pos_router
+from routes.voice_notes import router as voice_notes_router
 from middleware.rate_limiter import RateLimitMiddleware
 from middleware.rbac import RBACEnforcementMiddleware
 
@@ -58,7 +60,7 @@ for router in [
     syllabus_router, issues_router, classes_router, onboarding_router,
     reports_router, payments_router, notifications_router, utilities_router,
     upgradation_router, settings_router, razorpay_router, payroll_router,
-    admin_router,
+    admin_router, pos_router, voice_notes_router,
 ]:
     app.include_router(router, prefix="/api")
 
@@ -159,8 +161,36 @@ app.add_middleware(
 )
 
 
+def _validate_env():
+    """
+    Fail fast at boot: check every required env var is non-empty.
+    Raises RuntimeError with a list of all missing vars so operators fix
+    all problems in one restart rather than one-at-a-time.
+    """
+    required = {
+        "MONGO_URL":        "MongoDB connection string",
+        "DB_NAME":          "MongoDB database name",
+        "JWT_SECRET":       "HS256 signing secret for access tokens",
+    }
+    # Ezetap POS is required only when the feature is enabled
+    if os.environ.get("EZETAP_ENABLED", "true").lower() != "false":
+        required.update({
+            "EZETAP_USERNAME": "Ezetap API username (not the web-portal login)",
+            "EZETAP_APP_KEY":  "Ezetap App Key from merchant dashboard",
+        })
+
+    missing = [f"  {var}  ({desc})" for var, desc in required.items() if not os.environ.get(var)]
+    if missing:
+        raise RuntimeError(
+            "Missing required environment variables — server cannot start:\n"
+            + "\n".join(missing)
+            + "\n\nCopy backend/.env.example to backend/.env and fill in the values."
+        )
+
+
 @app.on_event("startup")
 async def startup_event():
+    _validate_env()
     from db_init import create_indexes
     from job_queue import recover_stale_jobs, start_worker
     await create_indexes(db)

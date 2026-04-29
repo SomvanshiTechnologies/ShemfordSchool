@@ -1,10 +1,22 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from typing import Optional
 from datetime import datetime, timezone
+from pathlib import Path
+import os
+import uuid
 
 from database import db
-from models import UserRole, Announcement
+from models import UserRole, Announcement, VoiceNote
 from auth_utils import get_current_user, require_roles
+
+VOICE_NOTES_DIR = Path(__file__).parent.parent / "uploads" / "voice_notes"
+VOICE_NOTES_DIR.mkdir(parents=True, exist_ok=True)
+
+ALLOWED_AUDIO_MIME = {
+    "audio/webm", "audio/ogg", "audio/mp4", "audio/x-m4a",
+    "audio/mpeg", "audio/wav", "audio/aac",
+}
+MAX_VOICE_NOTE_BYTES = 5 * 1024 * 1024  # 5 MB
 
 router = APIRouter()
 
@@ -102,3 +114,65 @@ async def delete_announcement(announcement_id: str, request: Request):
         }}
     )
     return {"message": "Announcement deleted", "announcement_id": announcement_id}
+
+
+@router.post("/announcements/{announcement_id}/voice-note")
+async def attach_voice_note_to_announcement(
+    announcement_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    duration_seconds: Optional[float] = Form(None),
+):
+    """
+    Attach a voice note audio file to an existing announcement.
+    Roles: admin, teacher. Max 5 MB. Accepted: webm/ogg/mp4/m4a/mpeg/wav/aac.
+    """
+    user = await require_roles(UserRole.ADMIN, UserRole.TEACHER)(request)
+
+    ann = await db.announcements.find_one({"announcement_id": announcement_id}, {"_id": 0})
+    if not ann:
+        raise HTTPException(status_code=404, detail="Announcement not found.")
+
+    # Validate MIME type from Content-Type header (never trust filename alone)
+    content_type = file.content_type or ""
+    if content_type not in ALLOWED_AUDIO_MIME:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported audio type '{content_type}'. Accepted: webm, ogg, mp4, m4a, mpeg, wav, aac."
+        )
+
+    data = await file.read()
+    if len(data) > MAX_VOICE_NOTE_BYTES:
+        raise HTTPException(status_code=413, detail="Voice note exceeds 5 MB limit.")
+    if len(data) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    ext = content_type.split("/")[-1].replace("x-", "").replace("mpeg", "mp3")
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    file_path = VOICE_NOTES_DIR / filename
+    file_path.write_bytes(data)
+
+    vn = VoiceNote(
+        entity_type="announcement",
+        entity_id=announcement_id,
+        uploaded_by=user["user_id"],
+        file_path=f"uploads/voice_notes/{filename}",
+        file_size=len(data),
+        duration_seconds=duration_seconds,
+        mime_type=content_type,
+    )
+    vn_dict = vn.model_dump()
+    vn_dict["created_at"] = vn_dict["created_at"].isoformat()
+    await db.voice_notes.insert_one(vn_dict)
+
+    await db.announcements.update_one(
+        {"announcement_id": announcement_id},
+        {"$set": {"voice_note_id": vn.voice_note_id}}
+    )
+
+    return {
+        "voice_note_id": vn.voice_note_id,
+        "url": f"/api/media/voice-notes/{vn.voice_note_id}",
+        "file_size": len(data),
+        "mime_type": content_type,
+    }

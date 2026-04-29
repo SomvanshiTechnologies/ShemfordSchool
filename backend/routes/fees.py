@@ -1500,3 +1500,66 @@ async def get_fee_structures(request: Request, class_name: Optional[str] = None)
     if class_name:
         q["class_name"] = class_name
     return await db.fee_component_configs.find(q, {"_id": 0}).sort("class_name", 1).to_list(500)
+
+
+# ─── Student Search (for Collect Fees tab search bar) ─────────────────────────
+
+@router.get("/fees/search-students")
+async def search_students_for_fees(
+    request: Request,
+    q: str = "",
+    academic_year: Optional[str] = None,
+):
+    """
+    Search students by name, roll number, or admission number.
+    Used by the fee collection search bar. Returns up to 10 results.
+    Roles: admin, accountant, teacher.
+    """
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT, UserRole.TEACHER)(request)
+
+    if not q or len(q.strip()) < 1:
+        return []
+
+    escaped = re.escape(q.strip())
+
+    query: dict = {
+        "is_active": True,
+        "$or": [
+            {"first_name": {"$regex": escaped, "$options": "i"}},
+            {"last_name": {"$regex": escaped, "$options": "i"}},
+            {"roll_number": {"$regex": escaped, "$options": "i"}},
+            {"admission_number": {"$regex": escaped, "$options": "i"}},
+        ],
+    }
+    if academic_year:
+        query["academic_year"] = academic_year
+
+    students = await db.students.find(
+        query,
+        {
+            "_id": 0,
+            "student_id": 1,
+            "first_name": 1,
+            "last_name": 1,
+            "admission_number": 1,
+            "roll_number": 1,
+            "class_name": 1,
+            "section": 1,
+            "stream": 1,
+            "fee_status": 1,
+        },
+    ).limit(10).to_list(10)
+
+    return [
+        {
+            "student_id": s["student_id"],
+            "name": f"{s['first_name']} {s['last_name']}",
+            "admission_number": s.get("admission_number", ""),
+            "roll_number": s.get("roll_number", ""),
+            "class_name": s.get("class_name", ""),
+            "section": s.get("section", ""),
+            "stream": s.get("stream"),
+            "fee_status": s.get("fee_status", "pending"),
+        }
+        for s in students
+    ]

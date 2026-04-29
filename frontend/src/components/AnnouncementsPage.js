@@ -26,6 +26,7 @@ import {
 import { toast } from 'sonner';
 import { Plus, Bell, Search, Megaphone, Loader2, X } from 'lucide-react';
 import { formatDateTime } from '../lib/utils';
+import { VoiceNotePlayer, VoiceNoteRecorder, useVoiceRecorder } from './VoiceNote';
 
 const AnnouncementsPage = () => {
   const { isAdmin, isTeacher } = useAuth();
@@ -42,6 +43,7 @@ const AnnouncementsPage = () => {
     target_value: '',
     priority: 'normal'
   });
+  const voice = useVoiceRecorder();
 
   useEffect(() => {
     fetchData();
@@ -66,16 +68,27 @@ const AnnouncementsPage = () => {
     e.preventDefault();
     setPosting(true);
     try {
-      await api.post('/announcements', formData);
+      const annRes = await api.post('/announcements', formData);
+      const annId = annRes.data.announcement_id;
+
+      // Upload voice note if recorded
+      if (voice.audioBlob && annId) {
+        try {
+          const fd = new FormData();
+          fd.append('file', voice.audioBlob, 'voice_note.webm');
+          if (voice.duration) fd.append('duration_seconds', voice.duration);
+          await api.post(`/announcements/${annId}/voice-note`, fd, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          });
+        } catch {
+          toast.error('Announcement posted, but voice note failed to upload.');
+        }
+      }
+
       toast.success('Announcement posted');
       setShowAddDialog(false);
-      setFormData({
-        title: '',
-        content: '',
-        target_type: 'all',
-        target_value: '',
-        priority: 'normal'
-      });
+      voice.discard();
+      setFormData({ title: '', content: '', target_type: 'all', target_value: '', priority: 'normal' });
       fetchData();
     } catch (error) {
       toast.error('Failed to post announcement');
@@ -219,10 +232,11 @@ const AnnouncementsPage = () => {
                       </Select>
                     </div>
                   )}
+                  <VoiceNoteRecorder voice={voice} />
                 </div>
                 <DialogFooter>
                   <Button type="button" variant="outline" onClick={() => setShowAddDialog(false)}>Cancel</Button>
-                  <Button type="submit" disabled={posting} data-testid="submit-announcement-btn">
+                  <Button type="submit" disabled={posting || voice.recording} data-testid="submit-announcement-btn">
                     {posting ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Posting...</> : 'Post Announcement'}
                   </Button>
                 </DialogFooter>
@@ -284,7 +298,13 @@ const AnnouncementsPage = () => {
               </CardHeader>
               <CardContent>
                 <p className="text-muted-foreground mb-4 whitespace-pre-wrap">{announcement.content}</p>
-                <p className="text-xs text-muted-foreground">
+                {announcement.voice_note_id && (
+                  <VoiceNotePlayer
+                    url={`/api/media/voice-notes/${announcement.voice_note_id}`}
+                    mimeType="audio/webm"
+                  />
+                )}
+                <p className="text-xs text-muted-foreground mt-3">
                   Posted on {formatDateTime(announcement.created_at)}
                 </p>
               </CardContent>

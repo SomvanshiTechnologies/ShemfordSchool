@@ -61,8 +61,15 @@ async def create_indexes(db):
         db.fee_payments.create_index([("payment_id", ASCENDING)], unique=True, background=True),
         db.fee_payments.create_index([("student_id", ASCENDING), ("payment_date", DESCENDING)], background=True),
         db.fee_payments.create_index([("receipt_number", ASCENDING)], unique=True, sparse=True, background=True),
-        # Idempotency: one Razorpay/Stripe payment_id can only ever produce one fee_payment record
-        db.fee_payments.create_index([("transaction_id", ASCENDING)], unique=True, sparse=True, background=True),
+        # Idempotency: one Razorpay/Stripe payment_id can only ever produce one fee_payment record.
+        # partialFilterExpression excludes both missing AND explicit-null transaction_ids so that
+        # cash payments (no txn id) never cause duplicate-key errors.
+        db.fee_payments.create_index(
+            [("transaction_id", ASCENDING)],
+            unique=True,
+            partialFilterExpression={"transaction_id": {"$type": "string"}},
+            background=True,
+        ),
         db.fee_payments.create_index([("payment_date", DESCENDING)], background=True),
         db.fee_payments.create_index([("academic_year", ASCENDING), ("payment_date", DESCENDING)], background=True),
 
@@ -198,6 +205,20 @@ async def create_indexes(db):
         db.refresh_tokens.create_index([("user_id", ASCENDING), ("is_revoked", ASCENDING)], background=True),
         # TTL: auto-delete expired refresh tokens
         db.refresh_tokens.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0, background=True),
+
+        # ── pos_orders (Ezetap POS payments) ─────────────────────────────────
+        db.pos_orders.create_index([("pos_order_id", ASCENDING)], unique=True, background=True),
+        db.pos_orders.create_index([("p2p_request_id", ASCENDING)], sparse=True, background=True),
+        db.pos_orders.create_index([("student_id", ASCENDING), ("status", ASCENDING), ("created_at", DESCENDING)], background=True),
+
+        # ── pos_devices (registered Ezetap terminal whitelist) ────────────────
+        db.pos_devices.create_index([("device_id", ASCENDING)], unique=True, background=True),
+        db.pos_devices.create_index([("is_active", ASCENDING)], background=True),
+
+        # ── voice_notes ───────────────────────────────────────────────────────
+        db.voice_notes.create_index([("voice_note_id", ASCENDING)], unique=True, background=True),
+        db.voice_notes.create_index([("entity_type", ASCENDING), ("entity_id", ASCENDING)], background=True),
+        db.voice_notes.create_index([("uploaded_by", ASCENDING), ("created_at", DESCENDING)], background=True),
     ]
 
     results = await asyncio.gather(*idx_tasks, return_exceptions=True)
