@@ -277,6 +277,18 @@ async def seed_employees(teacher_user_id):
     print(f"  Employees: {len(docs)}")
     return teacher_ids
 
+_used_admission_nos: set[str] = set()
+
+
+def _unique_admission_no() -> str:
+    """Generate a SHM/2025/XXXX admission number guaranteed unique within this seed run."""
+    while True:
+        candidate = f"SHM/2025/{random.randint(1000, 99999)}"
+        if candidate not in _used_admission_nos:
+            _used_admission_nos.add(candidate)
+            return candidate
+
+
 async def seed_students_and_fees(classes, teacher_ids):
     """
     Create students with Indian names, parent user accounts, legacy fee
@@ -347,7 +359,7 @@ async def seed_students_and_fees(classes, teacher_ids):
                     gender = random.choice(["Male", "Female"])
                     first, last = rand_name(gender)
                     student_id   = f"STU2025{uuid.uuid4().hex[:6].upper()}"
-                    admission_no = f"SHM/2025/{random.randint(1000, 9999)}"
+                    admission_no = _unique_admission_no()
                     student_phone = rand_phone()
                     student_email = f"{first.lower()}.{last.lower()}{random.randint(1,99)}@shemford.edu"
                     student_user_id = uid("user")
@@ -625,6 +637,10 @@ async def seed_students_and_fees(classes, teacher_ids):
             max_roll_by_key[key] = roll_val
 
     if max_roll_by_key:
+        # Re-drop just before insert in case the running backend has been
+        # upserting roll counters via the New Admission endpoint while we were
+        # building student docs (routes/students.py::get_next_roll_number).
+        await db.counters.drop()
         counter_docs = [{"_id": k, "seq": v} for k, v in max_roll_by_key.items()]
         await db.counters.insert_many(counter_docs)
         print(f"  Roll counters:     {len(counter_docs)}  (class-section keys)")

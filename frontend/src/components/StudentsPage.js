@@ -57,7 +57,7 @@ const REQUIRED_DOCUMENTS = [
 const STREAMS_FOR_CLASS = ['11th', '12th'];
 
 const StudentsPage = () => {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, isAccountant } = useAuth();
   const [searchParams] = useSearchParams();
   const [students, setStudents] = useState([]);
   const [classes, setClasses] = useState([]);
@@ -511,9 +511,10 @@ const StudentsPage = () => {
           <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Students</h1>
           <p className="text-muted-foreground">Manage student admissions and records</p>
         </div>
-        {isAdmin && (
+        {(isAdmin || isAccountant) && (
           <div className="flex gap-2 flex-wrap">
-            {/* ── CSV Import Wizard ────────────────────────────────────────── */}
+            {/* ── CSV Import Wizard (admin only) ───────────────────────────── */}
+            {isAdmin && (
             <Dialog open={showUploadDialog} onOpenChange={(open) => { setShowUploadDialog(open); if (!open) resetCsvWizard(); }}>
               <DialogTrigger asChild>
                 <Button variant="outline" data-testid="bulk-upload-btn"><Upload className="h-4 w-4 mr-2" />Bulk Import</Button>
@@ -747,6 +748,7 @@ const StudentsPage = () => {
 
               </DialogContent>
             </Dialog>
+            )}
             {/* ── End CSV Import Wizard ──────────────────────────────────── */}
 
             <Button data-testid="onboard-student-btn" onClick={() => { resetOnboarding(); setShowOnboarding(true); }}>
@@ -798,7 +800,7 @@ const StudentsPage = () => {
           ) : filteredStudents.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
               <GraduationCap className="h-12 w-12 mb-4" /><p>No students found</p>
-              {isAdmin && <Button variant="link" onClick={() => { resetOnboarding(); setShowOnboarding(true); }}>Start new admission</Button>}
+              {(isAdmin || isAccountant) && <Button variant="link" onClick={() => { resetOnboarding(); setShowOnboarding(true); }}>Start new admission</Button>}
             </div>
           ) : (
             <Table>

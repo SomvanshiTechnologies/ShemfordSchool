@@ -631,5 +631,5 @@ async def deactivate_pos_device(device_id: str, request: Request):
     )
     if not result.matched_count:
         raise HTTPException(status_code=404, detail="Device not found.")
-    await create_audit_log("pos_device", device_id, "DEACTIVATE", {}, user)
+    await create_audit_log("pos_device", device_id, "deactivate", {"device_id": device_id}, user)
     return {"message": f"Device '{device_id}' deactivated."}

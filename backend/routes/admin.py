@@ -7,8 +7,9 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from database import db
 from models import UserRole
@@ -174,4 +175,148 @@ async def get_job_queue_stats(request: Request):
         "by_status":      by_status,
         "stale_running":  stale_running,
         "recent_failed":  recent_failed,
+    }
+
+
+# ── Audit Trail (deletion log + restore) ──────────────────────────────────────
+
+# Entity types that support restore via flipping is_active back to True.
+# Maps entity_type (as stored in audit_logs) → (collection_name, id_field).
+_RESTORABLE_ENTITIES = {
+    "student":      ("students",      "student_id"),
+    "employee":     ("employees",     "employee_id"),
+    "holiday":      ("holidays",      "holiday_id"),
+    "announcement": ("announcements", "announcement_id"),
+    "pos_device":   ("pos_devices",   "device_id"),
+}
+
+
+@router.get("/admin/audit-trail")
+async def list_audit_trail(
+    request: Request,
+    only_non_admin: bool = Query(True, description="If true, hide deletions performed by admins"),
+    include_restored: bool = Query(False, description="If true, include already-restored entries"),
+    entity_type: Optional[str] = Query(None, description="Filter by entity type"),
+    limit: int = Query(200, ge=1, le=1000),
+):
+    """
+    List deletion (deactivate) events from audit_logs, with optional filters.
+    Used by the admin Audit Trails tab to show 'who deleted what' and offer restore.
+    """
+    await require_roles(UserRole.ADMIN)(request)
+
+    query: dict = {"action": "deactivate"}
+    if only_non_admin:
+        query["performed_by_role"] = {"$ne": "admin"}
+    if not include_restored:
+        query["restored_at"] = None
+    if entity_type:
+        query["entity_type"] = entity_type
+
+    entries = (
+        await db.audit_logs.find(query, {"_id": 0})
+        .sort("created_at", -1)
+        .limit(limit)
+        .to_list(limit)
+    )
+    return {
+        "count": len(entries),
+        "entries": entries,
+        "restorable_entity_types": sorted(_RESTORABLE_ENTITIES.keys()),
+    }
+
+
+@router.post("/admin/audit-trail/{log_id}/restore")
+async def restore_from_audit_trail(log_id: str, request: Request):
+    """
+    Restore a soft-deleted entity referenced by an audit log entry.
+    Admin only. Idempotent failure if the entry was already restored or the
+    underlying record no longer exists.
+    """
+    user = await require_roles(UserRole.ADMIN)(request)
+
+    log = await db.audit_logs.find_one({"log_id": log_id}, {"_id": 0})
+    if not log:
+        raise HTTPException(status_code=404, detail="Audit log entry not found")
+    if log.get("action") != "deactivate":
+        raise HTTPException(status_code=400, detail="Only deactivate entries can be restored")
+    if log.get("restored_at"):
+        raise HTTPException(status_code=400, detail="Entry already restored")
+
+    entity_type = log.get("entity_type")
+    mapping = _RESTORABLE_ENTITIES.get(entity_type)
+    if not mapping:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Restore not supported for entity_type '{entity_type}'",
+        )
+    collection_name, id_field = mapping
+    entity_id = log["entity_id"]
+
+    doc = await db[collection_name].find_one({id_field: entity_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"{entity_type} '{entity_id}' no longer exists — cannot restore",
+        )
+    if doc.get("is_active", True):
+        # Already active — mark log as restored anyway so it stops cluttering the list
+        await db.audit_logs.update_one(
+            {"log_id": log_id},
+            {"$set": {
+                "restored_at": datetime.now(timezone.utc).isoformat(),
+                "restored_by": user["user_id"],
+                "restored_by_name": user.get("name", ""),
+            }},
+        )
+        return {"message": f"{entity_type} was already active", "entity_id": entity_id}
+
+    update_doc = {
+        "is_active": True,
+        "restored_at": datetime.now(timezone.utc).isoformat(),
+        "restored_by": user["user_id"],
+    }
+    # Mirror the un-deactivation: clear the deactivation marker so it doesn't look stale.
+    unset_doc = {"deactivated_at": "", "deleted_at": "", "deleted_by": ""}
+    await db[collection_name].update_one(
+        {id_field: entity_id},
+        {"$set": update_doc, "$unset": unset_doc},
+    )
+
+    # For student/employee, the linked user account was also deactivated — re-enable it.
+    if entity_type == "student":
+        if doc.get("email"):
+            await db.users.update_one(
+                {"email": doc["email"], "role": "student"},
+                {"$set": {"is_active": True}},
+            )
+        if doc.get("user_id"):
+            await db.users.update_one(
+                {"user_id": doc["user_id"]},
+                {"$set": {"is_active": True}},
+            )
+    elif entity_type == "employee":
+        if doc.get("user_id"):
+            await db.users.update_one(
+                {"user_id": doc["user_id"]},
+                {"$set": {"is_active": True}},
+            )
+
+    await db.audit_logs.update_one(
+        {"log_id": log_id},
+        {"$set": {
+            "restored_at": datetime.now(timezone.utc).isoformat(),
+            "restored_by": user["user_id"],
+            "restored_by_name": user.get("name", ""),
+        }},
+    )
+    await create_audit_log(
+        entity_type, entity_id, "restore",
+        {"original_log_id": log_id},
+        user,
+    )
+    return {
+        "message": f"{entity_type} restored",
+        "entity_type": entity_type,
+        "entity_id": entity_id,
     }

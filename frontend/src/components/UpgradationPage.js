@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
-import { ArrowUpCircle, History, Search, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { ArrowUpCircle, History, Search, CheckCircle2, AlertCircle, Loader2, Eye } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -38,6 +38,9 @@ export default function UpgradationPage() {
   const [payTxn, setPayTxn] = useState('');
   const [payRemarks, setPayRemarks] = useState('');
   const [paying, setPaying] = useState(false);
+
+  // View dialog state (history → eye icon)
+  const [viewRow, setViewRow] = useState(null);
 
   // ── History tab state ──────────────────────────────────────────────────────
   const [history, setHistory] = useState([]);
@@ -121,6 +124,8 @@ export default function UpgradationPage() {
       toast.success(res.data.message || 'Payment recorded');
       setShowPayDialog(false);
       setResult(prev => ({ ...prev, upgradation_fee_paid: true, receipt: res.data.receipt_number }));
+      // Refresh history so the row's Fee Status flips from Pending/overdue to Paid
+      loadHistory();
     } catch (e) {
       toast.error('Payment failed: ' + (e.response?.data?.detail || e.message));
     } finally {
@@ -363,6 +368,7 @@ export default function UpgradationPage() {
                     <th className="text-right px-4 py-2.5">Upg. Fee</th>
                     <th className="text-center px-4 py-2.5">Fee Status</th>
                     <th className="text-left px-4 py-2.5">Date</th>
+                    <th className="text-center px-4 py-2.5">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -385,6 +391,39 @@ export default function UpgradationPage() {
                         }
                       </td>
                       <td className="px-4 py-2.5 text-muted-foreground">{r.created_at?.slice(0, 10) || '—'}</td>
+                      <td className="px-4 py-2.5 text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setViewRow(r)}
+                            data-testid={`view-${r.upgradation_id}`}
+                            title="View details"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          {r.upgradation_fee > 0 && !r.upgradation_fee_paid && (
+                            <Button
+                              size="sm"
+                              className="bg-orange-500 hover:bg-orange-600 text-white"
+                              onClick={() => {
+                                setResult({
+                                  student_id: r.student_id,
+                                  upgradation_fee: r.upgradation_fee,
+                                  upgradation_fee_paid: false,
+                                });
+                                setPayMethod('cash');
+                                setPayTxn('');
+                                setPayRemarks('');
+                                setShowPayDialog(true);
+                              }}
+                              data-testid={`collect-${r.upgradation_id}`}
+                            >
+                              Collect Fee
+                            </Button>
+                          )}
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -431,6 +470,72 @@ export default function UpgradationPage() {
                 {paying ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
                 Confirm Payment
               </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── View Details Dialog ─────────────────────────────────────────────── */}
+      {viewRow && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setViewRow(null)}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold mb-4">Upgradation Details</h3>
+            <dl className="space-y-2.5 text-sm">
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">Student</dt>
+                <dd className="font-medium text-right">{viewRow.student_name || viewRow.student_id}</dd>
+              </div>
+              {viewRow.admission_number && (
+                <div className="flex justify-between gap-4">
+                  <dt className="text-muted-foreground">Admission No.</dt>
+                  <dd className="font-medium text-right">{viewRow.admission_number}</dd>
+                </div>
+              )}
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">From</dt>
+                <dd className="font-medium text-right">
+                  {viewRow.from_class} – {viewRow.from_section}{viewRow.from_stream ? ` (${viewRow.from_stream})` : ''}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">To</dt>
+                <dd className="font-medium text-right">
+                  {viewRow.to_class} – {viewRow.to_section}{viewRow.to_stream ? ` (${viewRow.to_stream})` : ''}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">Academic Year</dt>
+                <dd className="font-medium text-right">{viewRow.academic_year}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">Upgradation Fee</dt>
+                <dd className="font-medium text-right">
+                  {viewRow.upgradation_fee > 0 ? `₹${fmt(viewRow.upgradation_fee)}` : '—'}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4 items-center">
+                <dt className="text-muted-foreground">Fee Status</dt>
+                <dd className="text-right">
+                  {viewRow.upgradation_fee > 0
+                    ? viewRow.upgradation_fee_paid
+                      ? <Badge className="bg-green-100 text-green-700">Paid</Badge>
+                      : <Badge variant="destructive">Pending</Badge>
+                    : <span className="text-muted-foreground">—</span>}
+                </dd>
+              </div>
+              {viewRow.notes && (
+                <div className="flex justify-between gap-4">
+                  <dt className="text-muted-foreground">Notes</dt>
+                  <dd className="font-medium text-right">{viewRow.notes}</dd>
+                </div>
+              )}
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">Performed on</dt>
+                <dd className="font-medium text-right">{viewRow.created_at?.slice(0, 10) || '—'}</dd>
+              </div>
+            </dl>
+            <div className="flex justify-end pt-4">
+              <Button variant="outline" onClick={() => setViewRow(null)}>Close</Button>
             </div>
           </div>
         </div>

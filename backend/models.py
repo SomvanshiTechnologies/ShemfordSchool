@@ -668,6 +668,10 @@ class AuditLog(BaseModel):
     changes: Dict[str, Any] = {}
     performed_by: str
     performed_by_name: str = ""
+    performed_by_role: Optional[str] = None
+    restored_at: Optional[str] = None
+    restored_by: Optional[str] = None
+    restored_by_name: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

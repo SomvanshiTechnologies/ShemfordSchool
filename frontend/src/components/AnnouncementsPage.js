@@ -24,12 +24,65 @@ import {
   SelectValue,
 } from './ui/select';
 import { toast } from 'sonner';
-import { Plus, Bell, Search, Megaphone, Loader2, X } from 'lucide-react';
+import { Plus, Bell, Search, Megaphone, Loader2, X, Trash2, Pencil } from 'lucide-react';
 import { formatDateTime } from '../lib/utils';
 import { VoiceNotePlayer, VoiceNoteRecorder, useVoiceRecorder } from './VoiceNote';
 
 const AnnouncementsPage = () => {
-  const { isAdmin, isTeacher } = useAuth();
+  const { user, isAdmin, isTeacher } = useAuth();
+  const [deleting, setDeleting] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [editTarget, setEditTarget] = useState(null);
+  const [editForm, setEditForm] = useState({ title: '', content: '', priority: 'normal', target_type: 'all', target_value: '' });
+  const [editing, setEditing] = useState(false);
+
+  const openEdit = (a) => {
+    setEditTarget(a);
+    setEditForm({
+      title: a.title || '',
+      content: a.content || '',
+      priority: a.priority || 'normal',
+      target_type: a.target_type || 'all',
+      target_value: a.target_value || '',
+    });
+  };
+
+  const handleEditSave = async () => {
+    if (!editTarget) return;
+    if (!editForm.title.trim() || !editForm.content.trim()) {
+      toast.error('Title and content are required');
+      return;
+    }
+    setEditing(true);
+    try {
+      const payload = { ...editForm };
+      if (payload.target_type === 'all') payload.target_value = null;
+      await api.put(`/announcements/${editTarget.announcement_id}`, payload);
+      toast.success('Announcement updated');
+      setEditTarget(null);
+      fetchData();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to update');
+    } finally {
+      setEditing(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(deleteTarget.announcement_id);
+    try {
+      await api.delete(`/announcements/${deleteTarget.announcement_id}`);
+      toast.success('Announcement deleted');
+      setDeleteTarget(null);
+      fetchData();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to delete');
+    } finally {
+      setDeleting(null);
+    }
+  };
+
   const [announcements, setAnnouncements] = useState([]);
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -293,6 +346,30 @@ const AnnouncementsPage = () => {
                   <div className="flex items-center gap-2">
                     {getPriorityBadge(announcement.priority)}
                     <Badge variant="outline">{getTargetLabel(announcement.target_type, announcement.target_value)}</Badge>
+                    {(isAdmin || isTeacher) && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-8 w-8 p-0"
+                          onClick={() => openEdit(announcement)}
+                          data-testid={`edit-announcement-${announcement.announcement_id}`}
+                          title="Edit announcement"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-red-500 hover:text-red-700 hover:bg-red-50 h-8 w-8 p-0"
+                          onClick={() => setDeleteTarget(announcement)}
+                          data-testid={`delete-announcement-${announcement.announcement_id}`}
+                          title="Delete announcement"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </>
+                    )}
                   </div>
                 </div>
               </CardHeader>
@@ -312,6 +389,110 @@ const AnnouncementsPage = () => {
           ))}
         </div>
       )}
+
+      {/* ── Delete Confirmation Dialog ───────────────────────────────────── */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && !deleting && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Announcement?</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete announcement?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={!!deleting}>Cancel</Button>
+            <Button
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={handleDelete}
+              disabled={!!deleting}
+            >
+              {deleting && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+              Confirm delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Edit Dialog ──────────────────────────────────────────────────── */}
+      <Dialog open={!!editTarget} onOpenChange={(open) => !open && setEditTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Announcement</DialogTitle>
+            <DialogDescription>Update title, content, audience, or priority.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label>Title</Label>
+              <Input
+                value={editForm.title}
+                onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+                placeholder="Announcement title"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Content</Label>
+              <Textarea
+                rows={4}
+                value={editForm.content}
+                onChange={(e) => setEditForm({ ...editForm, content: e.target.value })}
+                placeholder="Announcement message"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>Priority</Label>
+                <Select value={editForm.priority} onValueChange={(v) => setEditForm({ ...editForm, priority: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="normal">Normal</SelectItem>
+                    <SelectItem value="high">High</SelectItem>
+                    <SelectItem value="urgent">Urgent</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>Audience</Label>
+                <Select
+                  value={editForm.target_type}
+                  onValueChange={(v) => setEditForm({ ...editForm, target_type: v, target_value: '' })}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="student">Students</SelectItem>
+                    <SelectItem value="parent">Parents</SelectItem>
+                    <SelectItem value="teacher">Teachers</SelectItem>
+                    <SelectItem value="class">Specific Class</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {editForm.target_type === 'class' && (
+              <div className="space-y-1">
+                <Label>Class</Label>
+                <Select
+                  value={editForm.target_value}
+                  onValueChange={(v) => setEditForm({ ...editForm, target_value: v })}
+                >
+                  <SelectTrigger><SelectValue placeholder="Select class" /></SelectTrigger>
+                  <SelectContent>
+                    {classes.map((c) => (
+                      <SelectItem key={c.name || c} value={c.name || c}>{c.name || c}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditTarget(null)} disabled={editing}>Cancel</Button>
+            <Button onClick={handleEditSave} disabled={editing}>
+              {editing && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+              Save changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

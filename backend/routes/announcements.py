@@ -7,7 +7,7 @@ import uuid
 
 from database import db
 from models import UserRole, Announcement, VoiceNote
-from auth_utils import get_current_user, require_roles
+from auth_utils import get_current_user, require_roles, create_audit_log
 
 VOICE_NOTES_DIR = Path(__file__).parent.parent / "uploads" / "voice_notes"
 VOICE_NOTES_DIR.mkdir(parents=True, exist_ok=True)
@@ -93,17 +93,13 @@ async def update_announcement(announcement_id: str, request: Request):
 
 @router.delete("/announcements/{announcement_id}")
 async def delete_announcement(announcement_id: str, request: Request):
-    """Soft-delete an announcement. Creator or admin only. (#23)"""
+    """Soft-delete an announcement. Any admin or teacher may delete. (#23)"""
     user = await require_roles(UserRole.ADMIN, UserRole.TEACHER)(request)
     ann = await db.announcements.find_one({"announcement_id": announcement_id}, {"_id": 0})
     if not ann:
         raise HTTPException(status_code=404, detail="Announcement not found")
     if not ann.get("is_active", True):
         raise HTTPException(status_code=400, detail="Announcement is already deleted")
-
-    # Only the creator or an admin can delete
-    if user["role"] != UserRole.ADMIN and ann.get("created_by") != user["user_id"]:
-        raise HTTPException(status_code=403, detail="You can only delete your own announcements")
 
     await db.announcements.update_one(
         {"announcement_id": announcement_id},
@@ -113,6 +109,11 @@ async def delete_announcement(announcement_id: str, request: Request):
             "deleted_by": user["user_id"],
         }}
     )
+    await create_audit_log("announcement", announcement_id, "deactivate", {
+        "title": ann.get("title", ""),
+        "audience": ann.get("audience"),
+        "created_by": ann.get("created_by"),
+    }, user)
     return {"message": "Announcement deleted", "announcement_id": announcement_id}
 
 
