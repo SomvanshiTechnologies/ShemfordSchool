@@ -113,7 +113,7 @@ const MobileNotices = () => {
       {deleteTarget && (
         <div
           onClick={() => !deleting && setDeleteTarget(null)}
-          style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'flex-end',zIndex:50}}
+          style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'flex-end',zIndex:1000,paddingBottom:'calc(68px + env(safe-area-inset-bottom, 0px))'}}
         >
           <div onClick={(e) => e.stopPropagation()} style={{background:'#FFF',width:'100%',padding:20,borderTopLeftRadius:20,borderTopRightRadius:20}}>
             <h3 style={{fontSize:18,fontWeight:700,marginBottom:8}}>Delete Announcement?</h3>
@@ -137,7 +137,7 @@ const MobileNotices = () => {
       {editTarget && (
         <div
           onClick={() => !editing && setEditTarget(null)}
-          style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'flex-end',zIndex:50}}
+          style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'flex-end',zIndex:1000,paddingBottom:'calc(68px + env(safe-area-inset-bottom, 0px))'}}
         >
           <div onClick={(e) => e.stopPropagation()} style={{background:'#FFF',width:'100%',padding:20,borderTopLeftRadius:20,borderTopRightRadius:20,maxHeight:'80vh',overflowY:'auto'}}>
             <h3 style={{fontSize:18,fontWeight:700,marginBottom:12}}>Edit Announcement</h3>

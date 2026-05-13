@@ -117,7 +117,7 @@ const MobileAuditTrail = () => {
       {confirming && (
         <div
           onClick={() => !restoring && setConfirming(null)}
-          style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'flex-end',zIndex:50}}
+          style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'flex-end',zIndex:1000,paddingBottom:'calc(68px + env(safe-area-inset-bottom, 0px))'}}
         >
           <div
             onClick={(ev) => ev.stopPropagation()}
