@@ -3,38 +3,12 @@ import { Alert, Platform } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import * as ScreenCapture from 'expo-screen-capture';
+import { usePreventScreenCapture } from 'expo-screen-capture';
 import { AuthProvider } from './src/contexts/AuthContext';
 import AppNavigator from './src/navigation/AppNavigator';
 
 export default function App() {
-  useEffect(() => {
-    // Block screenshots/recording app-wide.
-    // Android: sets FLAG_SECURE so screenshots are silently disabled.
-    // iOS: cannot block, but we listen and warn when a screenshot is taken.
-    let subscription;
-    (async () => {
-      try {
-        await ScreenCapture.preventScreenCaptureAsync();
-        if (Platform.OS === 'ios') {
-          subscription = ScreenCapture.addScreenshotListener(() => {
-            Alert.alert(
-              'Screenshot detected',
-              'Screenshots of this app are not permitted. The incident has been logged.'
-            );
-          });
-        }
-      } catch (e) {
-        // Module unavailable (e.g. Expo Go on web). Fail open — app still runs.
-        console.warn('Screen capture protection unavailable:', e?.message);
-      }
-    })();
-
-    return () => {
-      if (subscription) subscription.remove();
-      ScreenCapture.allowScreenCaptureAsync().catch(() => {});
-    };
-  }, []);
+  usePreventScreenCapture();
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
