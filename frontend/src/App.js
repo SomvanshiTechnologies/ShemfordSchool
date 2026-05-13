@@ -23,6 +23,7 @@ import ParentAttendancePage from "./components/ParentAttendancePage";
 import ClassStructurePage from "./components/ClassStructurePage";
 import SettingsPage from "./components/SettingsPage";
 import PayrollPage from "./components/PayrollPage";
+import AuditTrailPage from "./components/AuditTrailPage";
 import MobileApp from "./mobile/MobileApp";
 import { useMobile } from "./hooks/useMobile";
 import ScreenshotBlocker from "./components/ScreenshotBlocker";
@@ -289,6 +290,17 @@ function AppRouter() {
           <ProtectedRoute>
             <Layout>
               <SettingsPage />
+            </Layout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/audit-trail"
+        element={
+          <ProtectedRoute allowedRoles={['admin']}>
+            <Layout>
+              <AuditTrailPage />
             </Layout>
           </ProtectedRoute>
         }

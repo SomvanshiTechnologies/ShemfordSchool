@@ -14,6 +14,7 @@ import MobileNotices from './screens/MobileNotices';
 import MobileReports from './screens/MobileReports';
 import MobileStudents from './screens/MobileStudents';
 import MobileMore from './screens/MobileMore';
+import MobileAuditTrail from './screens/MobileAuditTrail';
 
 const RoleDashboard = () => {
   const { user } = useAuth();
@@ -39,6 +40,7 @@ const MobileApp = () => {
         <Route path="/reports" element={<MobileReports />} />
         <Route path="/students" element={<MobileStudents />} />
         <Route path="/more" element={<MobileMore />} />
+        <Route path="/audit-trail" element={<MobileAuditTrail />} />
         <Route path="*" element={<Navigate to="/m" replace />} />
       </Routes>
     </MobileLayout>

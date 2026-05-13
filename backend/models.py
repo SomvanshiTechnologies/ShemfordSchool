@@ -481,6 +481,7 @@ class Announcement(BaseModel):
     priority: str = "normal"
     created_by: str
     is_active: bool = True
+    voice_note_id: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -527,6 +528,7 @@ class Message(BaseModel):
     content: str
     message_type: str = "text"
     voice_url: Optional[str] = None
+    voice_note_id: Optional[str] = None
     is_read: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -666,6 +668,10 @@ class AuditLog(BaseModel):
     changes: Dict[str, Any] = {}
     performed_by: str
     performed_by_name: str = ""
+    performed_by_role: Optional[str] = None
+    restored_at: Optional[str] = None
+    restored_by: Optional[str] = None
+    restored_by_name: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -728,4 +734,55 @@ class Holiday(BaseModel):
     name: str  # "Republic Day"
     type: str = "public"  # public, school, optional
     is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# ===================== POS PAYMENT MODELS =====================
+
+class POSOrderStatus:
+    INITIATED  = "INITIATED"
+    SUCCESS    = "SUCCESS"
+    FAILED     = "FAILED"
+    CANCELLED  = "CANCELLED"
+
+
+class POSOrder(BaseModel):
+    """
+    Tracks one Ezetap POS payment session.
+    One record per initiation — never reused.
+    Amounts stored as integer paise to avoid float rounding.
+    """
+    model_config = ConfigDict(extra="ignore")
+    pos_order_id: str = Field(default_factory=lambda: f"posord_{uuid.uuid4().hex[:14]}")
+    p2p_request_id: Optional[str] = None          # Ezetap p2pRequestId returned on initiate
+    student_id: str
+    ledger_ids: List[str]
+    amount_paise: int                              # always integer paise
+    amount_rupees: float
+    device_id: str
+    mode: str = "ALL"                             # ALL/UPI/CARD/CASH/BHARATQR/CHEQUE
+    external_ref_number: str
+    status: str = POSOrderStatus.INITIATED
+    ezetap_response: Optional[Dict[str, Any]] = None  # raw JSON from Ezetap
+    receipt_number: Optional[str] = None
+    fee_payment_id: Optional[str] = None
+    collected_by: str
+    failure_reason: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# ===================== VOICE NOTE MODELS =====================
+
+class VoiceNote(BaseModel):
+    """Metadata for a voice note attached to an announcement or message."""
+    model_config = ConfigDict(extra="ignore")
+    voice_note_id: str = Field(default_factory=lambda: f"vn_{uuid.uuid4().hex[:14]}")
+    entity_type: str          # "announcement" or "message"
+    entity_id: str
+    uploaded_by: str
+    file_path: str            # relative path under uploads/voice_notes/
+    file_size: int            # bytes
+    duration_seconds: Optional[float] = None
+    mime_type: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

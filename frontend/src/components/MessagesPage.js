@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import api from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
+import { VoiceNotePlayer, VoiceNoteRecorder, useVoiceRecorder } from './VoiceNote';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -49,6 +50,7 @@ const MessagesPage = () => {
     subject: '',
     content: ''
   });
+  const voice = useVoiceRecorder();
 
   useEffect(() => {
     fetchMessages();
@@ -105,9 +107,26 @@ const MessagesPage = () => {
       delete payload.recipient_id;
     }
     try {
-      await api.post('/messages', payload);
+      const msgRes = await api.post('/messages', payload);
+      const msgId = msgRes.data.message_id;
+
+      // Upload voice note if recorded
+      if (voice.audioBlob && msgId) {
+        try {
+          const fd = new FormData();
+          fd.append('file', voice.audioBlob, 'voice_note.webm');
+          if (voice.duration) fd.append('duration_seconds', voice.duration);
+          await api.post(`/messages/${msgId}/voice-note`, fd, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          });
+        } catch {
+          toast.error('Message sent, but voice note failed to upload.');
+        }
+      }
+
       toast.success('Message sent');
       setShowComposeDialog(false);
+      voice.discard();
       setFormData({ recipient_type: 'user', recipient_id: '', recipient_value: '', subject: '', content: '' });
       setSelectedClass('');
       setSelectedSection('');
@@ -267,10 +286,11 @@ const MessagesPage = () => {
                     data-testid="message-content"
                   />
                 </div>
+                <VoiceNoteRecorder voice={voice} />
               </div>
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setShowComposeDialog(false)}>Cancel</Button>
-                <Button type="submit" data-testid="send-message-btn">
+                <Button type="submit" disabled={voice.recording} data-testid="send-message-btn">
                   <Send className="h-4 w-4 mr-2" />
                   Send
                 </Button>
@@ -384,6 +404,14 @@ const MessagesPage = () => {
                 </CardHeader>
                 <CardContent className="p-6">
                   <p className="whitespace-pre-wrap">{selectedMessage.content}</p>
+                  {selectedMessage.voice_note_id && (
+                    <div className="mt-4">
+                      <p className="text-xs text-slate-500 mb-1 font-medium">Voice note</p>
+                      <VoiceNotePlayer
+                        url={`/api/media/voice-notes/${selectedMessage.voice_note_id}`}
+                      />
+                    </div>
+                  )}
                 </CardContent>
               </>
             ) : (

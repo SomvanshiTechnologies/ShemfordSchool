@@ -176,7 +176,7 @@ async def pay_upgradation_fee(student_id: str, request: Request):
     ledger_entry = await db.student_ledger.find_one({
         "student_id": student_id,
         "fee_component": "upgradation",
-        "status": "pending"
+        "status": {"$in": ["pending", "overdue"]}
     }, {"_id": 0})
     if not ledger_entry:
         raise HTTPException(status_code=404, detail="No pending upgradation fee found")
@@ -209,6 +209,9 @@ async def pay_upgradation_fee(student_id: str, request: Request):
         {"student_id": student_id, "upgradation_fee_ledger_id": ledger_entry["ledger_id"]},
         {"$set": {"upgradation_fee_paid": True, "upgradation_payment_id": payment.payment_id}}
     )
+
+    # Recompute the student's overall fee_status (paid/pending/overdue) from the ledger
+    await refresh_overdue_for_student(student_id)
 
     pay_dict.pop("_id", None)
     return {

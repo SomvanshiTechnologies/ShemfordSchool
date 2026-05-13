@@ -57,7 +57,7 @@ const REQUIRED_DOCUMENTS = [
 const STREAMS_FOR_CLASS = ['11th', '12th'];
 
 const StudentsPage = () => {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, isAccountant } = useAuth();
   const [searchParams] = useSearchParams();
   const [students, setStudents] = useState([]);
   const [classes, setClasses] = useState([]);
@@ -117,6 +117,9 @@ const StudentsPage = () => {
   const [onbResult, setOnbResult] = useState(null);
   const [onbLoading, setOnbLoading] = useState(false);
   const [onbErrors, setOnbErrors] = useState({});
+  const [onbSkipDocs, setOnbSkipDocs] = useState(false);
+  const [onbPayment, setOnbPayment] = useState({ method: 'cash', transaction_id: '', remarks: '' });
+  const [onbPaymentLoading, setOnbPaymentLoading] = useState(false);
 
   useEffect(() => { fetchStudents(); fetchClasses(); }, [filterClass, filterSection, filterStatus]);
 
@@ -156,6 +159,9 @@ const StudentsPage = () => {
     setOnbDocLoading({});
     setOnbResult(null);
     setOnbErrors({});
+    setOnbSkipDocs(false);
+    setOnbPayment({ method: 'cash', transaction_id: '', remarks: '' });
+    setOnbPaymentLoading(false);
     setShowOnboarding(false);
   };
 
@@ -265,14 +271,36 @@ const StudentsPage = () => {
     docFileInputRefs.current[docType].click();
   };
 
-  const handleOnbComplete = async (adminOverride = false) => {
+  const handleOnbComplete = async () => {
     setOnbLoading(true);
     try {
-      const res = await api.post(`/onboarding/${onbId}/complete`, { admin_override: adminOverride });
-      setOnbResult(res.data);
+      // 1. Complete the onboarding → creates student + ledger entries
+      const res = await api.post(`/onboarding/${onbId}/complete`, { admin_override: onbSkipDocs });
+      const admissionResult = res.data;
+
+      // 2. Record the admission fee payment immediately (if fee breakdown exists)
+      let receiptNumber = null;
+      if (admissionResult.admission_time_fee > 0 || onbFeeData?.fee_breakdown?.length > 0) {
+        setOnbPaymentLoading(true);
+        try {
+          const payRes = await api.post('/fees/admission-payment', {
+            student_id: admissionResult.student_id,
+            payment_method: onbPayment.method,
+            transaction_id: onbPayment.transaction_id || undefined,
+            remarks: onbPayment.remarks || 'Collected at admission',
+          });
+          receiptNumber = payRes.data.receipt_number;
+          toast.success(`Payment recorded — Receipt: ${receiptNumber}`);
+        } catch (payErr) {
+          // Non-fatal: admission succeeded but payment recording failed
+          toast.error('Admission done, but payment recording failed. Record it from the Fees tab.');
+        } finally { setOnbPaymentLoading(false); }
+      }
+
+      setOnbResult({ ...admissionResult, receipt_number: receiptNumber });
       setOnbStep(5);
       fetchStudents();
-      toast.success(`Student admitted! Admission No: ${res.data.admission_number}`);
+      toast.success(`Student admitted! Admission No: ${admissionResult.admission_number}`);
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to complete admission');
     } finally { setOnbLoading(false); }
@@ -483,9 +511,10 @@ const StudentsPage = () => {
           <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Students</h1>
           <p className="text-muted-foreground">Manage student admissions and records</p>
         </div>
-        {isAdmin && (
+        {(isAdmin || isAccountant) && (
           <div className="flex gap-2 flex-wrap">
-            {/* ── CSV Import Wizard ────────────────────────────────────────── */}
+            {/* ── CSV Import Wizard (admin only) ───────────────────────────── */}
+            {isAdmin && (
             <Dialog open={showUploadDialog} onOpenChange={(open) => { setShowUploadDialog(open); if (!open) resetCsvWizard(); }}>
               <DialogTrigger asChild>
                 <Button variant="outline" data-testid="bulk-upload-btn"><Upload className="h-4 w-4 mr-2" />Bulk Import</Button>
@@ -719,6 +748,7 @@ const StudentsPage = () => {
 
               </DialogContent>
             </Dialog>
+            )}
             {/* ── End CSV Import Wizard ──────────────────────────────────── */}
 
             <Button data-testid="onboard-student-btn" onClick={() => { resetOnboarding(); setShowOnboarding(true); }}>
@@ -770,7 +800,7 @@ const StudentsPage = () => {
           ) : filteredStudents.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
               <GraduationCap className="h-12 w-12 mb-4" /><p>No students found</p>
-              {isAdmin && <Button variant="link" onClick={() => { resetOnboarding(); setShowOnboarding(true); }}>Start new admission</Button>}
+              {(isAdmin || isAccountant) && <Button variant="link" onClick={() => { resetOnboarding(); setShowOnboarding(true); }}>Start new admission</Button>}
             </div>
           ) : (
             <Table>
@@ -897,6 +927,27 @@ const StudentsPage = () => {
                 <div className="space-y-1">
                   <Label>Date of Birth <span className="text-red-500">*</span></Label>
                   <Input type="date" value={onbData.date_of_birth} onChange={(e) => { setOnbData({...onbData, date_of_birth: e.target.value}); setOnbErrors(p => ({...p, date_of_birth: ''})); }} className={onbErrors.date_of_birth ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-dob" />
+                  {onbData.date_of_birth && (() => {
+                    const dob = new Date(onbData.date_of_birth);
+                    const today = new Date();
+                    let years = today.getFullYear() - dob.getFullYear();
+                    let months = today.getMonth() - dob.getMonth();
+                    let days = today.getDate() - dob.getDate();
+                    if (days < 0) { months--; days += new Date(today.getFullYear(), today.getMonth(), 0).getDate(); }
+                    if (months < 0) { years--; months += 12; }
+                    const isValid = dob <= today && dob.getFullYear() >= 1900;
+                    if (!isValid) return null;
+                    const label = years > 0
+                      ? `${years} yr${years !== 1 ? 's' : ''}${months > 0 ? ` ${months} mo` : ''}`
+                      : months > 0 ? `${months} mo ${days} days` : `${days} days`;
+                    return (
+                      <p className="text-xs text-slate-500 flex items-center gap-1.5 mt-1">
+                        <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 border border-blue-100 px-2 py-0.5 rounded-full font-medium">
+                          Age: {label}
+                        </span>
+                      </p>
+                    );
+                  })()}
                   {onbErrors.date_of_birth && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.date_of_birth}</p>}
                 </div>
               </div>
@@ -1040,10 +1091,24 @@ const StudentsPage = () => {
           {/* Step 3: Documents */}
           {onbStep === 3 && (
             <div className="grid gap-4">
-              <p className="text-sm text-muted-foreground">
-                Upload admission documents. Mandatory documents must be uploaded before completing admission.
-                You can skip non-mandatory documents.
-              </p>
+              {onbSkipDocs ? (
+                <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+                  <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-sm font-semibold text-amber-800">Documents skipped</p>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      You can upload them later from the student's edit panel. Admission will proceed with admin override.
+                    </p>
+                    <button className="text-xs text-amber-700 underline mt-1" onClick={() => setOnbSkipDocs(false)}>
+                      Upload documents now instead
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Upload admission documents. Mandatory documents are required — or skip all now and upload later via the student edit panel.
+                </p>
+              )}
               <div className="space-y-3">
                 {REQUIRED_DOCUMENTS.map(doc => {
                   const uploaded = onbDocuments[doc.type];
@@ -1091,13 +1156,19 @@ const StudentsPage = () => {
               <p className="text-xs text-slate-500">
                 Accepted formats: PDF, JPG, PNG · Max size: 5 MB per file
               </p>
-              <DialogFooter>
+              <DialogFooter className="flex-wrap gap-2">
                 <Button variant="outline" onClick={() => setOnbStep(2)}><ArrowLeft className="h-4 w-4 mr-1" /> Back</Button>
-                <Button variant="outline" onClick={() => setOnbStep(4)}>
-                  Skip Docs (Admin Override) <ArrowRight className="h-4 w-4 ml-1" />
-                </Button>
+                {!onbSkipDocs && (
+                  <Button
+                    variant="outline"
+                    className="text-amber-700 border-amber-300 hover:bg-amber-50"
+                    onClick={() => { setOnbSkipDocs(true); setOnbStep(4); }}
+                  >
+                    Skip Documents for Now <ArrowRight className="h-4 w-4 ml-1" />
+                  </Button>
+                )}
                 <Button onClick={() => setOnbStep(4)} data-testid="onb-next-3">
-                  Continue to Fee Preview <ArrowRight className="h-4 w-4 ml-1" />
+                  Continue to Payment <ArrowRight className="h-4 w-4 ml-1" />
                 </Button>
               </DialogFooter>
             </div>
@@ -1175,16 +1246,77 @@ const StudentsPage = () => {
                 </div>
               )}
 
+              {/* Payment collection — required before admission completes */}
+              {onbFeeData.fee_breakdown?.length > 0 && (
+                <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                  <div className="px-3 py-2 bg-slate-900 text-white text-xs font-bold uppercase tracking-wider flex items-center gap-2">
+                    <CreditCard className="h-3.5 w-3.5" />
+                    Collect Admission Payment — ₹{(onbFeeData.admission_time_fee||0).toLocaleString()}
+                  </div>
+                  <div className="p-4 space-y-3">
+                    <div>
+                      <Label className="text-xs font-bold uppercase tracking-wider">Payment Method *</Label>
+                      <Select value={onbPayment.method} onValueChange={v => setOnbPayment(p => ({ ...p, method: v }))}>
+                        <SelectTrigger className="mt-1 h-9">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="cash">Cash</SelectItem>
+                          <SelectItem value="cheque">Cheque</SelectItem>
+                          <SelectItem value="bank_transfer">Bank Transfer / NEFT</SelectItem>
+                          <SelectItem value="online">Online / UPI</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {onbPayment.method !== 'cash' && (
+                      <div>
+                        <Label className="text-xs font-bold uppercase tracking-wider">
+                          {onbPayment.method === 'cheque' ? 'Cheque Number' : 'Transaction / UTR Number'}
+                        </Label>
+                        <Input
+                          className="mt-1 h-9 text-sm font-mono"
+                          placeholder={onbPayment.method === 'cheque' ? 'e.g. 123456' : 'e.g. UTR / Ref No.'}
+                          value={onbPayment.transaction_id}
+                          onChange={e => setOnbPayment(p => ({ ...p, transaction_id: e.target.value }))}
+                        />
+                      </div>
+                    )}
+                    <div>
+                      <Label className="text-xs font-bold uppercase tracking-wider">Remarks (optional)</Label>
+                      <Input
+                        className="mt-1 h-9 text-sm"
+                        placeholder="e.g. Received from father"
+                        value={onbPayment.remarks}
+                        onChange={e => setOnbPayment(p => ({ ...p, remarks: e.target.value }))}
+                      />
+                    </div>
+                    <p className="text-xs text-slate-500 bg-slate-50 px-3 py-2 rounded-lg">
+                      A receipt will be generated automatically after admission is confirmed.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {onbSkipDocs && (
+                <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                  Documents skipped — admin override will be applied. Upload them later from the student edit panel.
+                </div>
+              )}
+
               <DialogFooter>
                 <Button variant="outline" onClick={() => setOnbStep(3)}><ArrowLeft className="h-4 w-4 mr-1" /> Back</Button>
                 <Button
-                  onClick={() => handleOnbComplete(false)}
-                  disabled={onbLoading}
+                  onClick={handleOnbComplete}
+                  disabled={onbLoading || onbPaymentLoading}
                   className="bg-slate-900 hover:bg-slate-800 text-white"
                   data-testid="onb-complete"
                 >
-                  {onbLoading ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <CheckCircle className="h-4 w-4 mr-1" />}
-                  Complete Admission
+                  {(onbLoading || onbPaymentLoading)
+                    ? <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    : <CheckCircle className="h-4 w-4 mr-1" />
+                  }
+                  {onbPaymentLoading ? 'Recording Payment…' : onbLoading ? 'Completing Admission…' : 'Complete Admission & Collect Payment'}
                 </Button>
               </DialogFooter>
             </div>
@@ -1231,11 +1363,26 @@ const StudentsPage = () => {
                       </p>
                     </>
                   )}
-                  <div className="border-t pt-3 mt-2 bg-slate-50 -mx-4 px-4 py-2 rounded-b-xl">
-                    <p className="text-xs text-slate-700 font-semibold">
-                      Next step: Collect admission fees from the Fees → Collect tab using Admission No. {onbResult.admission_number}
-                    </p>
-                  </div>
+                  {onbResult.receipt_number && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Payment Receipt</span>
+                      <span className="font-mono font-bold text-emerald-700">{onbResult.receipt_number}</span>
+                    </div>
+                  )}
+                  {onbSkipDocs && (
+                    <div className="border-t pt-3 mt-2 bg-amber-50 -mx-4 px-4 py-2 rounded-b-xl">
+                      <p className="text-xs text-amber-800 font-semibold">
+                        📎 Documents were skipped. Upload them by clicking Edit on the student record.
+                      </p>
+                    </div>
+                  )}
+                  {!onbSkipDocs && !onbResult.receipt_number && (
+                    <div className="border-t pt-3 mt-2 bg-slate-50 -mx-4 px-4 py-2 rounded-b-xl">
+                      <p className="text-xs text-slate-700 font-semibold">
+                        Collect payment from Fees → Collect tab using Admission No. {onbResult.admission_number}
+                      </p>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
               <DialogFooter className="justify-center">
@@ -1424,6 +1571,55 @@ const StudentsPage = () => {
                   </div>
                 </div>
               </div>
+              {/* Documents section */}
+              <div className="border-t pt-4">
+                <h4 className="font-medium mb-1 text-foreground flex items-center gap-2">
+                  <FileUp className="h-4 w-4" /> Documents
+                </h4>
+                <p className="text-xs text-slate-500 mb-3">Upload or replace admission documents for this student.</p>
+                <div className="space-y-2">
+                  {REQUIRED_DOCUMENTS.map(doc => (
+                    <div key={doc.type} className="flex items-center justify-between p-2.5 rounded-xl border border-slate-200 bg-slate-50">
+                      <div className="flex items-center gap-2 text-sm">
+                        {doc.mandatory
+                          ? <span className="text-[10px] font-bold text-red-500 uppercase">Req</span>
+                          : <span className="text-[10px] font-bold text-slate-400 uppercase">Opt</span>
+                        }
+                        {doc.name}
+                      </div>
+                      <Button
+                        variant="outline" size="sm" className="text-xs h-7"
+                        onClick={() => {
+                          const input = document.createElement('input');
+                          input.type = 'file';
+                          input.accept = '.pdf,.jpg,.jpeg,.png';
+                          input.onchange = async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            try {
+                              const fd = new FormData();
+                              fd.append('file', file);
+                              const uploadRes = await api.post('/upload', fd);
+                              const { file_url, file_name } = uploadRes.data;
+                              const docFd = new FormData();
+                              docFd.append('document_type', doc.type);
+                              docFd.append('document_name', doc.name);
+                              docFd.append('file_url', file_url);
+                              docFd.append('file_name', file_name);
+                              await api.post(`/students/${selectedStudent.student_id}/documents`, docFd);
+                              toast.success(`${doc.name} uploaded`);
+                            } catch { toast.error(`Failed to upload ${doc.name}`); }
+                          };
+                          input.click();
+                        }}
+                      >
+                        <FileUp className="h-3 w-3 mr-1" /> Upload
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
               <DialogFooter>
                 <Button variant="outline" onClick={() => setShowEditDialog(false)}>Cancel</Button>
                 <Button onClick={handleSaveEdit} data-testid="save-edit-btn">Save Changes</Button>

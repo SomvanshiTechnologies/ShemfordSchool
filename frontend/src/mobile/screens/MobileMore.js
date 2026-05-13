@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { Users, CreditCard, Calendar, GraduationCap, BarChart3, Bell, MessageSquare, BookOpen, ClipboardList, Settings, LogOut, User, Building, Monitor } from 'lucide-react';
+import { Users, CreditCard, Calendar, GraduationCap, BarChart3, Bell, MessageSquare, BookOpen, ClipboardList, Settings, LogOut, User, Building, Monitor, History } from 'lucide-react';
 
 const MobileMore = () => {
   const navigate = useNavigate();
@@ -14,6 +14,7 @@ const MobileMore = () => {
       { icon: Building, label: 'Classes', path: '/class-structure', color: '#1A1A1A' },
       { icon: User, label: 'Employees', path: '/employees', color: '#1A1A1A' },
       { icon: BarChart3, label: 'Reports', path: '/m/reports', color: '#E88A1A' },
+      { icon: History, label: 'Audit Trails', path: '/m/audit-trail', color: '#E88A1A' },
     ] : []),
     { icon: Bell, label: 'Notices', path: '/m/notices', color: '#E88A1A' },
     { icon: MessageSquare, label: 'Messages', path: '/m/messages', color: '#1A1A1A' },

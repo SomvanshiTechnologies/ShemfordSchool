@@ -1,0 +1,25 @@
+# Production overrides — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Before running:
+#   1. Set REACT_APP_BACKEND_URL, REACT_APP_GOOGLE_AUTH_URL in environment or .env at repo root
+#   2. Fill in backend/.env with real secrets (copy from backend/.env.example)
+#   3. If using MongoDB Atlas, set MONGO_URL in backend/.env and remove the mongo service override below
+
+version: "3.9"
+
+services:
+  mongo:
+    # Do NOT expose MongoDB port publicly in production
+    ports: []
+
+  backend:
+    restart: always
+    # Remove local port binding if you put nginx in front later
+    ports:
+      - "8000:8000"
+
+  frontend:
+    restart: always
+    ports:
+      - "80:80"

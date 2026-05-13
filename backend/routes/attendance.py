@@ -496,13 +496,20 @@ async def create_holiday(request: Request):
 async def delete_holiday(holiday_id: str, request: Request):
     user = await require_roles(UserRole.ADMIN)(request)
 
-    result = await db.holidays.update_one(
+    holiday = await db.holidays.find_one({"holiday_id": holiday_id}, {"_id": 0})
+    if not holiday:
+        raise HTTPException(status_code=404, detail="Holiday not found")
+    if not holiday.get("is_active", True):
+        raise HTTPException(status_code=400, detail="Holiday already removed")
+
+    await db.holidays.update_one(
         {"holiday_id": holiday_id},
         {"$set": {"is_active": False}}
     )
-    if result.modified_count == 0:
-        raise HTTPException(status_code=404, detail="Holiday not found")
-
+    await create_audit_log("holiday", holiday_id, "deactivate", {
+        "name": holiday.get("name", ""),
+        "date": holiday.get("date", ""),
+    }, user)
     return {"message": "Holiday removed"}
 
 

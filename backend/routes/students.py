@@ -1000,3 +1000,66 @@ async def csv_import(request: Request):
             results["errors"].append({"row": row_number, "error": str(e)})
 
     return results
+
+
+# ─── Student Document Management ─────────────────────────────────────────────
+
+@router.get("/students/{student_id}/documents")
+async def list_student_documents(student_id: str, request: Request):
+    """List all documents uploaded for a student (across all onboarding records)."""
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT, UserRole.TEACHER)(request)
+    student = await db.students.find_one({"student_id": student_id}, {"_id": 0, "student_id": 1})
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found.")
+    docs = await db.student_documents.find(
+        {"student_id": student_id}, {"_id": 0}
+    ).sort("created_at", -1).to_list(50)
+    return docs
+
+
+@router.post("/students/{student_id}/documents")
+async def upload_student_document(
+    student_id: str,
+    request: Request,
+    document_type: str = Form(...),
+    document_name: str = Form(...),
+    file_url: str = Form(""),
+    file_name: str = Form(""),
+):
+    """
+    Add or replace a document on an existing student record.
+    Used after admission when documents were skipped, or to update documents.
+    Admin / Accountant only.
+    """
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+
+    student = await db.students.find_one({"student_id": student_id}, {"_id": 0})
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found.")
+
+    # Replace existing document of same type if it exists
+    await db.student_documents.delete_many({
+        "student_id": student_id,
+        "document_type": document_type,
+    })
+
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "document_id": f"doc_{__import__('uuid').uuid4().hex[:12]}",
+        "student_id": student_id,
+        "onboarding_id": student.get("onboarding_id", "direct"),
+        "document_type": document_type,
+        "document_name": document_name,
+        "file_url": file_url or None,
+        "file_name": file_name or None,
+        "is_mandatory": document_type in {"birth_certificate", "aadhaar_card", "passport_photo"},
+        "status": "uploaded",
+        "uploaded_by": user["user_id"],
+        "created_at": now,
+    }
+    await db.student_documents.insert_one(doc)
+    doc.pop("_id", None)
+
+    await create_audit_log("student_document", student_id, "upload",
+                           {"document_type": document_type, "file_name": file_name}, user)
+    return doc

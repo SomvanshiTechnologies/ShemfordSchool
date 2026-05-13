@@ -274,6 +274,7 @@ async def create_audit_log(
             changes=changes,
             performed_by=user["user_id"],
             performed_by_name=user.get("name", ""),
+            performed_by_role=user.get("role"),
         )
         log_dict = log.model_dump()
         log_dict["created_at"] = log_dict["created_at"].isoformat()

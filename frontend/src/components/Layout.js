@@ -8,7 +8,8 @@ import api from '../lib/api';
 import {
   LayoutDashboard, Users, GraduationCap, UserCog, Calendar,
   CreditCard, FileText, Bell, BookOpen, TicketCheck, MessageSquare,
-  BarChart3, LogOut, Menu, X, School, AlertTriangle, ArrowUpCircle, Settings, Wallet
+  BarChart3, LogOut, Menu, X, School, AlertTriangle, ArrowUpCircle, Settings, Wallet,
+  History
 } from 'lucide-react';
 
 const LOGO_URL = "/logo.webp";
@@ -31,6 +32,7 @@ const ALL_MENU_ITEMS = [
   { name: 'Announcements',          icon: Bell,             path: '/announcements',       roles: ['admin', 'teacher'] },
   { name: 'Reports',                icon: BarChart3,        path: '/reports',             roles: ['admin', 'accountant'] },
   { name: 'Upgradation',            icon: ArrowUpCircle,    path: '/upgradation',         roles: ['admin'] },
+  { name: 'Audit Trails',           icon: History,          path: '/audit-trail',         roles: ['admin'] },
   { name: 'Issues',                 icon: TicketCheck,      path: '/issues',              roles: ['admin', 'teacher', 'student', 'parent'] },
   { name: 'Messages',               icon: MessageSquare,    path: '/messages',            roles: ['admin', 'teacher', 'student', 'parent'] },
   { name: 'Settings',               icon: Settings,         path: '/settings',            roles: ['admin', 'teacher', 'student', 'parent', 'accountant'] },
@@ -40,7 +42,7 @@ const SIDEBAR_SECTIONS = [
   { label: null,             names: ['Dashboard'] },
   { label: 'Academic',      names: ['Students', 'Classes', 'Attendance', 'My Attendance', "Children's Attendance", 'Marks', 'My Marks', 'Syllabus'] },
   { label: 'Finance',       names: ['Fees', 'My Fees', 'Payroll'] },
-  { label: 'Administration',names: ['Employees', 'Users', 'Announcements', 'Reports', 'Upgradation'] },
+  { label: 'Administration',names: ['Employees', 'Users', 'Announcements', 'Reports', 'Upgradation', 'Audit Trails'] },
   { label: 'Community',     names: ['Issues', 'Messages'] },
   { label: null,             names: ['Settings'] },
 ];

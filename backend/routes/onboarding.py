@@ -42,7 +42,7 @@ def needs_stream(class_name: str) -> bool:
 
 @router.post("/onboarding/start")
 async def start_onboarding(request: Request):
-    user = await require_roles(UserRole.ADMIN)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     
     try:
         body = await request.json()
@@ -143,7 +143,7 @@ async def start_onboarding(request: Request):
 
 @router.put("/onboarding/{onboarding_id}/class")
 async def set_onboarding_class(onboarding_id: str, request: Request):
-    await require_roles(UserRole.ADMIN)(request)
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     body = await request.json()
 
     app = await db.onboarding.find_one({"onboarding_id": onboarding_id}, {"_id": 0})
@@ -269,7 +269,7 @@ async def get_required_documents(onboarding_id: str, request: Request):
 
 @router.post("/onboarding/{onboarding_id}/documents")
 async def upload_document(onboarding_id: str, request: Request):
-    user = await require_roles(UserRole.ADMIN)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     body = await request.json()
 
     app = await db.onboarding.find_one({"onboarding_id": onboarding_id}, {"_id": 0})
@@ -377,7 +377,7 @@ async def complete_onboarding(onboarding_id: str, request: Request):
     - Creates full fee ledger (one-time + yearly + all 12 monthly tuition)
     - Marks status = completed
     """
-    user = await require_roles(UserRole.ADMIN)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     body = await request.json()
     admin_override = body.get("admin_override", False)
 

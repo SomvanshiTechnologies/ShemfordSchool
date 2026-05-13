@@ -1059,6 +1059,9 @@ async def razorpay_checkout_page(internal_order_id: str, request: Request):
     student_phone = student.get("phone") or student.get("parent_phone", "") if student else ""
 
     backend_url = str(request.base_url).rstrip("/")
+    # Pre-compute the success page HTML so the f-string below contains no backslash expressions.
+    # (Python 3.11 disallows backslashes inside f-string expression parts.)
+    _success_html_escaped = _checkout_result_page("success", "__RECEIPT__").replace("'", "\\'")
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1116,7 +1119,7 @@ function startPayment() {{
         }})
       }}).then(r => r.json()).then(data => {{
         if (data.status === 'success') {{
-          document.body.innerHTML = `{_checkout_result_page('success', '__RECEIPT__').replace("'", "\\'")}`.replace('__RECEIPT__', data.receipt_number || '');
+          document.body.innerHTML = `{_success_html_escaped}`.replace('__RECEIPT__', data.receipt_number || '');
         }} else {{
           document.getElementById('msg').textContent = 'Verification failed. Contact school.';
           document.getElementById('pay-btn').disabled = false;

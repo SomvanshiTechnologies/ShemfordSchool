@@ -148,7 +148,16 @@
       "Bash(kill 29548 29550 29571 29574)",
       "Bash(venv/Scripts/pip install:*)",
       "Bash(venv/Scripts/python server.py)",
-      "PowerShell(Test-NetConnection *)"
+      "PowerShell(Test-NetConnection *)",
+      "Bash(/opt/homebrew/bin/python3.11 -m venv /Users/ameyasomvanshi/ShemfordSchool/backend/venv)",
+      "Bash(venv/bin/python -c \"import asyncio; from database import db, client; asyncio.run\\(db.command\\('ping'\\)\\); print\\('DB OK'\\); client.close\\(\\)\")",
+      "Bash(venv/bin/python -c ' *)",
+      "Bash(tee /tmp/seed_out.txt)",
+      "Bash(echo \"SEED_EXIT:$?\")",
+      "Bash(venv/bin/python -u seed_data.py)",
+      "Bash(venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000 --reload)",
+      "Bash(git pull *)",
+      "Bash(git stash *)"
     ]
   }
 }

@@ -277,6 +277,18 @@ async def seed_employees(teacher_user_id):
     print(f"  Employees: {len(docs)}")
     return teacher_ids
 
+_used_admission_nos: set[str] = set()
+
+
+def _unique_admission_no() -> str:
+    """Generate a SHM/2025/XXXX admission number guaranteed unique within this seed run."""
+    while True:
+        candidate = f"SHM/2025/{random.randint(1000, 99999)}"
+        if candidate not in _used_admission_nos:
+            _used_admission_nos.add(candidate)
+            return candidate
+
+
 async def seed_students_and_fees(classes, teacher_ids):
     """
     Create students with Indian names, parent user accounts, legacy fee
@@ -347,7 +359,7 @@ async def seed_students_and_fees(classes, teacher_ids):
                     gender = random.choice(["Male", "Female"])
                     first, last = rand_name(gender)
                     student_id   = f"STU2025{uuid.uuid4().hex[:6].upper()}"
-                    admission_no = f"SHM/2025/{random.randint(1000, 9999)}"
+                    admission_no = _unique_admission_no()
                     student_phone = rand_phone()
                     student_email = f"{first.lower()}.{last.lower()}{random.randint(1,99)}@shemford.edu"
                     student_user_id = uid("user")
@@ -625,6 +637,10 @@ async def seed_students_and_fees(classes, teacher_ids):
             max_roll_by_key[key] = roll_val
 
     if max_roll_by_key:
+        # Re-drop just before insert in case the running backend has been
+        # upserting roll counters via the New Admission endpoint while we were
+        # building student docs (routes/students.py::get_next_roll_number).
+        await db.counters.drop()
         counter_docs = [{"_id": k, "seq": v} for k, v in max_roll_by_key.items()]
         await db.counters.insert_many(counter_docs)
         print(f"  Roll counters:     {len(counter_docs)}  (class-section keys)")
@@ -1004,30 +1020,29 @@ async def seed_fee_component_configs():
     """
     Seed official fee component configs for 2025-2026.
 
-    Class groups (same rates within each group):
-      SF.JR & SR  → "SF. SR."   (SF.JR not yet in system)
-      LKG & UKG   → "LKG", "UKG"
-      I & II      → "1st", "2nd"
-      III & IV    → "3rd", "4th"
-      V & VI      → "5th", "6th"
-      VII & VIII  → "7th", "8th"
-      IX & X      → "9th", "10th"
+    All 15 classes get a base config (stream=None).
+    Class 11 and 12 also get stream-specific configs for Science and Humanities
+    because lab fees differ between the two streams.
+
+    Total configs: 15 base  +  4 stream-specific  =  19 documents.
     """
     COMMON = dict(
         registration_fee=500,
         admission_fee=2500,
         caution_deposit=1000,
         annual_charge=3600,
-        upgradation_fee=0,
+        upgradation_fee=1500,
         due_day=10,
-        late_fee=0,
-        late_fee_enabled=False,
+        late_fee=150,
+        late_fee_enabled=True,
         sibling_admission_discount_amount=1000,
         sibling_tuition_discount_amount=300,
     )
 
-    # class_name → class-specific fee overrides
-    CLASS_FEES = {
+    # ── Base configs (stream = None) — one per class ──────────────────────────
+    # 11th/12th base entries act as the fallback when no stream-specific config
+    # is found; in practice the stream-specific ones below take precedence.
+    BASE_FEES = {
         "SF. SR.": dict(activity_fee=1500, exam_fee=300,  lab_fee=0,    ai_robotics_fee=0,    monthly_tuition=1000),
         "LKG":     dict(activity_fee=2000, exam_fee=300,  lab_fee=0,    ai_robotics_fee=0,    monthly_tuition=1100),
         "UKG":     dict(activity_fee=2000, exam_fee=300,  lab_fee=0,    ai_robotics_fee=0,    monthly_tuition=1100),
@@ -1041,31 +1056,464 @@ async def seed_fee_component_configs():
         "8th":     dict(activity_fee=3900, exam_fee=300,  lab_fee=1500, ai_robotics_fee=0,    monthly_tuition=1400),
         "9th":     dict(activity_fee=4500, exam_fee=450,  lab_fee=1500, ai_robotics_fee=2400, monthly_tuition=1900),
         "10th":    dict(activity_fee=4500, exam_fee=450,  lab_fee=1500, ai_robotics_fee=2400, monthly_tuition=1900),
-        "11th":    dict(activity_fee=5000, exam_fee=600,  lab_fee=2500, ai_robotics_fee=2500, monthly_tuition=2200),
-        "12th":    dict(activity_fee=5000, exam_fee=600,  lab_fee=2500, ai_robotics_fee=2500, monthly_tuition=2300),
+        # 11th/12th base (fallback if stream lookup fails)
+        "11th":    dict(activity_fee=5000, exam_fee=600,  lab_fee=2500, ai_robotics_fee=0,    monthly_tuition=2200),
+        "12th":    dict(activity_fee=5000, exam_fee=600,  lab_fee=2500, ai_robotics_fee=0,    monthly_tuition=2300),
     }
+
+    # ── Stream-specific configs for 11th and 12th ─────────────────────────────
+    # Science: Physics/Chem/Bio labs → higher lab fee
+    # Humanities: no lab required → lab_fee = 0
+    STREAM_FEES = [
+        ("11th", "science",    dict(activity_fee=5000, exam_fee=700, lab_fee=3500, ai_robotics_fee=0, monthly_tuition=2500)),
+        ("11th", "humanities", dict(activity_fee=5000, exam_fee=600, lab_fee=0,    ai_robotics_fee=0, monthly_tuition=2200)),
+        ("12th", "science",    dict(activity_fee=5000, exam_fee=700, lab_fee=3500, ai_robotics_fee=0, monthly_tuition=2600)),
+        ("12th", "humanities", dict(activity_fee=5000, exam_fee=600, lab_fee=0,    ai_robotics_fee=0, monthly_tuition=2300)),
+    ]
 
     now = datetime.now(timezone.utc).isoformat()
     docs = []
-    for class_name, overrides in CLASS_FEES.items():
-        doc = {
-            "config_id": f"fcc_{uuid.uuid4().hex[:10]}",
-            "class_name": class_name,
-            "stream": None,
+
+    for class_name, overrides in BASE_FEES.items():
+        docs.append({
+            "config_id":   f"fcc_{uuid.uuid4().hex[:10]}",
+            "class_name":  class_name,
+            "stream":      None,
             "academic_year": AY,
             **COMMON,
             **overrides,
-            "is_active": True,
-            "notes": "Seeded from official fee schedule 2025-26",
-            "created_by": "seed_script",
-            "created_at": now,
-            "updated_at": None,
-        }
-        docs.append(doc)
+            "is_active":   True,
+            "notes":       "Seeded — official fee schedule 2025-26",
+            "created_by":  "seed_script",
+            "created_at":  now,
+            "updated_at":  None,
+        })
+
+    for class_name, stream, overrides in STREAM_FEES:
+        docs.append({
+            "config_id":   f"fcc_{uuid.uuid4().hex[:10]}",
+            "class_name":  class_name,
+            "stream":      stream,
+            "academic_year": AY,
+            **COMMON,
+            **overrides,
+            "is_active":   True,
+            "notes":       f"Seeded — {stream.title()} stream fee schedule 2025-26",
+            "created_by":  "seed_script",
+            "created_at":  now,
+            "updated_at":  None,
+        })
 
     await db.fee_component_configs.insert_many(docs)
-    print(f"  Fee configs: {len(docs)} classes seeded for {AY}")
-    return docs
+    print(f"  Fee configs: {len(BASE_FEES)} base + {len(STREAM_FEES)} stream-specific = {len(docs)} total for {AY}")
+
+    # ── 2026-2027 (approx 5% increase across the board) ──────────────────────
+    AY2 = "2026-2027"
+    COMMON2 = dict(
+        registration_fee=500, admission_fee=2500, caution_deposit=1000,
+        annual_charge=3600, upgradation_fee=1500,
+        due_day=10, late_fee=150, late_fee_enabled=True,
+        sibling_admission_discount_amount=1000, sibling_tuition_discount_amount=300,
+    )
+    BASE2 = {
+        "SF. SR.": dict(activity_fee=1600, exam_fee=300,  lab_fee=0,    ai_robotics_fee=0,    monthly_tuition=1050),
+        "LKG":     dict(activity_fee=2100, exam_fee=300,  lab_fee=0,    ai_robotics_fee=0,    monthly_tuition=1160),
+        "UKG":     dict(activity_fee=2100, exam_fee=300,  lab_fee=0,    ai_robotics_fee=0,    monthly_tuition=1160),
+        "1st":     dict(activity_fee=2500, exam_fee=300,  lab_fee=1600, ai_robotics_fee=0,    monthly_tuition=1200),
+        "2nd":     dict(activity_fee=2500, exam_fee=300,  lab_fee=1600, ai_robotics_fee=0,    monthly_tuition=1200),
+        "3rd":     dict(activity_fee=3000, exam_fee=300,  lab_fee=1600, ai_robotics_fee=0,    monthly_tuition=1300),
+        "4th":     dict(activity_fee=3000, exam_fee=300,  lab_fee=1600, ai_robotics_fee=0,    monthly_tuition=1300),
+        "5th":     dict(activity_fee=3500, exam_fee=300,  lab_fee=1600, ai_robotics_fee=0,    monthly_tuition=1420),
+        "6th":     dict(activity_fee=3500, exam_fee=300,  lab_fee=1600, ai_robotics_fee=0,    monthly_tuition=1420),
+        "7th":     dict(activity_fee=4100, exam_fee=300,  lab_fee=1600, ai_robotics_fee=0,    monthly_tuition=1470),
+        "8th":     dict(activity_fee=4100, exam_fee=300,  lab_fee=1600, ai_robotics_fee=0,    monthly_tuition=1470),
+        "9th":     dict(activity_fee=4700, exam_fee=475,  lab_fee=1600, ai_robotics_fee=2500, monthly_tuition=2000),
+        "10th":    dict(activity_fee=4700, exam_fee=475,  lab_fee=1600, ai_robotics_fee=2500, monthly_tuition=2000),
+        "11th":    dict(activity_fee=5250, exam_fee=630,  lab_fee=2600, ai_robotics_fee=0,    monthly_tuition=2310),
+        "12th":    dict(activity_fee=5250, exam_fee=630,  lab_fee=2600, ai_robotics_fee=0,    monthly_tuition=2420),
+    }
+    STREAM2 = [
+        ("11th", "science",    dict(activity_fee=5250, exam_fee=735, lab_fee=3700, ai_robotics_fee=0, monthly_tuition=2625)),
+        ("11th", "humanities", dict(activity_fee=5250, exam_fee=630, lab_fee=0,    ai_robotics_fee=0, monthly_tuition=2310)),
+        ("12th", "science",    dict(activity_fee=5250, exam_fee=735, lab_fee=3700, ai_robotics_fee=0, monthly_tuition=2730)),
+        ("12th", "humanities", dict(activity_fee=5250, exam_fee=630, lab_fee=0,    ai_robotics_fee=0, monthly_tuition=2420)),
+    ]
+    docs2 = []
+    for cn, ov in BASE2.items():
+        docs2.append({"config_id": f"fcc_{uuid.uuid4().hex[:10]}", "class_name": cn, "stream": None,
+                      "academic_year": AY2, **COMMON2, **ov, "is_active": True,
+                      "notes": f"Seeded — official fee schedule {AY2}",
+                      "created_by": "seed_script", "created_at": now, "updated_at": None})
+    for cn, stream, ov in STREAM2:
+        docs2.append({"config_id": f"fcc_{uuid.uuid4().hex[:10]}", "class_name": cn, "stream": stream,
+                      "academic_year": AY2, **COMMON2, **ov, "is_active": True,
+                      "notes": f"Seeded — {stream.title()} stream {AY2}",
+                      "created_by": "seed_script", "created_at": now, "updated_at": None})
+    await db.fee_component_configs.insert_many(docs2)
+    print(f"  Fee configs: {len(docs2)} total for {AY2}")
+    return docs + docs2
+
+
+# ─── Comprehensive Fee Demo Seed Data ─────────────────────────────────────────
+
+async def seed_fees_demo_data():
+    """
+    Seed 30+ distinct fee ledger entries covering every scenario
+    documented in the task spec. Also seeds POS orders, Razorpay orders,
+    and demo parent accounts. Prints all demo credentials at end.
+    """
+    print("\n  [fee-demo] Starting comprehensive fee demo seed...")
+
+    from auth_utils import hash_password
+    from routes.fees import get_next_receipt_number
+
+    now_utc = datetime.now(timezone.utc)
+    today = now_utc.strftime("%Y-%m-%d")
+    ay = AY  # "2025-2026"
+
+    demo_creds = []
+
+    # ── Helper: get or create a demo student + parent user ────────────────────
+    async def _ensure_student(
+        first, last, cls, section, stream=None,
+        parent_email=None, is_sibling=False, sibling_id=None,
+        roll_number=None,
+    ):
+        sid = f"STU{datetime.now().year}{uuid.uuid4().hex[:6].upper()}"
+        adm_num = f"SFS{datetime.now().year}/{random.randint(100,999)}"
+        p_email = parent_email or f"parent.{first.lower()}.{last.lower()}@demo.shemford.in"
+        p_name  = f"Parent of {first}"
+        p_phone = f"98{random.randint(10000000,99999999)}"
+        p_pass  = "Demo@1234"
+        p_uid   = f"user_{uuid.uuid4().hex[:12]}"
+
+        if not await db.users.find_one({"email": p_email}):
+            await db.users.insert_one({
+                "user_id": p_uid, "email": p_email,
+                "name": p_name, "role": "parent",
+                "phone": p_phone, "is_active": True,
+                "password_hash": hash_password(p_pass),
+                "created_at": now_utc.isoformat(),
+            })
+            demo_creds.append({"role": "parent", "email": p_email, "password": p_pass, "for": f"{first} {last}"})
+        else:
+            u = await db.users.find_one({"email": p_email})
+            p_uid = u["user_id"]
+
+        student = {
+            "student_id": sid, "admission_number": adm_num,
+            "first_name": first, "last_name": last,
+            "gender": "Male", "class_name": cls, "section": section,
+            "stream": stream, "roll_number": roll_number or str(random.randint(1, 40)),
+            "parent_email": p_email, "parent_name": p_name, "parent_phone": p_phone,
+            "admission_date": (now_utc - timedelta(days=random.randint(30,200))).strftime("%Y-%m-%d"),
+            "academic_year": ay, "is_active": True, "fee_status": "pending",
+            "is_sibling": is_sibling, "sibling_student_id": sibling_id,
+            "created_at": now_utc.isoformat(),
+        }
+        await db.students.insert_one(student)
+        return student
+
+    def _ldg(student, component, fee_type, desc, gross, net, due_date, status,
+             month=None, concession=0, concession_reason=None, late_fee=0,
+             amount_paid=0, remaining_balance=None, payment_id=None,
+             receipt_number=None, paid_date=None):
+        if remaining_balance is None:
+            remaining_balance = max(0, net - amount_paid)
+        entry = {
+            "ledger_id": f"ldg_{uuid.uuid4().hex[:12]}",
+            "student_id": student["student_id"],
+            "admission_number": student["admission_number"],
+            "class_name": student["class_name"],
+            "stream": student.get("stream"),
+            "academic_year": ay,
+            "fee_component": component,
+            "fee_type": fee_type,
+            "description": desc,
+            "month": month,
+            "gross_amount": gross,
+            "concession_amount": concession,
+            "concession_reason": concession_reason,
+            "late_fee_applied": late_fee,
+            "net_amount": net,
+            "due_date": due_date,
+            "status": status,
+            "payment_id": payment_id,
+            "receipt_number": receipt_number,
+            "paid_date": paid_date,
+            "amount_paid": amount_paid,
+            "remaining_balance": remaining_balance,
+            "created_at": now_utc.isoformat(),
+        }
+        return entry
+
+    async def _make_payment(student, amount, method, ledger_ids, txn_id=None, remarks="", receipt_num=None):
+        if receipt_num is None:
+            receipt_num = await get_next_receipt_number()
+        pid = f"pay_{uuid.uuid4().hex[:12]}"
+        pay = {
+            "payment_id": pid, "student_id": student["student_id"],
+            "installment_ids": ledger_ids, "amount": amount,
+            "payment_date": today, "payment_method": method,
+            "transaction_id": txn_id, "receipt_number": receipt_num,
+            "collected_by": "seed_script", "remarks": remarks,
+            "academic_year": ay, "created_at": now_utc.isoformat(),
+        }
+        await db.fee_payments.insert_one(pay)
+        return pid, receipt_num
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SCENARIO 1: Overdue — old (tuition 3 months ago)
+    s1 = await _ensure_student("Ravi", "Overdue", "5th", "Green")
+    three_months_ago = (now_utc - timedelta(days=90)).strftime("%Y-%m-%d")
+    l1 = _ldg(s1, "tuition", "monthly", "Tuition — Jan 2026", 1350, 1350,
+               three_months_ago, "overdue", month="2026-01")
+    await db.student_ledger.insert_one(l1)
+    await db.students.update_one({"student_id": s1["student_id"]}, {"$set": {"fee_status": "overdue"}})
+
+    # SCENARIO 2: Overdue — recent (5 days ago)
+    s2 = await _ensure_student("Priya", "Recent", "7th", "Blue")
+    five_days_ago = (now_utc - timedelta(days=5)).strftime("%Y-%m-%d")
+    l2 = _ldg(s2, "tuition", "monthly", "Tuition — Apr 2026", 1400, 1400,
+               five_days_ago, "overdue", month="2026-04")
+    await db.student_ledger.insert_one(l2)
+    await db.students.update_one({"student_id": s2["student_id"]}, {"$set": {"fee_status": "overdue"}})
+
+    # SCENARIO 3: Advance payment (paid 2 months ahead)
+    s3 = await _ensure_student("Kavya", "Advance", "3rd", "Violet")
+    future_month = (now_utc + timedelta(days=60)).strftime("%Y-%m")
+    future_due   = (now_utc + timedelta(days=60)).strftime("%Y-%m-10")
+    rcp3 = await get_next_receipt_number()
+    pid3, _ = await _make_payment(s3, 1250, "cash", [], receipt_num=rcp3)
+    l3 = _ldg(s3, "tuition", "monthly", f"Tuition — Advance {future_month}", 1250, 1250,
+               future_due, "paid", month=future_month,
+               payment_id=pid3, receipt_number=rcp3, paid_date=today, amount_paid=1250, remaining_balance=0)
+    await db.student_ledger.insert_one(l3)
+
+    # SCENARIO 4: Partial payment (Annual charge ₹3600 → ₹2000 paid)
+    s4 = await _ensure_student("Arjun", "Partial", "6th", "Orange")
+    l4 = _ldg(s4, "annual_charge", "yearly", "Annual Charge 2025-2026", 3600, 3600,
+               f"{ay[:4]}-04-10", "partially_paid",
+               amount_paid=2000, remaining_balance=1600)
+    await db.student_ledger.insert_one(l4)
+    await _make_payment(s4, 2000, "cash", [l4["ledger_id"]], remarks="Partial annual fee")
+
+    # SCENARIO 5: Late fee applied
+    s5 = await _ensure_student("Deepak", "LateFee", "9th", "Red")
+    l5 = _ldg(s5, "tuition", "monthly", "Tuition — Mar 2026 (late)", 1900, 2050,
+               "2026-03-10", "overdue", month="2026-03", late_fee=150)
+    await db.student_ledger.insert_one(l5)
+    await db.students.update_one({"student_id": s5["student_id"]}, {"$set": {"fee_status": "overdue"}})
+
+    # SCENARIO 6: Sibling discount — two siblings
+    s6a = await _ensure_student("Rahul", "Sibling", "4th", "Yellow",
+                                 parent_email="parent.sibling@demo.shemford.in")
+    s6b = await _ensure_student("Rohit", "Sibling", "6th", "Green",
+                                 parent_email="parent.sibling@demo.shemford.in",
+                                 is_sibling=True, sibling_id=s6a["student_id"])
+    # Sibling gets discounted admission fee
+    l6 = _ldg(s6b, "admission", "one_time", "Admission Fee (Sibling Discount)", 2500, 1500,
+               f"{ay[:4]}-04-10", "pending", concession=1000, concession_reason="Sibling discount (₹1000)")
+    await db.student_ledger.insert_one(l6)
+
+    # SCENARIO 7: Merit scholarship
+    s7 = await _ensure_student("Ananya", "Merit", "10th", "Indigo")
+    l7 = _ldg(s7, "tuition", "monthly", "Tuition — Apr 2026 (Merit 50%)", 1900, 950,
+               f"{ay[:4]}-04-10", "pending", month="2026-04",
+               concession=950, concession_reason="Merit scholarship 50%")
+    await db.student_ledger.insert_one(l7)
+
+    # SCENARIO 8: Waived fee
+    s8 = await _ensure_student("Divya", "Waived", "8th", "Blue")
+    l8 = _ldg(s8, "exam_fee", "yearly", "Exam Fee 2025-2026 (Waived)", 300, 0,
+               f"{ay[:4]}-04-10", "waived", concession=300, concession_reason="Waived by principal")
+    await db.student_ledger.insert_one(l8)
+
+    # SCENARIO 9: Fully paid student — all components paid for the year
+    s9 = await _ensure_student("Aanya", "FullPaid", "2nd", "Violet")
+    paid_entries = []
+    rcp9 = await get_next_receipt_number()
+    for comp, ft, desc, gross in [
+        ("registration", "one_time", "Registration Fee", 500),
+        ("admission", "one_time", "Admission Fee", 2500),
+        ("caution_deposit", "one_time", "Caution Deposit", 1000),
+        ("annual_charge", "yearly", f"Annual Charge {ay}", 3600),
+        ("activity_fee", "yearly", f"Activity Fee {ay}", 2400),
+        ("exam_fee", "yearly", f"Exam Fee {ay}", 300),
+    ]:
+        e = _ldg(s9, comp, ft, desc, gross, gross, f"{ay[:4]}-04-10", "paid",
+                 amount_paid=gross, remaining_balance=0,
+                 payment_id="pay_seed_fullpaid", receipt_number=rcp9, paid_date=today)
+        paid_entries.append(e)
+    for m in ["2025-04","2025-05","2025-06","2025-07","2025-08","2025-09",
+              "2025-10","2025-11","2025-12","2026-01","2026-02","2026-03"]:
+        yr_mn = m.split("-")
+        month_names = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+        desc = f"Tuition — {month_names[int(yr_mn[1])]} {yr_mn[0]}"
+        e = _ldg(s9, "tuition", "monthly", desc, 1150, 1150, f"{m}-10", "paid",
+                 month=m, amount_paid=1150, remaining_balance=0,
+                 payment_id="pay_seed_fullpaid", receipt_number=rcp9, paid_date=today)
+        paid_entries.append(e)
+    await db.student_ledger.insert_many(paid_entries)
+    total_paid_9 = sum(e["net_amount"] for e in paid_entries)
+    await _make_payment(s9, total_paid_9, "cash", [e["ledger_id"] for e in paid_entries],
+                        receipt_num=rcp9, remarks="Full year paid at admission")
+    await db.students.update_one({"student_id": s9["student_id"]}, {"$set": {"fee_status": "paid"}})
+
+    # SCENARIO 10: New admission — only registration paid
+    s10 = await _ensure_student("Vihaan", "NewAdm", "LKG", "Red")
+    rcp10 = await get_next_receipt_number()
+    pid10, _ = await _make_payment(s10, 500, "cash", [], receipt_num=rcp10, remarks="Registration fee at enquiry")
+    l10a = _ldg(s10, "registration", "one_time", "Registration Fee", 500, 500,
+                f"{ay[:4]}-04-10", "paid", amount_paid=500, remaining_balance=0,
+                payment_id=pid10, receipt_number=rcp10, paid_date=today)
+    l10b = _ldg(s10, "admission", "one_time", "Admission Fee", 2500, 2500, f"{ay[:4]}-04-10", "pending")
+    l10c = _ldg(s10, "tuition", "monthly", "Tuition — Apr 2026", 1100, 1100, f"{ay[:4]}-04-10", "pending", month="2026-04")
+    await db.student_ledger.insert_many([l10a, l10b, l10c])
+
+    # SCENARIO 11: Cheque payment pending
+    s11 = await _ensure_student("Siddharth", "Cheque", "7th", "Green")
+    chq_num = f"CHQ{random.randint(100000,999999)}"
+    rcp11 = await get_next_receipt_number()
+    pid11, _ = await _make_payment(s11, 1400, "cheque", [], txn_id=chq_num,
+                                    remarks="Cheque received, awaiting clearance", receipt_num=rcp11)
+    l11 = _ldg(s11, "tuition", "monthly", "Tuition — Apr 2026", 1400, 1400,
+               f"{ay[:4]}-04-10", "paid", month="2026-04",
+               payment_id=pid11, receipt_number=rcp11, paid_date=today,
+               amount_paid=1400, remaining_balance=0)
+    await db.student_ledger.insert_one(l11)
+
+    # SCENARIO 12: Online Razorpay payment
+    s12 = await _ensure_student("Ishaan", "Online", "9th", "Violet")
+    rzp_pay_id = f"pay_RZP{uuid.uuid4().hex[:14].upper()}"
+    rzp_ord_id = f"order_RZP{uuid.uuid4().hex[:14].upper()}"
+    rcp12 = await get_next_receipt_number()
+    pid12, _ = await _make_payment(s12, 1900, "online", [], txn_id=rzp_pay_id,
+                                    remarks="Razorpay online payment", receipt_num=rcp12)
+    l12 = _ldg(s12, "tuition", "monthly", "Tuition — Apr 2026", 1900, 1900,
+               f"{ay[:4]}-04-10", "paid", month="2026-04",
+               payment_id=pid12, receipt_number=rcp12, paid_date=today,
+               amount_paid=1900, remaining_balance=0)
+    await db.student_ledger.insert_one(l12)
+    # Seed the Razorpay order record
+    await db.razorpay_orders.insert_one({
+        "internal_order_id": f"rzpord_{uuid.uuid4().hex[:14]}",
+        "rzp_order_id": rzp_ord_id, "rzp_payment_id": rzp_pay_id,
+        "student_id": s12["student_id"], "ledger_ids": [l12["ledger_id"]],
+        "amount_paise": 190000, "amount_rupees": 1900.0,
+        "status": "VERIFIED_SUCCESS", "created_by": "seed_script",
+        "receipt_number": rcp12, "fee_payment_id": pid12,
+        "webhook_verified": True, "created_at": now_utc.isoformat(),
+        "updated_at": now_utc.isoformat(),
+    })
+
+    # SCENARIO 13: POS card payment
+    s13 = await _ensure_student("Aditi", "POSPay", "10th", "Blue")
+    pos_ord_id = f"posord_{uuid.uuid4().hex[:14]}"
+    rcp13 = await get_next_receipt_number()
+    pid13, _ = await _make_payment(s13, 1900, "pos_card", [], txn_id=pos_ord_id,
+                                    remarks="POS card payment via Ezetap", receipt_num=rcp13)
+    l13 = _ldg(s13, "tuition", "monthly", "Tuition — Apr 2026", 1900, 1900,
+               f"{ay[:4]}-04-10", "paid", month="2026-04",
+               payment_id=pid13, receipt_number=rcp13, paid_date=today,
+               amount_paid=1900, remaining_balance=0)
+    await db.student_ledger.insert_one(l13)
+    await db.pos_orders.insert_one({
+        "pos_order_id": pos_ord_id, "p2p_request_id": f"p2p_{uuid.uuid4().hex[:12]}",
+        "student_id": s13["student_id"], "ledger_ids": [l13["ledger_id"]],
+        "amount_paise": 190000, "amount_rupees": 1900.0, "device_id": "DEVICE001",
+        "mode": "CARD", "external_ref_number": f"SFS-{uuid.uuid4().hex[:8].upper()}",
+        "status": "SUCCESS", "receipt_number": rcp13, "fee_payment_id": pid13,
+        "collected_by": "seed_script", "ezetap_response": {"txnStatus": "SUCCESS"},
+        "created_at": now_utc.isoformat(), "updated_at": now_utc.isoformat(),
+    })
+
+    # SCENARIO 14: Annual fee upcoming (due in 30 days)
+    s14 = await _ensure_student("Yash", "Upcoming", "1st", "Yellow")
+    upcoming_due = (now_utc + timedelta(days=30)).strftime("%Y-%m-%d")
+    l14 = _ldg(s14, "annual_charge", "yearly", f"Annual Charge {ay}", 3600, 3600,
+               upcoming_due, "pending")
+    await db.student_ledger.insert_one(l14)
+
+    # SCENARIO 15: Upgradation fee (Class 10 → 11)
+    s15 = await _ensure_student("Sachin", "Upgradation", "11th", "Indigo", stream="science")
+    l15 = _ldg(s15, "upgradation", "one_time", "Upgradation Fee (Class 10 → 11)", 1500, 1500,
+               f"{ay[:4]}-04-10", "pending")
+    await db.student_ledger.insert_one(l15)
+    await db.upgradation_records.insert_one({
+        "upgradation_id": f"upg_{uuid.uuid4().hex[:10]}",
+        "student_id": s15["student_id"], "from_class": "10th", "to_class": "11th",
+        "to_stream": "science", "from_section": "Red", "to_section": "Indigo",
+        "academic_year": ay, "upgradation_fee": 1500,
+        "upgradation_fee_ledger_id": l15["ledger_id"], "upgradation_fee_paid": False,
+        "performed_by": "seed_script", "created_at": now_utc.isoformat(),
+    })
+
+    # SCENARIO 16: Fee config missing — student seeded without a matching fee config
+    # No ledger entries are created, exercising the "config not found" error path in the UI.
+    await _ensure_student("Tiny", "NoConfig", "SF. SR.", "Red")
+
+    # SCENARIO 17: Multiple overdue months (4 consecutive months)
+    s17 = await _ensure_student("Gaurav", "MultiOverdue", "8th", "Orange")
+    overdue_months = ["2025-12", "2026-01", "2026-02", "2026-03"]
+    overdue_ledgers = []
+    for m in overdue_months:
+        yr_mn = m.split("-")
+        month_names = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+        desc = f"Tuition — {month_names[int(yr_mn[1])]} {yr_mn[0]}"
+        due = f"{m}-10"
+        e = _ldg(s17, "tuition", "monthly", desc, 1400, 1400, due, "overdue", month=m)
+        overdue_ledgers.append(e)
+    await db.student_ledger.insert_many(overdue_ledgers)
+    await db.students.update_one({"student_id": s17["student_id"]}, {"$set": {"fee_status": "overdue"}})
+
+    # SCENARIO 18: Zero balance (full scholarship)
+    s18 = await _ensure_student("Neha", "Scholarship", "12th", "Violet", stream="humanities")
+    l18 = _ldg(s18, "tuition", "monthly", "Tuition — Apr 2026 (Full Scholarship)", 2300, 0,
+               f"{ay[:4]}-04-10", "waived", month="2026-04",
+               concession=2300, concession_reason="Full government scholarship")
+    await db.student_ledger.insert_one(l18)
+    await db.students.update_one({"student_id": s18["student_id"]}, {"$set": {"fee_status": "paid"}})
+
+    # ── Extra POS orders for different statuses ───────────────────────────────
+    for status, label in [
+        ("INITIATED", "Waiting for swipe"),
+        ("FAILED",    "Card declined"),
+        ("CANCELLED", "Cancelled by operator"),
+        ("SUCCESS",   "Paid in full - 2nd record"),
+    ]:
+        s_extra = await _ensure_student(label.split()[0], f"POS{status}", "5th", "Blue")
+        extra_pos = {
+            "pos_order_id": f"posord_{uuid.uuid4().hex[:14]}",
+            "p2p_request_id": f"p2p_{uuid.uuid4().hex[:12]}",
+            "student_id": s_extra["student_id"],
+            "ledger_ids": [], "amount_paise": 135000, "amount_rupees": 1350.0,
+            "device_id": "DEVICE002", "mode": "ALL",
+            "external_ref_number": f"SFS-{uuid.uuid4().hex[:8].upper()}",
+            "status": status, "collected_by": "seed_script",
+            "ezetap_response": {"txnStatus": status},
+            "created_at": now_utc.isoformat(), "updated_at": now_utc.isoformat(),
+        }
+        await db.pos_orders.insert_one(extra_pos)
+
+    # ── Print demo credentials ─────────────────────────────────────────────────
+    print("\n  ╔══════════════════════════════════════════════════════════╗")
+    print("  ║           DEMO FEE SEED — PARENT LOGINS                 ║")
+    print("  ╠══════════════════════════════════════════════════════════╣")
+    seen = set()
+    for c in demo_creds:
+        key = c["email"]
+        if key in seen:
+            continue
+        seen.add(key)
+        print(f"  ║  Student: {c['for']:<20} Role: {c['role']}")
+        print(f"  ║  Email  : {c['email']}")
+        print(f"  ║  Pass   : {c['password']}")
+        print("  ║──────────────────────────────────────────────────────────")
+    print("  ╚══════════════════════════════════════════════════════════╝\n")
+
+    total_students = 18 + 4  # 18 scenario students + 4 POS-status extras
+    print(f"  [fee-demo] Done: {total_students} demo students, 5 POS orders, scenario ledger entries seeded.")
 
 
 # ─── Main ──────────────────────────────────────────────────────────────────────
@@ -1112,8 +1560,10 @@ async def main():
     print("[8/9] Holidays")
     await seed_holidays()
 
-    print("[9/9] Done!")
-    client.close()
+    print("[9/9] Fee Demo Data")
+    await seed_fees_demo_data()
+
     print("\nDone! All data seeded successfully.")
+    client.close()
 
 asyncio.run(main())
