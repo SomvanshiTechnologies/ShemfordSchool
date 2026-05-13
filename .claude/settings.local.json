@@ -145,7 +145,10 @@
       "Bash(kill -9 17591)",
       "Read(//Users/ameyasomvanshi/Downloads/ShemfordSchool-main/**)",
       "Bash(pkill -f \"react-scripts start\")",
-      "Bash(kill 29548 29550 29571 29574)"
+      "Bash(kill 29548 29550 29571 29574)",
+      "Bash(venv/Scripts/pip install:*)",
+      "Bash(venv/Scripts/python server.py)",
+      "PowerShell(Test-NetConnection *)"
     ]
   }
 }

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Shemford School</string>
+    <string name="title_activity_main">Shemford School</string>
+    <string name="package_name">com.shemfordschool.app</string>
+    <string name="custom_url_scheme">com.shemfordschool.app</string>
+</resources>

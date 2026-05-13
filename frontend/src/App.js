@@ -25,6 +25,7 @@ import SettingsPage from "./components/SettingsPage";
 import PayrollPage from "./components/PayrollPage";
 import MobileApp from "./mobile/MobileApp";
 import { useMobile } from "./hooks/useMobile";
+import ScreenshotBlocker from "./components/ScreenshotBlocker";
 import "./mobile/mobile.css";
 import "./App.css";
 
@@ -307,17 +308,19 @@ function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
-        <AppRouter />
-        <Toaster 
-          position="top-right" 
-          richColors 
-          closeButton
-          toastOptions={{
-            style: {
-              fontFamily: 'Inter, sans-serif',
-            },
-          }}
-        />
+        <ScreenshotBlocker>
+          <AppRouter />
+          <Toaster
+            position="top-right"
+            richColors
+            closeButton
+            toastOptions={{
+              style: {
+                fontFamily: 'Inter, sans-serif',
+              },
+            }}
+          />
+        </ScreenshotBlocker>
       </BrowserRouter>
     </AuthProvider>
   );
