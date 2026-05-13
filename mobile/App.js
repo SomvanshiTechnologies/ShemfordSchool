@@ -8,7 +8,29 @@ import { AuthProvider } from './src/contexts/AuthContext';
 import AppNavigator from './src/navigation/AppNavigator';
 
 export default function App() {
-  usePreventScreenCapture();
+  useEffect(() => {
+    let subscription;
+    (async () => {
+      try {
+        await ScreenCapture.preventScreenCaptureAsync();
+        if (Platform.OS === 'ios') {
+          subscription = ScreenCapture.addScreenshotListener(() => {
+            Alert.alert(
+              'Screenshot detected',
+              'Screenshots of this app are not permitted. The incident has been logged.'
+            );
+          });
+        }
+      } catch (e) {
+        console.warn('Screen capture protection unavailable:', e?.message);
+      }
+    })();
+
+    return () => {
+      if (subscription) subscription.remove();
+      ScreenCapture.allowScreenCaptureAsync().catch(() => {});
+    };
+  }, []);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
