@@ -9,9 +9,6 @@ import AppNavigator from './src/navigation/AppNavigator';
 
 export default function App() {
   useEffect(() => {
-    // Block screenshots/recording app-wide.
-    // Android: sets FLAG_SECURE so screenshots are silently disabled.
-    // iOS: cannot block, but we listen and warn when a screenshot is taken.
     let subscription;
     (async () => {
       try {
@@ -25,7 +22,6 @@ export default function App() {
           });
         }
       } catch (e) {
-        // Module unavailable (e.g. Expo Go on web). Fail open — app still runs.
         console.warn('Screen capture protection unavailable:', e?.message);
       }
     })();

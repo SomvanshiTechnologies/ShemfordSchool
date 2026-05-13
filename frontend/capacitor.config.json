@@ -1,0 +1,13 @@
+{
+  "appId": "com.shemfordschool.app",
+  "appName": "Shemford School",
+  "webDir": "build",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 0
+    }
+  }
+}
