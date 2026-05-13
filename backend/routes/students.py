@@ -186,6 +186,8 @@ async def get_students(
     fee_status: Optional[str] = None,
     search: Optional[str] = None,
     status: Optional[str] = "active",  # active | inactive | all
+    limit: int = 500,
+    skip: int = 0,
 ):
     user = await get_current_user(request)
     if status == "inactive":
@@ -220,9 +222,13 @@ async def get_students(
     if fee_status:
         query["fee_status"] = fee_status
 
+    # Bound pagination to protect from accidental huge fetches.
+    limit = max(1, min(int(limit or 500), 2000))
+    skip = max(0, int(skip or 0))
+
     students = await db.students.find(query, {"_id": 0}).sort(
         [("class_name", 1), ("section", 1), ("first_name", 1)]
-    ).to_list(5000)
+    ).skip(skip).limit(limit).to_list(limit)
 
     # Optional in-memory search (name or admission number)
     if search:

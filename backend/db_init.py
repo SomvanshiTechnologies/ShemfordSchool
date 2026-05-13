@@ -48,6 +48,8 @@ async def create_indexes(db):
         ], background=True),
         db.student_ledger.create_index([("student_id", ASCENDING), ("fee_type", ASCENDING), ("due_date", ASCENDING)], background=True),
         db.student_ledger.create_index([("status", ASCENDING), ("due_date", ASCENDING)], background=True),
+        # Supports the /fees/due-chart aggregation: $match on status, then $group by student_id.
+        db.student_ledger.create_index([("status", ASCENDING), ("student_id", ASCENDING)], background=True),
         db.student_ledger.create_index([("payment_id", ASCENDING)], sparse=True, background=True),
         db.student_ledger.create_index([("academic_year", ASCENDING), ("status", ASCENDING)], background=True),
 

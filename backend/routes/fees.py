@@ -945,19 +945,40 @@ async def generate_monthly_fees(request: Request):
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     desc = f"Tuition — {month_names[int(mn)]} {yr}"
 
+    # Batch pre-fetch to eliminate per-student round-trips.
+    # 1) All fee configs for the year, keyed by (class, stream).
+    cfgs_cursor = db.fee_component_configs.find(
+        {"academic_year": academic_year, "is_active": True}, {"_id": 0}
+    )
+    cfg_by_class_stream: dict = {}
+    async for cfg in cfgs_cursor:
+        cfg_by_class_stream[(cfg.get("class_name"), cfg.get("stream"))] = cfg
+
+    def lookup_cfg(class_name: str, stream: Optional[str]):
+        # Prefer stream-specific, fall back to no-stream config.
+        return cfg_by_class_stream.get((class_name, stream)) or cfg_by_class_stream.get((class_name, None))
+
+    # 2) Existing tuition ledger entries for this month, in a single query.
+    student_ids = [s["student_id"] for s in students]
+    existing_ids: set = set()
+    if student_ids:
+        async for row in db.student_ledger.find(
+            {
+                "student_id": {"$in": student_ids},
+                "fee_component": "tuition",
+                "month": month_str,
+                "academic_year": academic_year,
+            },
+            {"_id": 0, "student_id": 1},
+        ):
+            existing_ids.add(row["student_id"])
+
     for student in students:
-        # Skip if already has a tuition entry for this month
-        existing = await db.student_ledger.find_one({
-            "student_id": student["student_id"],
-            "fee_component": "tuition",
-            "month": month_str,
-            "academic_year": academic_year,
-        }, {"_id": 0})
-        if existing:
+        if student["student_id"] in existing_ids:
             skipped += 1
             continue
 
-        cfg = await get_fee_config(student["class_name"], academic_year, student.get("stream"))
+        cfg = lookup_cfg(student["class_name"], student.get("stream"))
         if not cfg or not cfg.get("monthly_tuition", 0):
             skipped += 1
             continue

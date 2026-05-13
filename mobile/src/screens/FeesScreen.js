@@ -31,20 +31,29 @@ const FeesScreen = () => {
   useEffect(() => {
     if (isParent || isStudent) {
       client.get('/students').then(r => {
-        setChildren(r.data);
-        if (r.data.length > 0) {
-          setSelectedChild(r.data[0]);
-          return client.get(`/fees/student/${r.data[0].student_id}`);
+        const list = Array.isArray(r.data) ? r.data : [];
+        setChildren(list);
+        if (list.length > 0) {
+          setSelectedChild(list[0]);
+          return client.get(`/fees/student/${list[0].student_id}`);
         }
-      }).then(r => { if (r) setFeeData(r.data); }).finally(() => setLoading(false));
+      }).then(r => { if (r) setFeeData(r.data || null); })
+        .catch(e => { console.warn('Fees load failed', e?.message); })
+        .finally(() => setLoading(false));
     } else {
-      client.get('/fees/due-chart').then(r => setDueChart(r.data)).finally(() => setLoading(false));
+      client.get('/fees/due-chart')
+        .then(r => setDueChart(Array.isArray(r.data) ? r.data : []))
+        .catch(e => { console.warn('Due chart load failed', e?.message); setDueChart([]); })
+        .finally(() => setLoading(false));
     }
   }, []);
 
   const loadFees = (studentId) => {
     setLoading(true);
-    client.get(`/fees/student/${studentId}`).then(r => setFeeData(r.data)).finally(() => setLoading(false));
+    client.get(`/fees/student/${studentId}`)
+      .then(r => setFeeData(r.data || null))
+      .catch(e => { console.warn('Student fees load failed', e?.message); setFeeData(null); })
+      .finally(() => setLoading(false));
   };
 
   // Legacy cash-record payment (admin only, kept for backward compat)
@@ -150,9 +159,9 @@ const FeesScreen = () => {
 
   if (loading) return <SafeAreaView style={styles.safe}><ScreenLoader /></SafeAreaView>;
 
-  // Admin due chart
-  if (isAdminAcc) {
-    const totalDue = dueChart.reduce((s, x) => s + x.total_due, 0);
+  // Admin due chart (shown when no student is selected)
+  if (isAdminAcc && !selectedChild) {
+    const totalDue = (dueChart || []).reduce((s, x) => s + (Number(x?.total_due) || 0), 0);
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
@@ -165,18 +174,28 @@ const FeesScreen = () => {
             <Text style={styles.darkValue}>₹{totalDue.toLocaleString()}</Text>
           </CardDark>
           <View style={styles.list}>
-            {dueChart.map(d => (
-              <TouchableOpacity key={d.student_id} style={styles.listItem} onPress={() => { setSelectedChild({ student_id: d.student_id }); loadFees(d.student_id); }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontWeight: '600', fontSize: 13, color: COLORS.black }}>{d.name}</Text>
-                  <Text style={{ fontSize: 11, color: COLORS.muted }}>{d.class_name}-{d.section} | {d.months_pending} mo</Text>
-                </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={{ fontWeight: '700', fontSize: 14, color: COLORS.primary }}>₹{d.total_due.toLocaleString()}</Text>
-                  {d.months_overdue > 0 && <Badge text={`${d.months_overdue} overdue`} variant="orange" />}
-                </View>
-              </TouchableOpacity>
-            ))}
+            {dueChart.map(d => {
+              const [first, ...rest] = (d.name || '').split(' ');
+              return (
+                <TouchableOpacity
+                  key={d.student_id}
+                  style={styles.listItem}
+                  onPress={() => {
+                    setSelectedChild({ student_id: d.student_id, first_name: first, last_name: rest.join(' '), class_name: d.class_name, section: d.section });
+                    loadFees(d.student_id);
+                  }}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontWeight: '600', fontSize: 13, color: COLORS.black }}>{d.name}</Text>
+                    <Text style={{ fontSize: 11, color: COLORS.muted }}>{d.class_name}-{d.section} | {d.months_pending} mo</Text>
+                  </View>
+                  <View style={{ alignItems: 'flex-end' }}>
+                    <Text style={{ fontWeight: '700', fontSize: 14, color: COLORS.primary }}>₹{(Number(d.total_due) || 0).toLocaleString()}</Text>
+                    {(d.months_overdue || 0) > 0 && <Badge text={`${d.months_overdue} overdue`} variant="orange" />}
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
             {dueChart.length === 0 && (
               <View style={styles.empty}><Ionicons name="checkmark-circle" size={32} color={COLORS.black} /><Text style={styles.emptyText}>No pending dues</Text></View>
             )}
@@ -203,8 +222,20 @@ const FeesScreen = () => {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
+          {isAdminAcc && (
+            <TouchableOpacity
+              onPress={() => { setSelectedChild(null); setFeeData(null); }}
+              style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}
+            >
+              <Ionicons name="chevron-back" size={20} color={COLORS.black} />
+              <Text style={{ fontSize: 13, color: COLORS.black, fontWeight: '600' }}>Back to dues</Text>
+            </TouchableOpacity>
+          )}
           <Text style={styles.h1}>Fees</Text>
-          <Text style={styles.sub}>{selectedChild?.first_name} {selectedChild?.last_name}</Text>
+          <Text style={styles.sub}>
+            {selectedChild?.first_name} {selectedChild?.last_name}
+            {selectedChild?.class_name ? ` · ${selectedChild.class_name}-${selectedChild.section}` : ''}
+          </Text>
         </View>
 
         {summary && (
