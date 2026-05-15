@@ -71,7 +71,9 @@ const StudentsPage = () => {
   const [totalStudents, setTotalStudents] = useState(0);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [loadingMore, setLoadingMore] = useState(false);
   const PAGE_SIZE = 50;
+  const sentinelRef = useRef(null);
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -135,18 +137,21 @@ const StudentsPage = () => {
   const [onbPayment, setOnbPayment] = useState({ method: 'cash', transaction_id: '', remarks: '' });
   const [onbPaymentLoading, setOnbPaymentLoading] = useState(false);
 
-  const fetchStudents = useCallback(async (pg = page, search = searchTerm) => {
+  const fetchStudents = useCallback(async (pg = 1, search = searchTerm, append = false) => {
     const cacheKey = `students:${filterClass}:${filterSection}:${filterStatus}:${pg}:${search}`;
     const cached = getCached(cacheKey);
 
-    if (cached) {
-      setStudents(cached.students);
-      setTotalStudents(cached.total);
-      setTotalPages(cached.pages);
-      setLoading(false);
+    if (!append) {
+      if (cached) {
+        setStudents(cached.students);
+        setTotalStudents(cached.total);
+        setTotalPages(cached.pages);
+        setLoading(false);
+      }
+      setRefreshing(true);
+    } else {
+      setLoadingMore(true);
     }
-    // Always show top bar for any fetch — never blank the list
-    setRefreshing(true);
 
     try {
       const params = { page: pg, limit: PAGE_SIZE };
@@ -158,23 +163,41 @@ const StudentsPage = () => {
       const arr = Array.isArray(data) ? data : (Array.isArray(data?.students) ? data.students : []);
       const result = { students: arr, total: data?.total ?? arr.length, pages: data?.pages ?? 1 };
       setCached(cacheKey, result);
-      setStudents(result.students);
+      setStudents(prev => append ? [...prev, ...result.students] : result.students);
       setTotalStudents(result.total);
       setTotalPages(result.pages);
-    } catch { if (!cached) toast.error('Failed to fetch students'); }
-    finally { setLoading(false); setRefreshing(false); }
+    } catch { if (!cached && !append) toast.error('Failed to fetch students'); }
+    finally { setLoading(false); setRefreshing(false); setLoadingMore(false); }
   }, [filterClass, filterSection, filterStatus]);
 
-  useEffect(() => { setPage(1); fetchStudents(1, searchTerm); fetchClasses(); }, [filterClass, filterSection, filterStatus]);
+  // Infinite scroll: load next page when sentinel enters viewport
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && !loadingMore && !loading) {
+        setPage(prev => {
+          const next = prev + 1;
+          if (next <= totalPages) {
+            fetchStudents(next, searchTerm, true);
+            return next;
+          }
+          return prev;
+        });
+      }
+    }, { rootMargin: '200px' });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loadingMore, loading, totalPages, searchTerm, fetchStudents]);
+
+  useEffect(() => { setPage(1); setStudents([]); fetchStudents(1, searchTerm); fetchClasses(); }, [filterClass, filterSection, filterStatus]);
 
   const handleSearchChange = (e) => {
     const val = e.target.value;
     setSearchTerm(val);
     clearTimeout(searchDebounce.current);
-    searchDebounce.current = setTimeout(() => { setPage(1); fetchStudents(1, val); }, 400);
+    searchDebounce.current = setTimeout(() => { setPage(1); setStudents([]); fetchStudents(1, val, false); }, 400);
   };
-
-  const handlePageChange = (newPage) => { setPage(newPage); fetchStudents(newPage, searchTerm); };
 
   const fetchClasses = async () => {
     try {
@@ -900,15 +923,15 @@ const StudentsPage = () => {
         </CardContent>
       </Card>
 
-      {/* Pagination */}
-      {!loading && totalPages > 1 && (
-        <div className="flex items-center justify-between mt-4 text-sm text-slate-600">
-          <span>{totalStudents} students — page {page} of {totalPages}</span>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => handlePageChange(page - 1)} disabled={page === 1}>Previous</Button>
-            <Button variant="outline" size="sm" onClick={() => handlePageChange(page + 1)} disabled={page === totalPages}>Next</Button>
-          </div>
+      {/* Infinite scroll sentinel */}
+      <div ref={sentinelRef} className="h-4" />
+      {loadingMore && (
+        <div className="flex items-center justify-center py-4 gap-2 text-sm text-slate-500">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading more students...
         </div>
+      )}
+      {!loading && !loadingMore && page >= totalPages && totalStudents > 0 && (
+        <p className="text-center text-xs text-slate-400 py-3">{totalStudents} students total</p>
       )}
 
       {/* ===== DEACTIVATION CONFIRMATION ===== */}
