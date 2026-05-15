@@ -1,4 +1,20 @@
-import React from "react";
+import React, { Component } from "react";
+
+class PageErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { hasError: false }; }
+  static getDerivedStateFromError() { return { hasError: true }; }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex flex-col items-center justify-center h-64 gap-4">
+          <p className="text-slate-600">Something went wrong loading this page.</p>
+          <button className="px-4 py-2 bg-orange-500 text-white rounded-lg" onClick={() => { this.setState({ hasError: false }); window.location.reload(); }}>Reload</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
@@ -89,7 +105,7 @@ function AppRouter() {
         element={
           <ProtectedRoute allowedRoles={['admin', 'teacher', 'accountant']}>
             <Layout>
-              <StudentsPage />
+              <PageErrorBoundary><StudentsPage /></PageErrorBoundary>
             </Layout>
           </ProtectedRoute>
         }
