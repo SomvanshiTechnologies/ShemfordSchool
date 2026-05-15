@@ -8,6 +8,7 @@ attempt to create fee ledger entries if a fee config exists.
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
+import asyncio
 import csv
 import io
 import logging
@@ -186,6 +187,8 @@ async def get_students(
     fee_status: Optional[str] = None,
     search: Optional[str] = None,
     status: Optional[str] = "active",  # active | inactive | all
+    page: int = 1,
+    limit: int = 50,
 ):
     user = await get_current_user(request)
     if status == "inactive":
@@ -198,20 +201,17 @@ async def get_students(
     # Role-scoped filtering
     if user["role"] == UserRole.STUDENT:
         student = await db.students.find_one({"user_id": user["user_id"]}, {"_id": 0})
-        return [student] if student else []
+        return {"students": [student] if student else [], "total": 1, "page": 1, "pages": 1}
     elif user["role"] == UserRole.PARENT:
         query["parent_id"] = user["user_id"]
     elif user["role"] == UserRole.TEACHER:
-        # Teachers see only students in their assigned class/section
         assigned = await get_teacher_assigned_classes(user["user_id"])
         if assigned:
             query["$or"] = [{"class_name": a["class_name"], "section": a["section"]} for a in assigned]
         else:
-            # Fallback if no class assigned yet: use attendance history
             taught = await db.attendance.distinct("class_name", {"marked_by": user["user_id"]})
             if taught:
                 query["class_name"] = {"$in": taught}
-    # Admin and Accountant see all
 
     if class_name:
         query["class_name"] = class_name
@@ -219,21 +219,41 @@ async def get_students(
         query["section"] = section
     if fee_status:
         query["fee_status"] = fee_status
-
-    students = await db.students.find(query, {"_id": 0}).sort(
-        [("class_name", 1), ("section", 1), ("first_name", 1)]
-    ).to_list(5000)
-
-    # Optional in-memory search (name or admission number)
     if search:
-        s = search.lower()
-        students = [
-            st for st in students
-            if s in f"{st.get('first_name','')} {st.get('last_name','')}".lower()
-            or s in (st.get("admission_number", "") or "").lower()
+        s = search.strip()
+        query["$or"] = [
+            {"first_name": {"$regex": s, "$options": "i"}},
+            {"last_name": {"$regex": s, "$options": "i"}},
+            {"admission_number": {"$regex": s, "$options": "i"}},
         ]
 
-    return students
+    LIST_FIELDS = {
+        "_id": 0, "student_id": 1, "admission_number": 1,
+        "first_name": 1, "last_name": 1, "email": 1,
+        "class_name": 1, "section": 1, "stream": 1, "academic_year": 1,
+        "parent_name": 1, "parent_phone": 1,
+        "fee_status": 1, "is_active": 1, "app_locked": 1,
+        "roll_number": 1, "user_id": 1, "parent_id": 1,
+    }
+
+    limit = max(1, min(limit, 200))
+    skip = (page - 1) * limit
+
+    total, students = await asyncio.gather(
+        db.students.count_documents(query),
+        db.students.find(query, LIST_FIELDS)
+            .sort([("class_name", 1), ("section", 1), ("first_name", 1)])
+            .skip(skip)
+            .limit(limit)
+            .to_list(limit),
+    )
+
+    return {
+        "students": students,
+        "total": total,
+        "page": page,
+        "pages": max(1, -(-total // limit)),  # ceiling division
+    }
 
 
 @router.get("/students/{student_id}")

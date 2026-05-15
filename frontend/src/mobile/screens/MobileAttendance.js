@@ -42,7 +42,7 @@ const MobileAttendance = () => {
         api.get('/attendance', { params: { entity_type: 'student', date: selDate, class_name: selClass, section: selSection } }),
         api.get('/attendance/session-status', { params: { class_name: selClass, section: selSection, date: selDate } }),
       ]).then(([s, a, sess]) => {
-        setStudents(s.data);
+        setStudents(s.data.students ?? s.data ?? []);
         setSession(sess.data);
         const m = {};
         a.data.forEach(r => { m[r.entity_id] = r.status; });

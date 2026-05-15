@@ -23,7 +23,7 @@ const ALL_MENU_ITEMS = [
   { name: "Children's Attendance",  icon: Calendar,         path: '/children-attendance', roles: ['parent'] },
   { name: 'Marks',                  icon: FileText,         path: '/marks',               roles: ['admin', 'teacher'] },
   { name: 'My Marks',               icon: FileText,         path: '/my-marks',            roles: ['student'] },
-  { name: 'Syllabus',               icon: BookOpen,         path: '/syllabus',            roles: ['admin', 'teacher', 'student', 'parent'] },
+  { name: 'Syllabus',               icon: BookOpen,         path: '/syllabus',            roles: ['teacher', 'student', 'parent'] },
   { name: 'Fees',                   icon: CreditCard,       path: '/fees',                roles: ['admin', 'accountant'] },
   { name: 'My Fees',                icon: CreditCard,       path: '/my-fees',             roles: ['student', 'parent'] },
   { name: 'Payroll',                icon: Wallet,           path: '/payroll',             roles: ['admin', 'accountant', 'teacher'] },

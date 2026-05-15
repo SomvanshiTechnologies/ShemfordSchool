@@ -181,7 +181,7 @@ const MarksPage = () => {
         api.get('/students', { params: { class_name: selectedExam.class_name, section: selectedSection } }),
         api.get('/marks', { params: { exam_id: selectedExam.exam_id, class_name: selectedExam.class_name, section: selectedSection } }),
       ]);
-      setStudents(studRes.data);
+      setStudents(studRes.data.students ?? studRes.data ?? []);
       setExistingMarks(marksRes.data);
 
       // Build marks map: { student_id: { subject: marks_obtained } }

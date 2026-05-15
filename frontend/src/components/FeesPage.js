@@ -170,7 +170,7 @@ const FeesPage = () => {
         api.get('/fees/due-chart').catch(() => ({ data: [] })),
         api.get('/fees/concessions').catch(() => ({ data: [] })),
       ]);
-      setStudents(Array.isArray(studRes.data) ? studRes.data : []);
+      setStudents(studRes.data.students ?? (Array.isArray(studRes.data) ? studRes.data : []));
       setDueChart(Array.isArray(dueRes.data) ? dueRes.data : []);
       setConcessions(Array.isArray(concRes.data) ? concRes.data : []);
     } catch {}
@@ -766,6 +766,46 @@ const FeesPage = () => {
               </div>
             </div>
 
+            {/* Default list — students with pending/overdue fees */}
+            {!selectedStudentId && !loadingLedger && (
+              <div className="space-y-2">
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                  Students with Pending Fees ({dueChart.length})
+                </p>
+                {dueChart.length === 0 ? (
+                  <div className="flex items-center gap-2 text-sm text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3">
+                    <CheckCircle2 className="h-4 w-4 shrink-0" /> All fees collected — no pending dues.
+                  </div>
+                ) : (
+                  <div className="border border-slate-200 rounded-xl overflow-hidden">
+                    <div className="grid grid-cols-4 gap-4 px-4 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      <span>Student</span><span>Admission No.</span><span>Class</span><span className="text-right">Pending</span>
+                    </div>
+                    {dueChart.slice(0, 50).map(s => (
+                      <button
+                        key={s.student_id}
+                        onClick={() => selectSearchResult({ student_id: s.student_id, name: s.name, admission_number: s.admission_number, class_name: s.class_name, section: s.section, stream: s.stream })}
+                        className="w-full text-left grid grid-cols-4 gap-4 px-4 py-3 hover:bg-orange-50 border-b border-slate-100 last:border-0 items-center transition-colors"
+                      >
+                        <p className="text-sm font-semibold text-slate-900 truncate">{s.name}</p>
+                        <p className="text-sm text-slate-600 font-mono">{s.admission_number || '—'}</p>
+                        <p className="text-sm text-slate-600">{s.class_name}-{s.section}{s.stream ? ` (${s.stream})` : ''}</p>
+                        <div className="text-right">
+                          <p className="text-sm font-bold text-red-600">₹{Number(s.total_due || 0).toLocaleString('en-IN')}</p>
+                          {s.entries_overdue > 0 && <p className="text-[10px] text-red-400">{s.entries_overdue} overdue</p>}
+                        </div>
+                      </button>
+                    ))}
+                    {dueChart.length > 50 && (
+                      <div className="px-4 py-2 text-xs text-slate-400 text-center bg-slate-50">
+                        Showing 50 of {dueChart.length} — use search to find others
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {loadingLedger && (
               <div className="flex justify-center py-10">
                 <Loader2 className="h-6 w-6 animate-spin text-slate-900" />
@@ -773,17 +813,25 @@ const FeesPage = () => {
             )}
 
             {!loadingLedger && selectedStudentId && studentLedger && (
-              <LedgerView
-                ledger={studentLedger}
-                isAdmin={isAdmin}
-                studentId={selectedStudentId}
-                payLedgerIds={payLedgerIds}
-                setPayLedgerIds={setPayLedgerIds}
-                onPaySelected={() => setShowPayDialog(true)}
-                onPayAdmission={() => setShowAdmissionPayDialog(true)}
-                onDownloadReceipt={downloadReceipt}
-                onRazorpaySuccess={handleRazorpaySuccess}
-              />
+              <>
+                <button
+                  onClick={clearStudentSearch}
+                  className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-800 transition mb-1"
+                >
+                  ← Back to all students
+                </button>
+                <LedgerView
+                  ledger={studentLedger}
+                  isAdmin={isAdmin}
+                  studentId={selectedStudentId}
+                  payLedgerIds={payLedgerIds}
+                  setPayLedgerIds={setPayLedgerIds}
+                  onPaySelected={() => setShowPayDialog(true)}
+                  onPayAdmission={() => setShowAdmissionPayDialog(true)}
+                  onDownloadReceipt={downloadReceipt}
+                  onRazorpaySuccess={handleRazorpaySuccess}
+                />
+              </>
             )}
           </div>
         </TabsContent>
@@ -975,6 +1023,46 @@ const FeesPage = () => {
                         </button>
                       ))
                     }
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Admin: show pending students list by default */}
+            {isAdmin && !selectedStudentId && !loadingLedger && (
+              <div className="space-y-2">
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                  Students with Pending Fees ({dueChart.length})
+                </p>
+                {dueChart.length === 0 ? (
+                  <div className="flex items-center gap-2 text-sm text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3">
+                    <CheckCircle2 className="h-4 w-4 shrink-0" /> All fees collected — no pending dues.
+                  </div>
+                ) : (
+                  <div className="border border-slate-200 rounded-xl overflow-hidden">
+                    <div className="grid grid-cols-4 gap-4 px-4 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      <span>Student</span><span>Admission No.</span><span>Class</span><span className="text-right">Pending</span>
+                    </div>
+                    {dueChart.slice(0, 50).map(s => (
+                      <button
+                        key={s.student_id}
+                        onClick={() => selectSearchResult({ student_id: s.student_id, name: s.name, admission_number: s.admission_number, class_name: s.class_name, section: s.section, stream: s.stream })}
+                        className="w-full text-left grid grid-cols-4 gap-4 px-4 py-3 hover:bg-orange-50 border-b border-slate-100 last:border-0 items-center transition-colors"
+                      >
+                        <p className="text-sm font-semibold text-slate-900 truncate">{s.name}</p>
+                        <p className="text-sm text-slate-600 font-mono">{s.admission_number || '—'}</p>
+                        <p className="text-sm text-slate-600">{s.class_name}-{s.section}{s.stream ? ` (${s.stream})` : ''}</p>
+                        <div className="text-right">
+                          <p className="text-sm font-bold text-red-600">₹{Number(s.total_due || 0).toLocaleString('en-IN')}</p>
+                          {s.entries_overdue > 0 && <p className="text-[10px] text-red-400">{s.entries_overdue} overdue</p>}
+                        </div>
+                      </button>
+                    ))}
+                    {dueChart.length > 50 && (
+                      <div className="px-4 py-2 text-xs text-slate-400 text-center bg-slate-50">
+                        Showing 50 of {dueChart.length} — use search to find others
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1511,6 +1599,81 @@ const FeesPage = () => {
   );
 };
 
+// ─── Fee Type Dropdown (Monthly / Yearly) ────────────────────────────────────
+
+const FeeTypeDropdown = ({ label, entries, payLedgerIds, setPayLedgerIds }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+
+  React.useEffect(() => {
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, []);
+
+  if (!entries.length) return null;
+
+  const selectedIds = entries.map(e => e.ledger_id);
+  const selectedCount = entries.filter(e => payLedgerIds.includes(e.ledger_id)).length;
+  const selectedTotal = entries
+    .filter(e => payLedgerIds.includes(e.ledger_id))
+    .reduce((s, e) => s + (e.remaining_balance > 0 ? e.remaining_balance : e.net_amount), 0);
+  const allSelected = selectedCount === entries.length;
+  const hasOverdue = entries.some(e => e.status === 'overdue');
+
+  const toggleAll = () => {
+    if (allSelected) setPayLedgerIds(prev => prev.filter(id => !selectedIds.includes(id)));
+    else setPayLedgerIds(prev => [...new Set([...prev, ...selectedIds])]);
+  };
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className={`text-xs px-2.5 py-1 rounded-lg font-medium transition border flex items-center gap-1.5 ${
+          selectedCount > 0
+            ? 'bg-orange-100 border-orange-300 text-orange-700'
+            : hasOverdue
+              ? 'bg-red-50 border-red-200 text-red-600 hover:bg-red-100'
+              : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-600'
+        }`}
+      >
+        {label} {selectedCount > 0 ? `(${selectedCount} selected — ${fmt(selectedTotal)})` : `(${entries.length})`}
+        <ChevronDown className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-slate-200 rounded-xl shadow-lg min-w-[260px] overflow-hidden">
+          <label className="flex items-center gap-3 px-3 py-2 border-b border-slate-100 cursor-pointer hover:bg-slate-50 bg-slate-50">
+            <input type="checkbox" checked={allSelected} onChange={toggleAll} className="rounded cursor-pointer" />
+            <span className="text-xs font-bold text-slate-600">Select all</span>
+          </label>
+          {entries.map(e => {
+            const isSel = payLedgerIds.includes(e.ledger_id);
+            const entryLabel = e.description || e.month || e.ledger_id;
+            const amount = e.remaining_balance > 0 ? e.remaining_balance : e.net_amount;
+            return (
+              <label key={e.ledger_id} className="flex items-center gap-3 px-3 py-2 border-b border-slate-50 last:border-0 cursor-pointer hover:bg-orange-50">
+                <input
+                  type="checkbox"
+                  checked={isSel}
+                  onChange={() => setPayLedgerIds(prev => isSel ? prev.filter(id => id !== e.ledger_id) : [...prev, e.ledger_id])}
+                  className="rounded cursor-pointer"
+                />
+                <span className={`flex-1 text-xs font-medium ${e.status === 'overdue' ? 'text-red-600' : 'text-slate-700'}`}>
+                  {entryLabel}
+                  {e.status === 'overdue' && <span className="ml-1 text-[10px] bg-red-100 text-red-600 px-1 rounded">overdue</span>}
+                </span>
+                <span className="text-xs font-semibold text-slate-900">{fmt(amount)}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ─── Ledger View Component ────────────────────────────────────────────────────
 
 const LedgerView = ({
@@ -1518,8 +1681,17 @@ const LedgerView = ({
   onPaySelected, onPayAdmission, onDownloadReceipt, onRazorpaySuccess, readOnly = false
 }) => {
   const [expandedSections, setExpandedSections] = useState({ one_time: true, yearly: true, monthly: true });
+  const [showMonthlyDropdown, setShowMonthlyDropdown] = useState(false);
+  const monthlyDropdownRef = React.useRef(null);
 
   const toggleSection = (sec) => setExpandedSections(s => ({ ...s, [sec]: !s[sec] }));
+
+  // Close monthly dropdown on outside click
+  React.useEffect(() => {
+    const handler = (e) => { if (monthlyDropdownRef.current && !monthlyDropdownRef.current.contains(e.target)) setShowMonthlyDropdown(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
 
   const { student, summary, ledger: grouped, payments } = ledger;
 
@@ -1599,78 +1771,56 @@ const LedgerView = ({
 
           {/* ── Admin / Accountant: Collect Payment ───────────────────────── */}
           {isAdmin && !readOnly && (
-            <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
+            <div className="mt-4 pt-4 border-t border-slate-100">
+              {payableEntries.length > 0 ? (
+                <>
+                  <div className="flex flex-wrap items-center gap-2 justify-between">
+                    {/* Left: quick-select */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Quick select:</span>
+                      <button onClick={selectAll} className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium transition">
+                        All due ({payableEntries.length})
+                      </button>
+                      <FeeTypeDropdown label="One-Time" entries={(grouped.one_time || []).filter(e => ['pending','overdue','partially_paid'].includes(e.status))} payLedgerIds={payLedgerIds} setPayLedgerIds={setPayLedgerIds} />
+                      <FeeTypeDropdown label="Yearly"   entries={(grouped.yearly   || []).filter(e => ['pending','overdue','partially_paid'].includes(e.status))} payLedgerIds={payLedgerIds} setPayLedgerIds={setPayLedgerIds} />
+                      <FeeTypeDropdown label="Monthly"  entries={(grouped.monthly  || []).filter(e => ['pending','overdue','partially_paid'].includes(e.status))} payLedgerIds={payLedgerIds} setPayLedgerIds={setPayLedgerIds} />
+                      {overdueEntries.length > 0 && (
+                        <button onClick={selectOverdue} className="text-xs px-2.5 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 font-medium transition border border-red-200">
+                          Overdue only ({overdueEntries.length})
+                        </button>
+                      )}
+                      {payLedgerIds.length > 0 && (
+                        <button onClick={clearAll} className="text-xs px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-400 font-medium transition">Clear</button>
+                      )}
+                    </div>
 
-              {/* Quick-select row */}
-              {payableEntries.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Quick select:</span>
-                  <button
-                    onClick={selectAll}
-                    className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium transition"
-                  >
-                    All due ({payableEntries.length})
-                  </button>
-                  {overdueEntries.length > 0 && (
-                    <button
-                      onClick={selectOverdue}
-                      className="text-xs px-2.5 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 font-medium transition"
-                    >
-                      Overdue only ({overdueEntries.length})
-                    </button>
+                    {/* Right: action buttons */}
+                    <div className="flex items-center gap-2 shrink-0">
+                      {hasAdmissionPending && (
+                        <Button size="sm" variant="outline" className="text-xs h-9 border-slate-300" onClick={onPayAdmission}>
+                          <CreditCard className="h-3 w-3 mr-1.5" />Collect Admission Fee
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        className="bg-slate-900 hover:bg-slate-800 text-white text-xs h-9 disabled:opacity-50"
+                        onClick={onPaySelected}
+                        disabled={payLedgerIds.length === 0}
+                      >
+                        <CreditCard className="h-3 w-3 mr-1.5" />
+                        Collect Payment{payLedgerIds.length > 0 ? ` — ${fmt(selectedTotal)}` : ''}
+                      </Button>
+                    </div>
+                  </div>
+                  {payLedgerIds.length === 0 && (
+                    <p className="text-xs text-slate-400 italic mt-1.5">Select entries above to enable</p>
                   )}
-                  {payLedgerIds.length > 0 && (
-                    <button onClick={clearAll} className="text-xs px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-400 font-medium transition">
-                      Clear
-                    </button>
-                  )}
-                </div>
+                </>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> All fees paid
+                </span>
               )}
-
-              {/* Action buttons */}
-              <div className="flex flex-wrap items-center gap-2">
-                {hasAdmissionPending && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="text-xs h-9 border-slate-300"
-                    onClick={onPayAdmission}
-                  >
-                    <CreditCard className="h-3 w-3 mr-1.5" />
-                    Collect Admission Fee
-                  </Button>
-                )}
-
-                {payLedgerIds.length > 0 ? (
-                  <>
-                    <Button
-                      size="sm"
-                      className="bg-slate-900 hover:bg-slate-800 text-white text-xs h-9"
-                      onClick={onPaySelected}
-                    >
-                      <CreditCard className="h-3 w-3 mr-1.5" />
-                      Collect Cash / Offline — {fmt(selectedTotal)}
-                    </Button>
-                    <RazorpayCheckout
-                      studentId={studentId}
-                      ledgerIds={payLedgerIds}
-                      onSuccess={onRazorpaySuccess}
-                      onCancel={() => {}}
-                    >
-                      <CreditCard className="h-3 w-3 mr-1.5" />
-                      Collect via Razorpay — {fmt(selectedTotal)}
-                    </RazorpayCheckout>
-                  </>
-                ) : payableEntries.length > 0 ? (
-                  <p className="text-xs text-slate-400 italic">
-                    ↑ Tick entries above or use quick-select to collect payment
-                  </p>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
-                    <CheckCircle2 className="h-3.5 w-3.5" /> All fees paid
-                  </span>
-                )}
-              </div>
             </div>
           )}
 
@@ -1679,25 +1829,34 @@ const LedgerView = ({
             <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
               {payableEntries.length > 0 ? (
                 <>
-                  {/* Quick-select */}
+                  {/* Quick-select by fee type */}
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Pay:</span>
-                    <button
-                      onClick={selectAll}
-                      className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium transition"
-                    >
-                      All due ({payableEntries.length} entries — {fmt(payableEntries.reduce((s, e) => s + (e.remaining_balance > 0 ? e.remaining_balance : e.net_amount), 0))})
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Select to pay:</span>
+                    <button onClick={selectAll} className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium transition">
+                      All due ({payableEntries.length})
                     </button>
-                    {overdueEntries.length > 0 && (
-                      <button
-                        onClick={selectOverdue}
-                        className="text-xs px-2.5 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 font-medium transition"
-                      >
-                        Overdue only ({overdueEntries.length})
-                      </button>
-                    )}
+
+                    <FeeTypeDropdown
+                      label="One-Time"
+                      entries={(grouped.one_time || []).filter(e => ['pending','overdue','partially_paid'].includes(e.status))}
+                      payLedgerIds={payLedgerIds}
+                      setPayLedgerIds={setPayLedgerIds}
+                    />
+                    <FeeTypeDropdown
+                      label="Yearly"
+                      entries={(grouped.yearly || []).filter(e => ['pending','overdue','partially_paid'].includes(e.status))}
+                      payLedgerIds={payLedgerIds}
+                      setPayLedgerIds={setPayLedgerIds}
+                    />
+
+                    <MonthlyDropdown
+                      monthlyDue={(grouped.monthly || []).filter(e => ['pending','overdue','partially_paid'].includes(e.status))}
+                      payLedgerIds={payLedgerIds}
+                      setPayLedgerIds={setPayLedgerIds}
+                    />
+
                     {payLedgerIds.length > 0 && (
-                      <button onClick={clearAll} className="text-xs text-slate-400 underline">Clear</button>
+                      <button onClick={clearAll} className="text-xs text-slate-400 underline ml-1">Clear</button>
                     )}
                   </div>
 
@@ -1710,12 +1869,10 @@ const LedgerView = ({
                       onCancel={() => {}}
                     >
                       <CreditCard className="h-4 w-4 mr-2" />
-                      Pay {fmt(selectedTotal)} Online — Razorpay
+                      Pay {fmt(selectedTotal)} Online
                     </RazorpayCheckout>
                   ) : (
-                    <p className="text-xs text-slate-400 italic">
-                      ↑ Click "All due" above or tick entries below to pay
-                    </p>
+                    <p className="text-xs text-slate-400 italic">Select a fee type above to pay</p>
                   )}
                 </>
               ) : (
@@ -1760,7 +1917,6 @@ const LedgerView = ({
               <Table>
                 <TableHeader>
                   <TableRow className="bg-white border-b border-slate-100">
-                    {(isAdmin || readOnly) && <TableHead className="w-8"></TableHead>}
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Description</TableHead>
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Gross</TableHead>
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Discount</TableHead>
@@ -1777,18 +1933,6 @@ const LedgerView = ({
                       key={entry.ledger_id}
                       className={`hover:bg-slate-50 ${entry.status === 'overdue' ? 'bg-red-50/40 border-l-2 border-red-400' : ''}`}
                     >
-                      {(isAdmin || readOnly) && (
-                        <TableCell>
-                          {entry.status !== 'paid' && entry.status !== 'waived' && (
-                            <input
-                              type="checkbox"
-                              checked={payLedgerIds.includes(entry.ledger_id)}
-                              onChange={() => toggleLedgerId(entry.ledger_id)}
-                              className="rounded cursor-pointer"
-                            />
-                          )}
-                        </TableCell>
-                      )}
                       <TableCell className="text-sm font-medium">
                         {entry.description}
                         {entry.concession_reason && (

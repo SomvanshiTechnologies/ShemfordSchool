@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
-import { ArrowUpCircle, History, Search, CheckCircle2, AlertCircle, Loader2, Eye } from 'lucide-react';
+import { ArrowUpCircle, History, Search, CheckCircle2, AlertCircle, Loader2, Eye, CreditCard } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -17,6 +17,7 @@ function fmt(n) {
 
 export default function UpgradationPage() {
   const [tab, setTab] = useState('upgrade');
+  const upgradingRef = React.useRef(false); // prevents double-submit before state re-renders
 
   // ── Upgrade tab state ──────────────────────────────────────────────────────
   const [search, setSearch] = useState('');
@@ -30,7 +31,18 @@ export default function UpgradationPage() {
   const [toAcademicYear, setToAcademicYear] = useState('');
   const [notes, setNotes] = useState('');
   const [upgrading, setUpgrading] = useState(false);
+  const [graduating, setGraduating] = useState(false);
   const [result, setResult] = useState(null);
+  const [feeBlockMsg, setFeeBlockMsg] = useState(null);
+
+  // Collect pending fees dialog
+  const [showCollectDialog, setShowCollectDialog] = useState(false);
+  const [pendingEntries, setPendingEntries] = useState([]);
+  const [collectIds, setCollectIds] = useState([]);
+  const [collectMethod, setCollectMethod] = useState('cash');
+  const [collectTxn, setCollectTxn] = useState('');
+  const [collectPaying, setCollectPaying] = useState(false);
+  const [collectLoading, setCollectLoading] = useState(false);
 
   // Payment dialog state
   const [showPayDialog, setShowPayDialog] = useState(false);
@@ -69,10 +81,10 @@ export default function UpgradationPage() {
     if (!search.trim()) return;
     setSearching(true);
     try {
-      const res = await api.get('/students', { params: { search: search.trim() } });
-      setStudents(res.data || []);
+      const res = await api.get('/students', { params: { search: search.trim(), limit: 20 } });
+      setStudents(res.data.students ?? res.data ?? []);
     } catch (e) {
-      toast.error('Search failed: ' + (e.response?.data?.detail || e.message));
+      if (!e._handled) toast.error('Search failed: ' + (e.response?.data?.detail || e.message));
     } finally {
       setSearching(false);
     }
@@ -83,6 +95,22 @@ export default function UpgradationPage() {
     setStudents([]);
     setSearch(`${s.first_name} ${s.last_name} (${s.admission_number || s.student_id})`);
     setResult(null);
+
+    // Show fee warning immediately if this student has pending/overdue fees
+    if (s.fee_status === 'pending' || s.fee_status === 'overdue') {
+      const yr = s.academic_year || 'current year';
+      setFeeBlockMsg(
+        `Fees for ${yr} are ${s.fee_status}. Please collect the ${yr} fees from Fees → Collect before upgrading this student.`
+      );
+    } else {
+      setFeeBlockMsg(null);
+    }
+
+    // Auto-advance to the next academic year based on student's current year
+    if (s.academic_year && /^\d{4}-\d{4}$/.test(s.academic_year)) {
+      const startYear = parseInt(s.academic_year.split('-')[0], 10);
+      setToAcademicYear(`${startYear + 1}-${startYear + 2}`);
+    }
   }
 
   async function doUpgrade() {
@@ -94,6 +122,8 @@ export default function UpgradationPage() {
       toast.error(`Stream is required for ${toClass}`);
       return;
     }
+    if (upgradingRef.current) return;
+    upgradingRef.current = true;
     setUpgrading(true);
     try {
       const res = await api.post(`/students/${selected.student_id}/upgrade`, {
@@ -103,12 +133,98 @@ export default function UpgradationPage() {
         academic_year: toAcademicYear,
         notes,
       });
-      setResult(res.data);
       toast.success(res.data.message || 'Student upgraded successfully');
+      // If an upgradation fee is due, open the payment dialog immediately
+      if (res.data.upgradation_fee > 0 && !res.data.upgradation_fee_paid) {
+        setResult(res.data);
+        setPayMethod('cash');
+        setPayTxn('');
+        setPayRemarks('');
+        setShowPayDialog(true);
+      }
+      // Reset form for next upgrade
+      setSelected(null);
+      setSearch('');
+      setToClass('');
+      setToSection('');
+      setToStream('');
+      setNotes('');
+      setFeeBlockMsg(null);
     } catch (e) {
-      toast.error('Upgrade failed: ' + (e.response?.data?.detail || e.message));
+      if (!e._handled) {
+        const detail = e.response?.data?.detail || '';
+        const isFeeBlock = e.response?.status === 400 && detail.toLowerCase().includes('fees pending');
+        if (isFeeBlock) {
+          setFeeBlockMsg(detail);
+        } else {
+          toast.error(detail || e.message || 'Upgrade failed', { duration: 6000 });
+        }
+      }
     } finally {
+      upgradingRef.current = false;
       setUpgrading(false);
+    }
+  }
+
+  async function doGraduate() {
+    if (!selected || graduating) return;
+    setGraduating(true);
+    try {
+      const res = await api.post(`/students/${selected.student_id}/graduate`, { remarks: notes });
+      toast.success(res.data.message);
+      setResult({ graduated: true, message: res.data.message });
+    } catch (e) {
+      if (!e._handled) toast.error(e.response?.data?.detail || 'Pass out failed', { duration: 6000 });
+    } finally {
+      setGraduating(false);
+    }
+  }
+
+  async function openCollectDialog() {
+    if (!selected) return;
+    setCollectLoading(true);
+    setShowCollectDialog(true);
+    try {
+      const res = await api.get(`/fees/ledger/${selected.student_id}`);
+      const ledger = res.data?.ledger || {};
+      const all = [...(ledger.one_time || []), ...(ledger.yearly || []), ...(ledger.monthly || [])];
+      const entries = all.filter(e => e.status === 'pending' || e.status === 'overdue');
+      setPendingEntries(entries);
+      setCollectIds(entries.map(e => e.ledger_id));
+    } catch (e) {
+      if (!e._handled) toast.error(e.response?.data?.detail || 'Failed to load pending fees');
+      setShowCollectDialog(false);
+    } finally {
+      setCollectLoading(false);
+    }
+  }
+
+  async function payPendingFees() {
+    if (!collectIds.length) { toast.error('Select at least one entry'); return; }
+    setCollectPaying(true);
+    try {
+      const res = await api.post('/fees/pay', {
+        student_id: selected.student_id,
+        ledger_ids: collectIds,
+        payment_method: collectMethod,
+        transaction_id: collectTxn || undefined,
+      });
+      toast.success(res.data.message || 'Fees collected successfully');
+      setShowCollectDialog(false);
+      setCollectIds([]);
+      setCollectTxn('');
+      // Re-fetch student to update fee_status
+      const sr = await api.get(`/students/${selected.student_id}`);
+      const updatedStudent = sr.data;
+      setSelected(updatedStudent);
+      if (updatedStudent.fee_status === 'paid') {
+        setFeeBlockMsg(null);
+        toast.success('All fees cleared — you can now upgrade the student.');
+      }
+    } catch (e) {
+      if (!e._handled) toast.error(e.response?.data?.detail || 'Payment failed');
+    } finally {
+      setCollectPaying(false);
     }
   }
 
@@ -127,7 +243,7 @@ export default function UpgradationPage() {
       // Refresh history so the row's Fee Status flips from Pending/overdue to Paid
       loadHistory();
     } catch (e) {
-      toast.error('Payment failed: ' + (e.response?.data?.detail || e.message));
+      if (!e._handled) toast.error('Payment failed: ' + (e.response?.data?.detail || e.message));
     } finally {
       setPaying(false);
     }
@@ -139,9 +255,11 @@ export default function UpgradationPage() {
       const params = {};
       if (historyYear) params.academic_year = historyYear;
       const res = await api.get('/upgradation/history', { params });
-      setHistory(res.data || []);
+      const all = res.data || [];
+      // Only show completed upgrades — fee paid or no fee charged
+      setHistory(all.filter(r => r.upgradation_fee === 0 || r.upgradation_fee_paid === true));
     } catch (e) {
-      toast.error('Failed to load history: ' + (e.response?.data?.detail || e.message));
+      if (!e._handled) toast.error('Failed to load history: ' + (e.response?.data?.detail || e.message));
     } finally {
       setHistoryLoading(false);
     }
@@ -222,19 +340,66 @@ export default function UpgradationPage() {
             )}
 
             {selected && (
-              <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 text-sm">
-                <div className="font-semibold">{selected.first_name} {selected.last_name}</div>
-                <div className="text-muted-foreground">
+              <div className={`border rounded-xl p-3 text-sm ${selected.fee_status === 'overdue' || selected.fee_status === 'pending' ? 'bg-red-50 border-red-200' : 'bg-orange-50 border-orange-200'}`}>
+                <div className="font-semibold flex items-center gap-2">
+                  {selected.first_name} {selected.last_name}
+                  {(selected.fee_status === 'overdue' || selected.fee_status === 'pending') && (
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700">
+                      ⚠ {selected.fee_status === 'overdue' ? 'Fees Overdue' : 'Fees Pending'} — upgrade will be blocked
+                    </span>
+                  )}
+                </div>
+                <div className="text-muted-foreground mt-0.5">
                   Current: {selected.class_name} – {selected.section}
                   {selected.stream ? ` (${selected.stream})` : ''}
                   &nbsp;|&nbsp;Adm# {selected.admission_number || '—'}
+                  {selected.academic_year ? <>&nbsp;|&nbsp;Year: <span className="font-medium text-slate-700">{selected.academic_year}</span></> : ''}
                 </div>
               </div>
             )}
           </div>
 
-          {/* Target class */}
-          {selected && (
+          {/* Graduate option for 12th class students */}
+          {selected && selected.class_name === '12th' && !result && (
+            <div className="border border-emerald-200 bg-emerald-50 rounded-2xl p-5 space-y-3">
+              <h2 className="font-semibold text-base text-emerald-800">Step 2 — 12th Pass Out</h2>
+              <p className="text-sm text-emerald-700">
+                This student is in <strong>12th class</strong> — the final year. Mark them as <strong>Passed Out</strong> to deactivate the student record.
+              </p>
+              {(selected.fee_status === 'pending' || selected.fee_status === 'overdue') && (
+                <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  ⚠ Student has {selected.fee_status} fees — pass out will be blocked until dues are cleared.
+                </div>
+              )}
+              <div className="space-y-1">
+                <Label>Remarks (optional)</Label>
+                <Input value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. Passed Class 12 Board Exams 2027" />
+              </div>
+              <Button
+                onClick={doGraduate}
+                disabled={graduating}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+              >
+                {graduating ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Processing...</> : 'Mark as 12th Passed Out'}
+              </Button>
+            </div>
+          )}
+
+          {/* Target class — only for non-12th students */}
+          {selected && selected.class_name !== '12th' && feeBlockMsg && (
+            <div className="border border-red-200 bg-red-50 rounded-2xl p-5 space-y-3">
+              <p className="font-semibold text-red-700">⚠ Cannot Upgrade — Fees Pending</p>
+              <p className="text-sm text-red-600">{feeBlockMsg}</p>
+              <Button
+                onClick={openCollectDialog}
+                className="bg-red-600 hover:bg-red-700 text-white flex items-center gap-2"
+              >
+                <CreditCard className="h-4 w-4" /> Collect Fee
+              </Button>
+            </div>
+          )}
+
+          {selected && selected.class_name !== '12th' && !feeBlockMsg && (
             <div className="border border-slate-200 rounded-2xl p-5 space-y-4">
               <h2 className="font-semibold text-base">Step 2 — Target Class & Academic Year</h2>
               <div className="grid grid-cols-2 gap-4">
@@ -278,50 +443,42 @@ export default function UpgradationPage() {
                 <div className="space-y-1">
                   <Label>Academic Year</Label>
                   <Input value={toAcademicYear} onChange={e => setToAcademicYear(e.target.value)} placeholder="e.g. 2025-2026" />
+                  {selected?.academic_year && toAcademicYear && (
+                    <p className="text-xs text-slate-500">
+                      Upgrading from <span className="font-medium">{selected.academic_year}</span> → <span className="font-medium text-orange-600">{toAcademicYear}</span>
+                      {selected.academic_year === toAcademicYear && (
+                        <span className="ml-1 text-amber-600 font-medium">⚠ Same as current year</span>
+                      )}
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="space-y-1">
                 <Label>Notes (optional)</Label>
                 <Input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Reason for upgradation..." />
               </div>
-              <Button onClick={doUpgrade} disabled={upgrading} className="bg-orange-500 hover:bg-orange-600 text-white">
+              <Button
+                onClick={doUpgrade}
+                disabled={upgrading}
+                className="bg-orange-500 hover:bg-orange-600 text-white"
+              >
                 {upgrading ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Upgrading...</> : 'Confirm Upgrade'}
               </Button>
             </div>
           )}
 
           {/* Result */}
-          {result && (
-            <div className="border rounded-2xl p-5 space-y-4 bg-green-50 border-green-200">
-              <div className="flex items-center gap-2 text-green-700 font-semibold">
+          {result && result.graduated && (
+            <div className="border rounded-2xl p-5 bg-emerald-50 border-emerald-200">
+              <div className="flex items-center gap-2 text-emerald-700 font-semibold">
                 <CheckCircle2 className="h-5 w-5" />
-                Upgrade Successful
+                Student Passed Out (12th)
               </div>
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                <div className="text-muted-foreground">New Class:</div>
-                <div className="font-medium">{result.new_class} – {result.new_section}{result.new_stream ? ` (${result.new_stream})` : ''}</div>
-                <div className="text-muted-foreground">Ledger Entries Created:</div>
-                <div className="font-medium">{result.ledger_entries_created}</div>
-                {result.upgradation_fee > 0 && (
-                  <>
-                    <div className="text-muted-foreground">Upgradation Fee:</div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">₹{fmt(result.upgradation_fee)}</span>
-                      {result.upgradation_fee_paid
-                        ? <Badge className="bg-green-100 text-green-700">Paid — {result.receipt}</Badge>
-                        : <Badge variant="destructive">Pending</Badge>
-                      }
-                    </div>
-                  </>
-                )}
-              </div>
-              {result.upgradation_fee > 0 && !result.upgradation_fee_paid && (
-                <Button size="sm" onClick={() => setShowPayDialog(true)} className="bg-orange-500 hover:bg-orange-600 text-white">
-                  Collect Upgradation Fee
-                </Button>
-              )}
+              <p className="text-sm text-emerald-700 mt-2">{result.message}</p>
             </div>
           )}
+          {/* Upgrade Successful box removed — toast notification is sufficient */}
+
         </div>
       )}
 
@@ -402,26 +559,6 @@ export default function UpgradationPage() {
                           >
                             <Eye className="h-4 w-4" />
                           </Button>
-                          {r.upgradation_fee > 0 && !r.upgradation_fee_paid && (
-                            <Button
-                              size="sm"
-                              className="bg-orange-500 hover:bg-orange-600 text-white"
-                              onClick={() => {
-                                setResult({
-                                  student_id: r.student_id,
-                                  upgradation_fee: r.upgradation_fee,
-                                  upgradation_fee_paid: false,
-                                });
-                                setPayMethod('cash');
-                                setPayTxn('');
-                                setPayRemarks('');
-                                setShowPayDialog(true);
-                              }}
-                              data-testid={`collect-${r.upgradation_id}`}
-                            >
-                              Collect Fee
-                            </Button>
-                          )}
                         </div>
                       </td>
                     </tr>
@@ -470,6 +607,65 @@ export default function UpgradationPage() {
                 {paying ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
                 Confirm Payment
               </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Collect Pending Fees Dialog ──────────────────────────────────────── */}
+      {showCollectDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md space-y-4 shadow-xl">
+            <h3 className="text-lg font-semibold">Collect Pending Fees</h3>
+            <p className="text-sm text-muted-foreground">Student: <strong>{selected?.first_name} {selected?.last_name}</strong></p>
+            {collectLoading ? (
+              <div className="flex items-center justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-orange-500" /></div>
+            ) : pendingEntries.length === 0 ? (
+              <p className="text-sm text-green-600">No pending fees found.</p>
+            ) : (
+              <div className="space-y-3">
+                <div className="max-h-48 overflow-y-auto space-y-1 border rounded-lg p-2">
+                  {pendingEntries.map(e => (
+                    <label key={e.ledger_id} className="flex items-center gap-3 text-sm cursor-pointer hover:bg-slate-50 rounded px-2 py-1">
+                      <input
+                        type="checkbox"
+                        checked={collectIds.includes(e.ledger_id)}
+                        onChange={ev => setCollectIds(prev => ev.target.checked ? [...prev, e.ledger_id] : prev.filter(id => id !== e.ledger_id))}
+                      />
+                      <span className="flex-1">{e.description || e.fee_component}</span>
+                      <span className="font-medium">₹{fmt(e.net_amount)}</span>
+                    </label>
+                  ))}
+                </div>
+                <p className="text-sm font-medium text-right">
+                  Total: ₹{fmt(pendingEntries.filter(e => collectIds.includes(e.ledger_id)).reduce((s, e) => s + e.net_amount, 0))}
+                </p>
+                <div className="space-y-1">
+                  <Label>Payment Method</Label>
+                  <Select value={collectMethod} onValueChange={setCollectMethod}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {['cash', 'upi', 'cheque', 'bank_transfer', 'card'].map(m => (
+                        <SelectItem key={m} value={m}>{m.replace('_', ' ').toUpperCase()}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {collectMethod !== 'cash' && (
+                  <div className="space-y-1">
+                    <Label>Transaction ID</Label>
+                    <Input value={collectTxn} onChange={e => setCollectTxn(e.target.value)} placeholder="UTR / cheque no." />
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="flex gap-2 justify-end pt-2">
+              <Button variant="outline" onClick={() => setShowCollectDialog(false)}>Cancel</Button>
+              {!collectLoading && pendingEntries.length > 0 && (
+                <Button onClick={payPendingFees} disabled={collectPaying || !collectIds.length} className="bg-orange-500 hover:bg-orange-600 text-white">
+                  {collectPaying ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Processing...</> : 'Confirm Payment'}
+                </Button>
+              )}
             </div>
           </div>
         </div>

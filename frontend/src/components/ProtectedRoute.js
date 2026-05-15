@@ -7,21 +7,22 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
   const { user, loading, isAuthenticated } = useAuth();
   const location = useLocation();
 
-  // Show loading while checking auth
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center">
-          <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto" />
-          <p className="mt-4 text-muted-foreground">Loading...</p>
-        </div>
-      </div>
-    );
-  }
-
   // If user passed from AuthCallback, skip auth check
   if (location.state?.user) {
     return children;
+  }
+
+  // Auth check still in flight — if a token exists we optimistically render
+  // the page rather than showing a blank screen. If auth ultimately fails,
+  // the response interceptor in api.js redirects to /login.
+  const hasToken = !!localStorage.getItem('auth_token');
+  if (loading) {
+    if (hasToken) return children;
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Loader2 className="h-10 w-10 animate-spin text-primary" />
+      </div>
+    );
   }
 
   // Not authenticated, redirect to login

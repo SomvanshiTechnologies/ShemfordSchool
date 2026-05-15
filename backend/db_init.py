@@ -120,6 +120,8 @@ async def create_indexes(db):
         # ── upgradation_records ───────────────────────────────────────────────
         db.upgradation_records.create_index([("upgradation_id", ASCENDING)], unique=True, background=True),
         db.upgradation_records.create_index([("student_id", ASCENDING), ("created_at", DESCENDING)], background=True),
+        # One upgrade per student per academic year — DB-level enforcement
+        db.upgradation_records.create_index([("student_id", ASCENDING), ("academic_year", ASCENDING)], unique=True, background=True),
 
         # ── class_structures ──────────────────────────────────────────────────
         db.class_structures.create_index([("name", ASCENDING), ("is_active", ASCENDING)], background=True),
@@ -169,8 +171,7 @@ async def create_indexes(db):
         db.jobs.create_index([("completed_at", ASCENDING)], expireAfterSeconds=2592000,
                              sparse=True, background=True),
 
-        # ── counters (receipts / admission numbers) ───────────────────────────
-        db.counters.create_index([("_id", ASCENDING)], unique=True, background=True),
+        # counters: _id is the natural key, MongoDB indexes it automatically — no create_index needed
 
         # ── announcements ─────────────────────────────────────────────────────
         db.announcements.create_index([("target_type", ASCENDING), ("is_active", ASCENDING), ("created_at", DESCENDING)], background=True),

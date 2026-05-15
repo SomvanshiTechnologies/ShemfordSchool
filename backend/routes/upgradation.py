@@ -46,6 +46,39 @@ async def upgrade_student(student_id: str, request: Request):
     if not to_class or not to_section:
         raise HTTPException(status_code=400, detail="to_class and to_section are required")
 
+    # Prevent duplicate: one upgrade per student per academic year
+    academic_year_check = body.get("academic_year", current_academic_year())
+    existing_upgrade = await db.upgradation_records.find_one({
+        "student_id": student_id,
+        "academic_year": academic_year_check,
+    })
+    if existing_upgrade:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Student was already upgraded to {existing_upgrade['to_class']} "
+                   f"in {academic_year_check}. Cannot upgrade again in the same academic year."
+        )
+
+    # Block upgrade if student has ANY pending or overdue fees (across all years)
+    if not body.get("force_upgrade", False):
+        pending_agg = await db.student_ledger.aggregate([
+            {"$match": {"student_id": student_id, "status": {"$in": ["pending", "overdue"]}}},
+            {"$group": {"_id": "$academic_year", "count": {"$sum": 1}, "total": {"$sum": "$net_amount"}}},
+            {"$sort": {"_id": 1}},
+        ]).to_list(20)
+        if pending_agg:
+            total_amount = sum(r["total"] for r in pending_agg)
+            year_parts = [
+                f"{r['_id']} (₹{r['total']:,.0f})" if r.get("_id") else f"₹{r['total']:,.0f}"
+                for r in pending_agg
+            ]
+            years_str = ", ".join(year_parts)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Fees pending for {years_str} (₹{total_amount:,.0f} total). "
+                       f"Please collect the pending fees from the Fees section before upgrading this student."
+            )
+
     # Validate target class and section
     cls = await db.class_structures.find_one({"name": to_class, "is_active": True}, {"_id": 0})
     if not cls:
@@ -63,15 +96,21 @@ async def upgrade_student(student_id: str, request: Request):
     if current_count >= capacity and not body.get("admin_override", False):
         raise HTTPException(status_code=400, detail=f"Section {to_section} is full ({current_count}/{capacity})")
 
-    # Get fee config for new class
+    # Get fee config for new class — fall back to current year if target year not configured yet
     cfg = await get_fee_config(to_class, academic_year, to_stream)
+    cfg_year_used = academic_year
     if not cfg:
-        raise HTTPException(
-            status_code=400,
-            detail=f"No fee config for {to_class}" + (f" ({to_stream})" if to_stream else "") +
-                   f" in {academic_year}. " +
-                   "Please run POST /fees/components/ensure-defaults to create default fee configurations."
-        )
+        fallback_year = current_academic_year()
+        cfg = await get_fee_config(to_class, fallback_year, to_stream)
+        if cfg:
+            cfg_year_used = fallback_year
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No fee config for {to_class}" + (f" ({to_stream})" if to_stream else "") +
+                       f" in {academic_year} or {fallback_year}. "
+                       "Please create a fee configuration first under Fees → Fee Config."
+            )
 
     from_class = student["class_name"]
     from_stream = student.get("stream")
@@ -105,6 +144,27 @@ async def upgrade_student(student_id: str, request: Request):
         upg_ledger_id = entry.ledger_id
 
     # ── Create upgradation record ─────────────────────────────────────────────
+    # ── Update student record FIRST ──────────────────────────────────────────
+    await db.students.update_one(
+        {"student_id": student_id},
+        {"$set": {
+            "class_name": to_class,
+            "section": to_section,
+            "stream": to_stream,
+            "academic_year": academic_year,
+            "fee_status": "pending",
+        }}
+    )
+
+    # ── Create new yearly fee ledger entries ─────────────────────────────────
+    updated_student = await db.students.find_one({"student_id": student_id}, {"_id": 0})
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    admission_month = today_str[:7]
+    ledger_count = await create_admission_ledger(updated_student, cfg, academic_year, admission_month)
+
+    await refresh_overdue_for_student(student_id)
+
+    # ── Insert upgradation record LAST (after all DB writes succeed) ──────────
     upg = UpgradationRecord(
         student_id=student_id,
         from_class=from_class,
@@ -124,28 +184,6 @@ async def upgrade_student(student_id: str, request: Request):
     upg_dict["created_at"] = upg_dict["created_at"].isoformat()
     await db.upgradation_records.insert_one(upg_dict)
     upg_dict.pop("_id", None)
-
-    # ── Update student record ─────────────────────────────────────────────────
-    await db.students.update_one(
-        {"student_id": student_id},
-        {"$set": {
-            "class_name": to_class,
-            "section": to_section,
-            "stream": to_stream,
-            "academic_year": academic_year,
-            "fee_status": "pending",
-        }}
-    )
-
-    # ── Reload updated student ────────────────────────────────────────────────
-    updated_student = await db.students.find_one({"student_id": student_id}, {"_id": 0})
-
-    # ── Create new yearly fee ledger entries for new class ───────────────────
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    admission_month = today_str[:7]
-    ledger_count = await create_admission_ledger(updated_student, cfg, academic_year, admission_month)
-
-    await refresh_overdue_for_student(student_id)
 
     await create_audit_log("upgradation", upg.upgradation_id, "upgrade", {
         "student_id": student_id,
@@ -245,3 +283,50 @@ async def get_upgradation_history(
             r["admission_number"] = s["admission_number"]
         result.append(r)
     return result
+
+
+@router.post("/students/{student_id}/graduate")
+async def graduate_student(student_id: str, request: Request):
+    """Mark a student as passed out / graduated. Deactivates the student record."""
+    user = await require_roles(UserRole.ADMIN)(request)
+    body = await request.json()
+
+    student = await db.students.find_one({"student_id": student_id, "is_active": True}, {"_id": 0})
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    # Block pass-out if fees are still pending
+    pending = await db.student_ledger.count_documents({
+        "student_id": student_id,
+        "status": {"$in": ["pending", "overdue"]},
+    })
+    if pending > 0 and not body.get("force", False):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot mark as passed out: student has {pending} pending/overdue fee entries. Clear all dues first."
+        )
+
+    academic_year = student.get("academic_year", current_academic_year())
+    remarks = body.get("remarks", "")
+
+    await db.students.update_one(
+        {"student_id": student_id},
+        {"$set": {
+            "is_active": False,
+            "passed_out": True,
+            "passed_out_year": academic_year,
+            "deactivation_reason": f"12th Passed Out {academic_year}",
+        }}
+    )
+
+    await create_audit_log("student", student_id, "graduate", {
+        "class": student["class_name"],
+        "academic_year": academic_year,
+        "remarks": remarks,
+    }, user)
+
+    return {
+        "message": f"{student['first_name']} {student['last_name']} has passed out of "
+                   f"{student['class_name']} ({academic_year}).",
+        "student_id": student_id,
+    }

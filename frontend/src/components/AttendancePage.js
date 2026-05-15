@@ -164,7 +164,7 @@ const MarkAttendanceView = () => {
         api.get('/attendance', { params: { entity_type: 'student', date: selectedDate, class_name: selectedClass, section: selectedSection } }),
         api.get('/attendance/session-status', { params: { class_name: selectedClass, section: selectedSection, date: selectedDate } }),
       ]).then(([s, a, sess]) => {
-        setStudents(s.data);
+        setStudents(s.data.students ?? s.data ?? []);
         setSessionStatus(sess.data);
         const attMap = {};
         a.data.forEach(r => { attMap[r.entity_id] = r.status; });

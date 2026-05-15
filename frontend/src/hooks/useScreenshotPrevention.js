@@ -70,22 +70,31 @@ export function useScreenshotPrevention() {
       }
     };
 
+    const useFocusBlur = isMobile.current || isNative();
+
     window.addEventListener('keydown', handleKeyDown, true);
-    window.addEventListener('blur', handleBlur);
-    window.addEventListener('focus', handleFocus);
-    window.addEventListener('screenshotTaken', handleNativeScreenshot); // iOS native bridge event
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('screenshotTaken', handleNativeScreenshot);
     document.addEventListener('contextmenu', handleContextMenu);
     document.addEventListener('touchstart', handleTouchStart, { passive: false });
 
+    // blur/focus and visibilitychange cause false-positive white flashes on desktop
+    // web when OS screenshot tools steal focus — only enable on mobile/native
+    if (useFocusBlur) {
+      window.addEventListener('blur', handleBlur);
+      window.addEventListener('focus', handleFocus);
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+
     return () => {
       window.removeEventListener('keydown', handleKeyDown, true);
-      window.removeEventListener('blur', handleBlur);
-      window.removeEventListener('focus', handleFocus);
       window.removeEventListener('screenshotTaken', handleNativeScreenshot);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
       document.removeEventListener('contextmenu', handleContextMenu);
       document.removeEventListener('touchstart', handleTouchStart);
+      if (useFocusBlur) {
+        window.removeEventListener('blur', handleBlur);
+        window.removeEventListener('focus', handleFocus);
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
       clearTimeout(blurTimerRef.current);
       clearTimeout(warningTimerRef.current);
     };

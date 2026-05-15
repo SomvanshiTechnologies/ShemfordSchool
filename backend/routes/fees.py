@@ -305,6 +305,9 @@ async def create_admission_ledger(student: dict, cfg: dict, academic_year: str, 
         gross = cfg.get(cfg_field, 0)
         if gross <= 0:
             continue
+        # Skip if already exists for this student/class/year
+        if await db.student_ledger.find_one({"student_id": student_id, "fee_component": CFG_FIELD_TO_COMPONENT[cfg_field], "academic_year": academic_year, "class_name": class_name}, {"_id": 1}):
+            continue
         disc = 0
         disc_reason = None
         if cfg_field == "admission_fee" and sibling_adm_disc > 0:
@@ -342,8 +345,9 @@ async def create_admission_ledger(student: dict, cfg: dict, academic_year: str, 
         gross = cfg.get(comp, 0)
         if gross <= 0:
             continue
-        yr, mn = admission_month.split("-")
-        due_date = f"{yr}-{mn}-{str(due_day).zfill(2)}"
+        if await db.student_ledger.find_one({"student_id": student_id, "fee_component": comp, "academic_year": academic_year, "class_name": class_name}, {"_id": 1}):
+            continue
+        due_date = _due_date(admission_month, due_day)
         entry = StudentLedgerEntry(
             student_id=student_id,
             admission_number=admission_number,

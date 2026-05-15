@@ -1,5 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../lib/api';
+import { getCached, setCached } from '../lib/pageCache';
+
+const TopProgressBar = ({ active }) =>
+  active ? (
+    <div className="fixed top-0 left-0 right-0 z-[9999] h-[2px] overflow-hidden" style={{ background: '#fde8c8' }}>
+      <div className="h-full w-2/5" style={{ background: '#E88A1A', animation: 'topbar-slide 1.4s ease-in-out infinite' }} />
+    </div>
+  ) : null;
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -60,9 +68,15 @@ const StudentsPage = () => {
   const { user, isAdmin, isAccountant } = useAuth();
   const [searchParams] = useSearchParams();
   const [students, setStudents] = useState([]);
+  const [totalStudents, setTotalStudents] = useState(0);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const PAGE_SIZE = 50;
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const searchDebounce = useRef(null);
   const [filterClass, setFilterClass] = useState('');
   const [filterSection, setFilterSection] = useState('');
   const [filterStatus, setFilterStatus] = useState('active'); // active | inactive | all
@@ -121,19 +135,45 @@ const StudentsPage = () => {
   const [onbPayment, setOnbPayment] = useState({ method: 'cash', transaction_id: '', remarks: '' });
   const [onbPaymentLoading, setOnbPaymentLoading] = useState(false);
 
-  useEffect(() => { fetchStudents(); fetchClasses(); }, [filterClass, filterSection, filterStatus]);
+  const fetchStudents = useCallback(async (pg = page, search = searchTerm) => {
+    const cacheKey = `students:${filterClass}:${filterSection}:${filterStatus}:${pg}:${search}`;
+    const cached = getCached(cacheKey);
 
-  const fetchStudents = async () => {
+    if (cached) {
+      setStudents(cached.students);
+      setTotalStudents(cached.total);
+      setTotalPages(cached.pages);
+      setLoading(false);
+    }
+    // Always show top bar for any fetch — never blank the list
+    setRefreshing(true);
+
     try {
-      const params = {};
+      const params = { page: pg, limit: PAGE_SIZE };
       if (filterClass) params.class_name = filterClass;
       if (filterSection) params.section = filterSection;
       if (filterStatus) params.status = filterStatus;
-      const response = await api.get('/students', { params });
-      setStudents(response.data);
-    } catch { toast.error('Failed to fetch students'); }
-    finally { setLoading(false); }
+      if (search.trim()) params.search = search.trim();
+      const { data } = await api.get('/students', { params });
+      const result = { students: data.students ?? data, total: data.total ?? data.length, pages: data.pages ?? 1 };
+      setCached(cacheKey, result);
+      setStudents(result.students);
+      setTotalStudents(result.total);
+      setTotalPages(result.pages);
+    } catch { if (!cached) toast.error('Failed to fetch students'); }
+    finally { setLoading(false); setRefreshing(false); }
+  }, [filterClass, filterSection, filterStatus]);
+
+  useEffect(() => { setPage(1); fetchStudents(1, searchTerm); fetchClasses(); }, [filterClass, filterSection, filterStatus]);
+
+  const handleSearchChange = (e) => {
+    const val = e.target.value;
+    setSearchTerm(val);
+    clearTimeout(searchDebounce.current);
+    searchDebounce.current = setTimeout(() => { setPage(1); fetchStudents(1, val); }, 400);
   };
+
+  const handlePageChange = (newPage) => { setPage(newPage); fetchStudents(newPage, searchTerm); };
 
   const fetchClasses = async () => {
     try {
@@ -299,7 +339,7 @@ const StudentsPage = () => {
 
       setOnbResult({ ...admissionResult, receipt_number: receiptNumber });
       setOnbStep(5);
-      fetchStudents();
+      fetchStudents(page, searchTerm);
       toast.success(`Student admitted! Admission No: ${admissionResult.admission_number}`);
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to complete admission');
@@ -315,7 +355,7 @@ const StudentsPage = () => {
       toast.success(`${deactivateTarget.first_name} ${deactivateTarget.last_name} deactivated`);
       setShowDeactivateDialog(false);
       setDeactivateTarget(null);
-      fetchStudents();
+      fetchStudents(page, searchTerm);
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to deactivate student');
     } finally { setDeactivateLoading(false); }
@@ -325,7 +365,7 @@ const StudentsPage = () => {
     try {
       await api.put(`/students/${student.student_id}/reactivate`);
       toast.success(`${student.first_name} ${student.last_name} reactivated`);
-      fetchStudents();
+      fetchStudents(page, searchTerm);
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to reactivate student');
     }
@@ -374,7 +414,7 @@ const StudentsPage = () => {
       await api.put(`/students/${selectedStudent.student_id}`, editData);
       toast.success('Student updated successfully');
       setShowEditDialog(false);
-      fetchStudents();
+      fetchStudents(page, searchTerm);
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to update student');
     }
@@ -391,7 +431,7 @@ const StudentsPage = () => {
     try {
       const response = await api.post('/students/upload-csv', fd);
       setUploadResult(response.data);
-      if (response.data.success > 0) { toast.success(`Added ${response.data.success} students`); fetchStudents(); }
+      if (response.data.success > 0) { toast.success(`Added ${response.data.success} students`); fetchStudents(page, searchTerm); }
       if (response.data.failed > 0) toast.warning(`${response.data.failed} failed`);
     } catch (err) { toast.error(err.response?.data?.detail || 'Upload failed'); }
     finally { setUploading(false); if (fileInputRef.current) fileInputRef.current.value = ''; }
@@ -476,7 +516,7 @@ const StudentsPage = () => {
       });
       setCsvImportResult(res.data);
       setCsvStep(3);
-      if (res.data.success > 0) { fetchStudents(); toast.success(`${res.data.success} students imported`); }
+      if (res.data.success > 0) { fetchStudents(page, searchTerm); toast.success(`${res.data.success} students imported`); }
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Import failed');
     } finally {
@@ -484,11 +524,8 @@ const StudentsPage = () => {
     }
   };
 
-  const filteredStudents = students.filter(student => {
-    const fullName = `${student.first_name} ${student.last_name}`.toLowerCase();
-    const admNo = student.admission_number?.toLowerCase() || '';
-    return fullName.includes(searchTerm.toLowerCase()) || admNo.includes(searchTerm.toLowerCase());
-  });
+  // Server handles filtering/search — students is already the current page
+  const filteredStudents = students;
 
   const getStatusBadge = (status) => {
     const map = {
@@ -506,6 +543,7 @@ const StudentsPage = () => {
 
   return (
     <div data-testid="students-page">
+      <TopProgressBar active={refreshing} />
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
         <div>
           <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Students</h1>
@@ -764,7 +802,7 @@ const StudentsPage = () => {
           <div className="flex flex-col sm:flex-row gap-4">
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-              <Input placeholder="Search by name or admission number..." className="pl-10" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} data-testid="search-students" />
+              <Input placeholder="Search by name or admission number..." className="pl-10" value={searchTerm} onChange={handleSearchChange} data-testid="search-students" />
             </div>
             <Select value={filterClass || "all"} onValueChange={(v) => { setFilterClass(v === "all" ? "" : v); setFilterSection(''); }}>
               <SelectTrigger className="w-[150px]" data-testid="filter-class"><Filter className="h-4 w-4 mr-2" /><SelectValue placeholder="All Classes" /></SelectTrigger>
@@ -795,8 +833,23 @@ const StudentsPage = () => {
       {/* Students Table */}
       <Card>
         <CardContent className="p-0">
-          {loading ? (
-            <div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-8 w-8 border-2 border-slate-900 border-t-transparent" /></div>
+          {loading && filteredStudents.length === 0 ? (
+            <div className="divide-y divide-slate-100">
+              {[...Array(8)].map((_, i) => (
+                <div key={i} className="flex items-center gap-4 px-4 py-3">
+                  <div className="h-4 w-28 bg-slate-200 rounded animate-pulse" />
+                  <div className="flex-1 space-y-1.5">
+                    <div className="h-4 w-40 bg-slate-200 rounded animate-pulse" />
+                    <div className="h-3 w-32 bg-slate-200 rounded animate-pulse" />
+                  </div>
+                  <div className="h-4 w-20 bg-slate-200 rounded animate-pulse" />
+                  <div className="h-4 w-20 bg-slate-200 rounded animate-pulse" />
+                  <div className="h-5 w-16 bg-slate-200 rounded-full animate-pulse" />
+                  <div className="h-5 w-14 bg-slate-200 rounded-full animate-pulse" />
+                  <div className="h-8 w-20 bg-slate-200 rounded animate-pulse" />
+                </div>
+              ))}
+            </div>
           ) : filteredStudents.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
               <GraduationCap className="h-12 w-12 mb-4" /><p>No students found</p>
@@ -805,7 +858,7 @@ const StudentsPage = () => {
           ) : (
             <Table>
               <TableHeader><TableRow>
-                <TableHead>Admission No.</TableHead><TableHead>Name</TableHead><TableHead>Class</TableHead><TableHead>Parent</TableHead><TableHead>Fee Status</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead>
+                <TableHead>Admission No.</TableHead><TableHead>Name</TableHead><TableHead>Class</TableHead><TableHead>Academic Year</TableHead><TableHead>Parent</TableHead><TableHead>Fee Status</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead>
               </TableRow></TableHeader>
               <TableBody>
                 {filteredStudents.map((student) => (
@@ -816,6 +869,7 @@ const StudentsPage = () => {
                       <p className="text-sm text-muted-foreground">{student.email || ''}</p>
                     </TableCell>
                     <TableCell>Class {student.class_name} - {student.section}</TableCell>
+                    <TableCell className="text-sm text-slate-600">{student.academic_year || '—'}</TableCell>
                     <TableCell>
                       <p className="text-sm text-foreground">{student.parent_name || '-'}</p>
                       <p className="text-xs text-muted-foreground">{student.parent_phone || ''}</p>
@@ -844,6 +898,17 @@ const StudentsPage = () => {
           )}
         </CardContent>
       </Card>
+
+      {/* Pagination */}
+      {!loading && totalPages > 1 && (
+        <div className="flex items-center justify-between mt-4 text-sm text-slate-600">
+          <span>{totalStudents} students — page {page} of {totalPages}</span>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => handlePageChange(page - 1)} disabled={page === 1}>Previous</Button>
+            <Button variant="outline" size="sm" onClick={() => handlePageChange(page + 1)} disabled={page === totalPages}>Next</Button>
+          </div>
+        </div>
+      )}
 
       {/* ===== DEACTIVATION CONFIRMATION ===== */}
       <Dialog open={showDeactivateDialog} onOpenChange={setShowDeactivateDialog}>
@@ -1408,7 +1473,8 @@ const StudentsPage = () => {
                 {getStatusBadge(selectedStudent.fee_status)}
               </div>
               <div className="grid grid-cols-2 gap-4 text-sm">
-                <div><Label className="text-muted-foreground">Class</Label><p className="font-medium text-foreground">Class {selectedStudent.class_name} - {selectedStudent.section}</p></div>
+                <div><Label className="text-muted-foreground">Class</Label><p className="font-medium text-foreground">Class {selectedStudent.class_name} - {selectedStudent.section}{selectedStudent.stream ? ` (${selectedStudent.stream})` : ''}</p></div>
+                <div><Label className="text-muted-foreground">Academic Year</Label><p className="font-medium text-foreground">{selectedStudent.academic_year || '-'}</p></div>
                 <div><Label className="text-muted-foreground">Roll Number</Label><p className="font-medium text-foreground">{selectedStudent.roll_number || '-'}</p></div>
                 <div><Label className="text-muted-foreground">Gender</Label><p className="font-medium text-foreground capitalize">{selectedStudent.gender}</p></div>
                 <div><Label className="text-muted-foreground">Date of Birth</Label><p className="font-medium text-foreground">{selectedStudent.date_of_birth || '-'}</p></div>

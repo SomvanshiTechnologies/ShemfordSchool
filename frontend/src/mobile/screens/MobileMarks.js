@@ -47,7 +47,7 @@ const MobileMarks = () => {
         api.get('/students', { params: { class_name: selExam.class_name, section: selSection } }),
         api.get('/marks', { params: { exam_id: selExam.exam_id, class_name: selExam.class_name, section: selSection } }),
       ]).then(([s, m]) => {
-        setStudents(s.data);
+        setStudents(s.data.students ?? s.data ?? []);
         const map = {};
         m.data.forEach(mk => {
           if (!map[mk.student_id]) map[mk.student_id] = {};

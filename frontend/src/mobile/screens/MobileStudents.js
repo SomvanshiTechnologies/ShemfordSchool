@@ -8,7 +8,7 @@ const MobileStudents = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get('/students').then(r => setStudents(r.data)).finally(() => setLoading(false));
+    api.get('/students').then(r => setStudents(r.data.students ?? r.data ?? [])).finally(() => setLoading(false));
   }, []);
 
   const filtered = students.filter(s =>

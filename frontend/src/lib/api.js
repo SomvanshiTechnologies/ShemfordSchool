@@ -36,22 +36,27 @@ api.interceptors.response.use(
 
     if (status === 403) {
       toast.error('You do not have permission to perform this action.');
+      error._handled = true;
       return Promise.reject(error);
     }
 
     if (status === 429) {
       toast.error('Too many requests. Please wait a moment and try again.');
+      error._handled = true;
       return Promise.reject(error);
     }
 
     if (status >= 500) {
       toast.error('A server error occurred. Please try again or contact support.');
+      error._handled = true;
       return Promise.reject(error);
     }
 
     // Network / timeout errors (no response at all)
+    // Use a fixed toast id so multiple concurrent failing calls only show one toast
     if (!error.response) {
-      toast.error('Cannot reach the server. Check your connection.');
+      toast.error('Cannot reach the server. Please check your connection.', { id: 'network-error' });
+      error._handled = true;
     }
 
     return Promise.reject(error);
