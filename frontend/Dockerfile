@@ -14,6 +14,10 @@ ENV REACT_APP_BACKEND_URL=$REACT_APP_BACKEND_URL
 ARG REACT_APP_GOOGLE_AUTH_URL
 ENV REACT_APP_GOOGLE_AUTH_URL=$REACT_APP_GOOGLE_AUTH_URL
 
+# Bump Node's heap so the React build doesn't OOM on small instances
+ENV NODE_OPTIONS=--max-old-space-size=4096
+ENV GENERATE_SOURCEMAP=false
+
 RUN npm run build
 
 # ── Stage 2: serve ────────────────────────────────────────────────────────────
