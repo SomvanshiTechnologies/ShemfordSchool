@@ -8,6 +8,26 @@ const api = axios.create({
   withCredentials: true,
 });
 
+// Token refresh state — prevents multiple concurrent refresh attempts
+let isRefreshing = false;
+let refreshSubscribers = [];
+
+const subscribeTokenRefresh = (cb) => refreshSubscribers.push(cb);
+const onRefreshed = (newToken) => {
+  refreshSubscribers.forEach(cb => cb(newToken));
+  refreshSubscribers = [];
+};
+
+async function refreshAccessToken() {
+  const refresh_token = localStorage.getItem('refresh_token');
+  if (!refresh_token) throw new Error('No refresh token');
+  const res = await axios.post(`${BACKEND_URL}/api/auth/refresh`, { refresh_token }, { withCredentials: true });
+  const { token, refresh_token: newRefresh } = res.data;
+  localStorage.setItem('auth_token', token);
+  if (newRefresh) localStorage.setItem('refresh_token', newRefresh);
+  return token;
+}
+
 // Request interceptor — attach JWT token when present
 api.interceptors.request.use(
   (config) => {
@@ -23,11 +43,56 @@ api.interceptors.request.use(
 // Response interceptor — handle auth errors and surface server errors
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
     const status = error.response?.status;
+    const originalRequest = error.config;
 
-    if (status === 401) {
+    if (status === 401 && !originalRequest._retry) {
+      // Don't try to refresh on auth endpoints themselves
+      const url = originalRequest.url || '';
+      const isAuthEndpoint = url.includes('/auth/login') || url.includes('/auth/refresh') || url.includes('/auth/logout');
+      const hasRefreshToken = !!localStorage.getItem('refresh_token');
+
+      if (!isAuthEndpoint && hasRefreshToken) {
+        if (isRefreshing) {
+          // Queue this request until refresh completes
+          return new Promise((resolve, reject) => {
+            subscribeTokenRefresh((newToken) => {
+              if (newToken) {
+                originalRequest.headers.Authorization = `Bearer ${newToken}`;
+                originalRequest._retry = true;
+                resolve(api(originalRequest));
+              } else {
+                reject(error);
+              }
+            });
+          });
+        }
+
+        isRefreshing = true;
+        originalRequest._retry = true;
+        try {
+          const newToken = await refreshAccessToken();
+          isRefreshing = false;
+          onRefreshed(newToken);
+          originalRequest.headers.Authorization = `Bearer ${newToken}`;
+          return api(originalRequest);
+        } catch (refreshError) {
+          isRefreshing = false;
+          onRefreshed(null);
+          // Refresh failed — log out
+          localStorage.removeItem('auth_token');
+          localStorage.removeItem('refresh_token');
+          if (window.location.pathname !== '/login') {
+            window.location.href = '/login';
+          }
+          return Promise.reject(refreshError);
+        }
+      }
+
+      // No refresh token or refresh endpoint itself failed — log out
       localStorage.removeItem('auth_token');
+      localStorage.removeItem('refresh_token');
       if (window.location.pathname !== '/login') {
         window.location.href = '/login';
       }

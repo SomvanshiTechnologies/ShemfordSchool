@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import { clearAllCache } from '../lib/pageCache';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -63,8 +64,9 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     const response = await axios.post(`${API}/auth/login`, { email, password });
-    const { token: newToken, user: userData } = response.data;
+    const { token: newToken, refresh_token, user: userData } = response.data;
     localStorage.setItem('auth_token', newToken);
+    if (refresh_token) localStorage.setItem('refresh_token', refresh_token);
     setToken(newToken);
     setUser(userData);
     return userData;
@@ -72,8 +74,9 @@ export const AuthProvider = ({ children }) => {
 
   const register = async (userData) => {
     const response = await axios.post(`${API}/auth/register`, userData);
-    const { token: newToken, user: newUser } = response.data;
+    const { token: newToken, refresh_token, user: newUser } = response.data;
     localStorage.setItem('auth_token', newToken);
+    if (refresh_token) localStorage.setItem('refresh_token', refresh_token);
     setToken(newToken);
     setUser(newUser);
     return newUser;
@@ -91,16 +94,19 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = async () => {
+    const storedToken = localStorage.getItem('auth_token');
+    const storedRefresh = localStorage.getItem('refresh_token');
     try {
-      const response = await axios.post(`${API}/auth/logout`, {}, { withCredentials: true });
-      console.log('Logout successful:', response.data);
+      await axios.post(`${API}/auth/logout`,
+        storedRefresh ? { refresh_token: storedRefresh } : {},
+        { headers: storedToken ? { Authorization: `Bearer ${storedToken}` } : {}, withCredentials: true }
+      );
     } catch (error) {
       // Even if logout fails, clear local token and session
-      // Backend now handles graceful logout even with expired tokens
-      console.warn('Logout error (clearing session anyway):', error.message);
     }
     localStorage.removeItem('auth_token');
     localStorage.removeItem('refresh_token');
+    clearAllCache();
     setToken(null);
     setUser(null);
   };

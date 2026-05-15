@@ -153,8 +153,10 @@ export function RazorpayCheckout({ studentId, ledgerIds = [], onSuccess, onCance
         api.post('/payments/razorpay/cancel', { internal_order_id: internalOrderId }).catch(() => {});
         orderRef.current = null;
       }
-      if (!err.message?.includes('Payment failed')) {
-        toast.error(err.response?.data?.detail || err.message || 'Payment could not be started.');
+      // Only show toast if interceptor hasn't already shown one (_handled) and not a payment failure
+      if (!err._handled && !err.message?.includes('Payment failed')) {
+        const detail = err.response?.data?.detail || err.message || 'Payment could not be started.';
+        toast.error(detail, { duration: 6000 });
       }
     } finally {
       setBusy(false);

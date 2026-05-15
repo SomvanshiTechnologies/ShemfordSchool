@@ -1,4 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Loader2 } from 'lucide-react';
+import { getCached, setCached } from '../lib/pageCache';
+
+const TopProgressBar = ({ active }) =>
+  active ? (
+    <div className="fixed top-0 left-0 right-0 z-[9999] h-[2px] overflow-hidden" style={{ background: '#fde8c8' }}>
+      <div className="h-full w-2/5" style={{ background: '#E88A1A', animation: 'topbar-slide 1.4s ease-in-out infinite' }} />
+    </div>
+  ) : null;
 import api from '../lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Button } from './ui/button';
@@ -59,33 +68,84 @@ const AuditTrailPage = () => {
   const [entries, setEntries] = useState([]);
   const [restorableTypes, setRestorableTypes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalEntries, setTotalEntries] = useState(0);
+  const sentinelRef = useRef(null);
+  const PAGE_SIZE = 30;
   const [entityType, setEntityType] = useState('');
   const [confirming, setConfirming] = useState(null);
   const [restoring, setRestoring] = useState(false);
 
-  const fetchEntries = async () => {
-    setLoading(true);
+  const fetchEntries = useCallback(async (pg = 1, append = false) => {
+    const cacheKey = `audit:${entityType}:${pg}`;
+    const cached = getCached(cacheKey);
+
+    if (!append) {
+      if (cached) {
+        setEntries(cached.entries);
+        setTotalEntries(cached.total);
+        setTotalPages(cached.pages);
+        setRestorableTypes(cached.types || []);
+        setLoading(false);
+      }
+      setRefreshing(true);
+    } else {
+      setLoadingMore(true);
+    }
+
     try {
       const params = {
         only_non_admin: true,
         include_restored: true,
-        limit: 200,
+        page: pg,
+        limit: PAGE_SIZE,
       };
       if (entityType) params.entity_type = entityType;
       const res = await api.get('/admin/audit-trail', { params });
-      setEntries(res.data.entries || []);
-      setRestorableTypes(res.data.restorable_entity_types || []);
+      const arr = res.data.entries || [];
+      const total = parseInt(res.headers?.['x-total-count'] ?? res.data?.count ?? arr.length);
+      const pages = parseInt(res.headers?.['x-total-pages'] ?? 1);
+      const types = res.data.restorable_entity_types || [];
+      setCached(cacheKey, { entries: arr, total, pages, types });
+      setEntries(prev => append ? [...prev, ...arr] : arr);
+      setTotalEntries(total);
+      setTotalPages(pages);
+      setRestorableTypes(types);
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to load audit trail');
+      if (!cached && !append) toast.error(err.response?.data?.detail || 'Failed to load audit trail');
     } finally {
       setLoading(false);
+      setRefreshing(false);
+      setLoadingMore(false);
     }
-  };
+  }, [entityType]);
 
   useEffect(() => {
-    fetchEntries();
+    setPage(1);
+    setEntries([]);
+    fetchEntries(1, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entityType]);
+
+  // Infinite scroll
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && !loadingMore && !loading) {
+        setPage(prev => {
+          const next = prev + 1;
+          if (next <= totalPages) { fetchEntries(next, true); return next; }
+          return prev;
+        });
+      }
+    }, { rootMargin: '200px' });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loadingMore, loading, totalPages, fetchEntries]);
 
   const handleRestore = async () => {
     if (!confirming) return;
@@ -104,6 +164,7 @@ const AuditTrailPage = () => {
 
   return (
     <div className="space-y-6" data-testid="audit-trail-page">
+      <TopProgressBar active={refreshing} />
       <div>
         <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
           <History className="h-6 w-6 text-[#E88A1A]" strokeWidth={1.5} />
@@ -144,7 +205,7 @@ const AuditTrailPage = () => {
           </div>
         </CardHeader>
         <CardContent>
-          {loading ? (
+          {loading && entries.length === 0 ? (
             <div className="py-12 text-center text-sm text-slate-500">Loading audit log…</div>
           ) : entries.length === 0 ? (
             <div className="py-16 flex flex-col items-center text-center text-slate-500">
@@ -234,6 +295,15 @@ const AuditTrailPage = () => {
                 })}
               </TableBody>
             </Table>
+          )}
+          <div ref={sentinelRef} className="h-4" />
+          {loadingMore && (
+            <div className="flex items-center justify-center py-4 gap-2 text-sm text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading more...
+            </div>
+          )}
+          {!loading && !loadingMore && page >= totalPages && totalEntries > 0 && (
+            <p className="text-center text-xs text-slate-400 py-3">{totalEntries} entr{totalEntries !== 1 ? 'ies' : 'y'} total</p>
           )}
         </CardContent>
       </Card>

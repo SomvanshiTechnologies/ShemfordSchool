@@ -467,12 +467,30 @@ async def change_password(request: Request):
 # ==================== USER MANAGEMENT ====================
 
 @router.get("/users")
-async def get_users(request: Request, role: Optional[str] = None):
+async def get_users(
+    request: Request,
+    response: Response,
+    role: Optional[str] = None,
+    page: int = 1,
+    limit: int = 30,
+):
     await require_roles(UserRole.ADMIN)(request)
+    import asyncio as _asyncio
     query = {}
     if role:
         query["role"] = role
-    users = await db.users.find(query, {"_id": 0, "password_hash": 0}).to_list(1000)
+    total, users = await _asyncio.gather(
+        db.users.count_documents(query),
+        db.users.find(query, {"_id": 0, "password_hash": 0})
+            .sort("created_at", -1)
+            .skip((page - 1) * limit)
+            .limit(limit)
+            .to_list(limit),
+    )
+    pages = max(1, -(-total // limit))
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Total-Pages"] = str(pages)
+    response.headers["X-Page"] = str(page)
     for u in users:
         if isinstance(u.get("created_at"), str):
             u["created_at"] = datetime.fromisoformat(u["created_at"])

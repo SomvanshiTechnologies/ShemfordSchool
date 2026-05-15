@@ -89,6 +89,14 @@
         @apply text-xs font-semibold text-slate-500 tracking-wide;
     }
 
+    /* ── Responsive table wrapper ── */
+    .table-responsive {
+        @apply w-full overflow-x-auto -mx-0;
+    }
+    .table-responsive table {
+        @apply min-w-full;
+    }
+
     /* ── Buttons ── */
     button, [role="button"] {
         transition: all 150ms ease;
@@ -123,6 +131,22 @@
 .rounded-2xl.border:hover, .rounded-xl.border:hover {
     box-shadow: 0 8px 24px 0 rgb(0 0 0 / 0.08);
 }
+
+/* ── Overflow containment ── */
+html, body { overflow-x: hidden; max-width: 100vw; }
+
+/* ── Dialog / Modal sizing ── */
+[role="dialog"] { max-height: 90vh !important; overflow-y: auto; }
+[data-radix-popper-content-wrapper] { max-width: calc(100vw - 2rem) !important; }
+
+/* ── Responsive dialogs on small screens ── */
+@media (max-width: 640px) {
+    [role="dialog"] > div { max-width: calc(100vw - 2rem) !important; width: calc(100vw - 2rem) !important; }
+    .fixed.inset-0 > div[class*="max-w"] { max-width: calc(100vw - 2rem) !important; width: calc(100vw - 2rem) !important; margin: 1rem; }
+}
+
+/* ── Cards don't overflow container ── */
+.card, [class*="rounded-2xl"], [class*="rounded-xl"] { min-width: 0; }
 
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }

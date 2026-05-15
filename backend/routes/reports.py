@@ -101,40 +101,40 @@ async def get_dashboard_stats(request: Request):
 @router.get("/reports/financial")
 async def get_financial_report(request: Request, start_date: Optional[str] = None, end_date: Optional[str] = None):
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    import asyncio as _asyncio
 
-    query = {}
+    match = {}
     if start_date and end_date:
-        query["payment_date"] = {"$gte": start_date, "$lte": end_date}
+        match["payment_date"] = {"$gte": start_date, "$lte": end_date}
 
-    payments = await db.fee_payments.find(query, {"_id": 0}).to_list(10000)
-
-    total_collection = sum(p["amount"] for p in payments)
-
-    by_method = {}
-    for p in payments:
-        method = p.get("payment_method", "unknown")
-        by_method[method] = by_method.get(method, 0) + p["amount"]
-
-    by_month = {}
-    for p in payments:
-        month = p.get("payment_date", "")[:7]  # Extract YYYY-MM from payment_date
-        if month:
-            by_month[month] = by_month.get(month, 0) + p["amount"]
-
-    # Total pending from student_ledger (new system)
-    pipeline = [
-        {"$match": {"status": {"$in": ["pending", "overdue"]}}},
-        {"$group": {"_id": None, "total": {"$sum": "$net_amount"}}}
-    ]
-    agg = await db.student_ledger.aggregate(pipeline).to_list(1)
-    total_pending = agg[0]["total"] if agg else 0
+    # All aggregations run in parallel — no full collection scan needed
+    total_agg, method_agg, month_agg, pending_agg, count = await _asyncio.gather(
+        db.fee_payments.aggregate([
+            {"$match": match},
+            {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
+        ]).to_list(1),
+        db.fee_payments.aggregate([
+            {"$match": match},
+            {"$group": {"_id": "$payment_method", "total": {"$sum": "$amount"}}}
+        ]).to_list(20),
+        db.fee_payments.aggregate([
+            {"$match": match},
+            {"$group": {"_id": {"$substr": ["$payment_date", 0, 7]}, "total": {"$sum": "$amount"}}},
+            {"$sort": {"_id": 1}},
+        ]).to_list(36),
+        db.student_ledger.aggregate([
+            {"$match": {"status": {"$in": ["pending", "overdue"]}}},
+            {"$group": {"_id": None, "total": {"$sum": "$net_amount"}}}
+        ]).to_list(1),
+        db.fee_payments.count_documents(match),
+    )
 
     return {
-        "total_collection": total_collection,
-        "total_pending": total_pending,
-        "by_payment_method": by_method,
-        "by_month": by_month,
-        "transaction_count": len(payments)
+        "total_collection": total_agg[0]["total"] if total_agg else 0,
+        "total_pending": pending_agg[0]["total"] if pending_agg else 0,
+        "by_payment_method": {r["_id"] or "unknown": r["total"] for r in method_agg},
+        "by_month": {r["_id"]: r["total"] for r in month_agg if r["_id"]},
+        "transaction_count": count,
     }
 
 
@@ -146,14 +146,20 @@ async def export_financial_report(request: Request, format: str = "pdf", start_d
     if start_date and end_date:
         query["payment_date"] = {"$gte": start_date, "$lte": end_date}
 
-    payments = await db.fee_payments.find(query, {"_id": 0}).to_list(10000)
-    total_collection = sum(p["amount"] for p in payments)
-    pipeline = [
-        {"$match": {"status": {"$in": ["pending", "overdue"]}}},
-        {"$group": {"_id": None, "total": {"$sum": "$net_amount"}}}
-    ]
-    agg = await db.student_ledger.aggregate(pipeline).to_list(1)
-    total_pending = agg[0]["total"] if agg else 0
+    import asyncio as _asyncio
+    payments, total_agg, pending_agg = await _asyncio.gather(
+        db.fee_payments.find(query, {"_id": 0}).sort("payment_date", -1).limit(2000).to_list(2000),
+        db.fee_payments.aggregate([
+            {"$match": query},
+            {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
+        ]).to_list(1),
+        db.student_ledger.aggregate([
+            {"$match": {"status": {"$in": ["pending", "overdue"]}}},
+            {"$group": {"_id": None, "total": {"$sum": "$net_amount"}}}
+        ]).to_list(1),
+    )
+    total_collection = total_agg[0]["total"] if total_agg else 0
+    total_pending = pending_agg[0]["total"] if pending_agg else 0
 
     if format == "excel":
         return _financial_excel(payments, total_collection, total_pending)
@@ -324,12 +330,16 @@ async def get_attendance_report(
     elif end_date:
         query["date"] = {"$lte": end_date}
 
-    records = await db.attendance.find(query, {"_id": 0}).to_list(10000)
+    import asyncio as _asyncio
 
-    total = len(records)
-    present = sum(1 for r in records if r["status"] == "present")
-    absent = sum(1 for r in records if r["status"] == "absent")
-    late = sum(1 for r in records if r["status"] == "late")
+    # Run all queries in parallel — counts done by MongoDB, only 200 rows fetched for display
+    total, present, absent, late, records = await _asyncio.gather(
+        db.attendance.count_documents(query),
+        db.attendance.count_documents({**query, "status": "present"}),
+        db.attendance.count_documents({**query, "status": "absent"}),
+        db.attendance.count_documents({**query, "status": "late"}),
+        db.attendance.find(query, {"_id": 0}).sort("date", -1).limit(200).to_list(200),
+    )
 
     return {
         "total_records": total,
@@ -337,7 +347,7 @@ async def get_attendance_report(
         "absent": absent,
         "late": late,
         "percentage": round((present / total * 100), 1) if total > 0 else 0,
-        "records": records[:200]
+        "records": records,
     }
 
 
@@ -373,9 +383,16 @@ async def export_attendance_report(
 
     records = await db.attendance.find(query, {"_id": 0}).to_list(10000)
 
-    # Enrich with student names
+    # Batch-fetch all student names in one query instead of N queries
+    student_ids = list({r["entity_id"] for r in records})
+    students_list = await db.students.find(
+        {"student_id": {"$in": student_ids}},
+        {"_id": 0, "student_id": 1, "first_name": 1, "last_name": 1, "admission_number": 1}
+    ).to_list(len(student_ids))
+    student_map = {s["student_id"]: s for s in students_list}
+
     for r in records:
-        student = await db.students.find_one({"student_id": r["entity_id"]}, {"_id": 0, "first_name": 1, "last_name": 1, "admission_number": 1})
+        student = student_map.get(r["entity_id"])
         if student:
             r["student_name"] = f"{student['first_name']} {student['last_name']}"
             r["admission_number"] = student.get("admission_number", "")

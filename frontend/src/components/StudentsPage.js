@@ -398,23 +398,50 @@ const StudentsPage = () => {
   };
 
   // ===== EDIT STUDENT =====
-  const handleEditStudent = (student) => {
+  const handleEditStudent = async (student) => {
     setSelectedStudent(student);
-    setEditData({
+    // Pre-fill with list data immediately for fast UI
+    const initial = {
       phone: student.phone || '',
       email: student.email || '',
       address: student.address || '',
       parent_name: student.parent_name || '',
       parent_phone: student.parent_phone || '',
       parent_email: student.parent_email || '',
+      father_name: student.father_name || '',
+      father_phone: student.father_phone || '',
+      father_occupation: student.father_occupation || '',
+      mother_name: student.mother_name || '',
+      mother_phone: student.mother_phone || '',
+      mother_occupation: student.mother_occupation || '',
       class_name: student.class_name || '',
       section: student.section || '',
       stream: student.stream || '',
       roll_number: student.roll_number || '',
       blood_group: student.blood_group || '',
       emergency_contact: student.emergency_contact || '',
-    });
+      admission_number: student.admission_number || '',
+    };
+    setEditData(initial);
     setShowEditDialog(true);
+    // Fetch full record to get all fields not in the list projection
+    try {
+      const { data: full } = await api.get(`/students/${student.student_id}`);
+      setSelectedStudent(full);
+      setEditData(prev => ({
+        ...prev,
+        father_name: full.father_name || prev.father_name || prev.parent_name,
+        father_phone: full.father_phone || prev.father_phone || prev.parent_phone,
+        father_occupation: full.father_occupation || prev.father_occupation,
+        mother_name: full.mother_name || prev.mother_name,
+        mother_phone: full.mother_phone || prev.mother_phone,
+        mother_occupation: full.mother_occupation || prev.mother_occupation,
+        parent_email: full.parent_email || prev.parent_email,
+        address: full.address || prev.address,
+        blood_group: full.blood_group || prev.blood_group,
+        emergency_contact: full.emergency_contact || prev.emergency_contact,
+      }));
+    } catch {}
   };
 
   const handleResetPassword = async (generate = false) => {
@@ -436,6 +463,9 @@ const StudentsPage = () => {
   };
 
   const handleSaveEdit = async () => {
+    if (!editData.email?.trim()) { toast.error('Email is required'); return; }
+    if (!editData.phone?.trim()) { toast.error('Phone is required'); return; }
+    if (!editData.address?.trim()) { toast.error('Address is required'); return; }
     try {
       await api.put(`/students/${selectedStudent.student_id}`, editData);
       toast.success('Student updated successfully');
@@ -882,6 +912,7 @@ const StudentsPage = () => {
               {(isAdmin || isAccountant) && <Button variant="link" onClick={() => { resetOnboarding(); setShowOnboarding(true); }}>Start new admission</Button>}
             </div>
           ) : (
+            <div className="overflow-x-auto">
             <Table>
               <TableHeader><TableRow>
                 <TableHead>Admission No.</TableHead><TableHead>Name</TableHead><TableHead>Class</TableHead><TableHead>Academic Year</TableHead><TableHead>Parent</TableHead><TableHead>Fee Status</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead>
@@ -889,7 +920,15 @@ const StudentsPage = () => {
               <TableBody>
                 {filteredStudents.map((student) => (
                   <TableRow key={student.student_id} data-testid={`student-row-${student.student_id}`} className={!student.is_active ? 'opacity-60 bg-slate-50' : ''}>
-                    <TableCell className="font-mono text-sm">{student.admission_number}</TableCell>
+                    <TableCell className="font-mono text-sm">
+                      <button
+                        className="hover:text-orange-600 transition-colors cursor-copy"
+                        title="Click to copy"
+                        onClick={() => { navigator.clipboard.writeText(student.admission_number || ''); toast.success('Admission number copied'); }}
+                      >
+                        {student.admission_number}
+                      </button>
+                    </TableCell>
                     <TableCell>
                       <p className="font-medium text-foreground">{student.first_name} {student.last_name}</p>
                       <p className="text-sm text-muted-foreground">{student.email || ''}</p>
@@ -897,8 +936,28 @@ const StudentsPage = () => {
                     <TableCell>Class {student.class_name} - {student.section}</TableCell>
                     <TableCell className="text-sm text-slate-600">{student.academic_year || '—'}</TableCell>
                     <TableCell>
-                      <p className="text-sm text-foreground">{student.parent_name || '-'}</p>
-                      <p className="text-xs text-muted-foreground">{student.parent_phone || ''}</p>
+                      {!student.father_name && !student.mother_name && !student.parent_name ? (
+                        <span className="text-sm text-muted-foreground">—</span>
+                      ) : (
+                        <div className="text-sm leading-tight space-y-1">
+                          {(student.father_name || student.parent_name) && (
+                            <div>
+                              <p className="text-foreground">{student.father_name || student.parent_name}</p>
+                              {(student.father_phone || student.parent_phone) && (
+                                <p className="text-xs text-muted-foreground">{student.father_phone || student.parent_phone}</p>
+                              )}
+                            </div>
+                          )}
+                          {student.mother_name && (
+                            <div>
+                              <p className="text-slate-500">{student.mother_name}</p>
+                              {student.mother_phone && (
+                                <p className="text-xs text-muted-foreground">{student.mother_phone}</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell>{getStatusBadge(student.fee_status)}</TableCell>
                     <TableCell>
@@ -908,7 +967,7 @@ const StudentsPage = () => {
                       }
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button variant="ghost" size="sm" onClick={async () => { setSelectedStudent(student); setPwResult(null); setPwInput(''); setPwVisible(false); setCurrentPw(null); setCurrentPwVisible(false); setParentPw(null); setParentPwVisible(false); setShowViewDialog(true); try { const [r1, r2] = await Promise.allSettled([api.get(`/students/${student.student_id}/password`), api.get(`/students/${student.student_id}/parent-password`)]); if (r1.status === 'fulfilled') setCurrentPw(r1.value.data.password); if (r2.status === 'fulfilled') setParentPw(r2.value.data.password); } catch {} }} data-testid={`view-${student.student_id}`}><Eye className="h-4 w-4" /></Button>
+                      <Button variant="ghost" size="sm" onClick={async () => { setSelectedStudent(student); setPwResult(null); setPwInput(''); setPwVisible(false); setCurrentPw(null); setCurrentPwVisible(false); setParentPw(null); setParentPwVisible(false); setShowViewDialog(true); try { const calls = [api.get(`/students/${student.student_id}`)]; if (isAdmin) { calls.push(api.get(`/students/${student.student_id}/password`)); calls.push(api.get(`/students/${student.student_id}/parent-password`)); } const [r0, r1, r2] = await Promise.allSettled(calls); if (r0.status === 'fulfilled') setSelectedStudent(r0.value.data); if (r1?.status === 'fulfilled') setCurrentPw(r1.value.data.password); if (r2?.status === 'fulfilled') setParentPw(r2.value.data.password); } catch {} }} data-testid={`view-${student.student_id}`}><Eye className="h-4 w-4" /></Button>
                       {isAdmin && student.is_active && <Button variant="ghost" size="sm" onClick={() => handleEditStudent(student)} data-testid={`edit-${student.student_id}`}><Edit className="h-4 w-4" /></Button>}
                       {isAdmin && student.is_active && (
                         <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-700 hover:bg-red-50" onClick={() => { setDeactivateTarget(student); setShowDeactivateDialog(true); }} data-testid={`deactivate-${student.student_id}`} title="Deactivate Student"><UserX className="h-4 w-4" /></Button>
@@ -921,6 +980,7 @@ const StudentsPage = () => {
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -1530,13 +1590,33 @@ const StudentsPage = () => {
               </div>
               <div className="border-t pt-4">
                 <h4 className="font-medium mb-3 text-foreground">Parent / Guardian</h4>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div><Label className="text-muted-foreground">Name</Label><p className="font-medium text-foreground">{selectedStudent.parent_name || '-'}</p></div>
-                  <div><Label className="text-muted-foreground">Phone</Label><p className="font-medium text-foreground">{selectedStudent.parent_phone || '-'}</p></div>
-                  <div><Label className="text-muted-foreground">Email</Label><p className="font-medium text-foreground">{selectedStudent.parent_email || '-'}</p></div>
+
+                {/* Father */}
+                <div className="mb-4">
+                  <p className="text-xs uppercase tracking-wider font-bold text-slate-500 mb-2">Father</p>
+                  <div className="grid grid-cols-3 gap-4 text-sm">
+                    <div><Label className="text-muted-foreground">Name</Label><p className="font-medium text-foreground">{selectedStudent.father_name || selectedStudent.parent_name || '-'}</p></div>
+                    <div><Label className="text-muted-foreground">Phone</Label><p className="font-medium text-foreground">{selectedStudent.father_phone || selectedStudent.parent_phone || '-'}</p></div>
+                    <div><Label className="text-muted-foreground">Occupation</Label><p className="font-medium text-foreground">{selectedStudent.father_occupation || '-'}</p></div>
+                  </div>
+                </div>
+
+                {/* Mother */}
+                <div className="mb-4">
+                  <p className="text-xs uppercase tracking-wider font-bold text-slate-500 mb-2">Mother</p>
+                  <div className="grid grid-cols-3 gap-4 text-sm">
+                    <div><Label className="text-muted-foreground">Name</Label><p className="font-medium text-foreground">{selectedStudent.mother_name || '-'}</p></div>
+                    <div><Label className="text-muted-foreground">Phone</Label><p className="font-medium text-foreground">{selectedStudent.mother_phone || '-'}</p></div>
+                    <div><Label className="text-muted-foreground">Occupation</Label><p className="font-medium text-foreground">{selectedStudent.mother_occupation || '-'}</p></div>
+                  </div>
+                </div>
+
+                {/* Contact & login */}
+                <div className="grid grid-cols-2 gap-4 text-sm pt-2 border-t border-slate-100">
+                  <div><Label className="text-muted-foreground">Parent Email</Label><p className="font-medium text-foreground">{selectedStudent.parent_email || '-'}</p></div>
                   {isAdmin && (
                     <div>
-                      <Label className="text-muted-foreground">Password</Label>
+                      <Label className="text-muted-foreground">Parent Login Password</Label>
                       <div className="flex items-center gap-1 mt-0.5">
                         <p className="font-medium text-foreground font-mono">
                           {parentPw == null ? '—' : parentPwVisible ? parentPw : '••••••••••'}
@@ -1603,15 +1683,18 @@ const StudentsPage = () => {
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>Edit Student</DialogTitle>
-            <DialogDescription>Admission number and historical records cannot be changed</DialogDescription>
+            <DialogDescription>{selectedStudent?.first_name} {selectedStudent?.last_name}</DialogDescription>
           </DialogHeader>
           {selectedStudent && (
             <div className="grid gap-4 py-2">
-              <div className="p-3 bg-muted rounded-lg text-sm">
-                <span className="text-muted-foreground">Admission No: </span>
-                <span className="font-mono font-bold text-foreground">{selectedStudent.admission_number}</span>
-                <span className="text-muted-foreground ml-4">Name: </span>
-                <span className="font-medium text-foreground">{selectedStudent.first_name} {selectedStudent.last_name}</span>
+              <div className="space-y-2">
+                <Label>Admission Number</Label>
+                <Input
+                  value={editData.admission_number ?? selectedStudent.admission_number ?? ''}
+                  onChange={e => setEditData({...editData, admission_number: e.target.value})}
+                  placeholder="e.g. SHM/2025/00001"
+                  className="font-mono"
+                />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
@@ -1630,10 +1713,10 @@ const StudentsPage = () => {
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2"><Label>Email</Label><Input value={editData.email} onChange={(e) => setEditData({...editData, email: e.target.value})} data-testid="edit-email" /></div>
-                <div className="space-y-2"><Label>Phone</Label><Input value={editData.phone} onChange={(e) => setEditData({...editData, phone: e.target.value})} data-testid="edit-phone" /></div>
+                <div className="space-y-2"><Label>Email <span className="text-red-500">*</span></Label><Input type="email" required value={editData.email} onChange={(e) => setEditData({...editData, email: e.target.value})} data-testid="edit-email" /></div>
+                <div className="space-y-2"><Label>Phone <span className="text-red-500">*</span></Label><Input required value={editData.phone} onChange={(e) => setEditData({...editData, phone: e.target.value})} data-testid="edit-phone" /></div>
               </div>
-              <div className="space-y-2"><Label>Address</Label><Input value={editData.address} onChange={(e) => setEditData({...editData, address: e.target.value})} data-testid="edit-address" /></div>
+              <div className="space-y-2"><Label>Address <span className="text-red-500">*</span></Label><Input required value={editData.address} onChange={(e) => setEditData({...editData, address: e.target.value})} data-testid="edit-address" /></div>
               <div className="space-y-2"><Label>Roll Number</Label><Input value={editData.roll_number} onChange={(e) => setEditData({...editData, roll_number: e.target.value})} data-testid="edit-roll" /></div>
               {/* (#9) Stream selector — only for Class 11th / 12th */}
               {STREAMS_FOR_CLASS.includes(editData.class_name) && (
@@ -1654,13 +1737,20 @@ const StudentsPage = () => {
                 <div className="space-y-2"><Label>Emergency Contact</Label><Input value={editData.emergency_contact} onChange={(e) => setEditData({...editData, emergency_contact: e.target.value})} placeholder="Phone number" data-testid="edit-emergency-contact" /></div>
               </div>
               <div className="border-t pt-4">
-                <h4 className="font-medium mb-3 text-foreground">Parent / Guardian</h4>
-                <div className="grid gap-4">
-                  <div className="space-y-2"><Label>Parent Name</Label><Input value={editData.parent_name} onChange={(e) => setEditData({...editData, parent_name: e.target.value})} data-testid="edit-parent-name" /></div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2"><Label>Parent Phone</Label><Input value={editData.parent_phone} onChange={(e) => setEditData({...editData, parent_phone: e.target.value})} data-testid="edit-parent-phone" /></div>
-                    <div className="space-y-2"><Label>Parent Email</Label><Input value={editData.parent_email} onChange={(e) => setEditData({...editData, parent_email: e.target.value})} data-testid="edit-parent-email" /></div>
-                  </div>
+                <h4 className="font-medium mb-3 text-foreground">Father Details</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2"><Label>Father Name</Label><Input value={editData.father_name ?? editData.parent_name ?? ''} onChange={(e) => setEditData({...editData, father_name: e.target.value, parent_name: e.target.value})} data-testid="edit-father-name" /></div>
+                  <div className="space-y-2"><Label>Father Phone</Label><Input value={editData.father_phone ?? editData.parent_phone ?? ''} onChange={(e) => setEditData({...editData, father_phone: e.target.value, parent_phone: e.target.value})} data-testid="edit-father-phone" /></div>
+                  <div className="space-y-2"><Label>Father Occupation</Label><Input value={editData.father_occupation ?? ''} onChange={(e) => setEditData({...editData, father_occupation: e.target.value})} data-testid="edit-father-occupation" /></div>
+                  <div className="space-y-2"><Label>Father Email</Label><Input value={editData.parent_email ?? ''} onChange={(e) => setEditData({...editData, parent_email: e.target.value})} data-testid="edit-parent-email" /></div>
+                </div>
+              </div>
+              <div className="border-t pt-4">
+                <h4 className="font-medium mb-3 text-foreground">Mother Details</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2"><Label>Mother Name</Label><Input value={editData.mother_name ?? ''} onChange={(e) => setEditData({...editData, mother_name: e.target.value})} data-testid="edit-mother-name" /></div>
+                  <div className="space-y-2"><Label>Mother Phone</Label><Input value={editData.mother_phone ?? ''} onChange={(e) => setEditData({...editData, mother_phone: e.target.value})} data-testid="edit-mother-phone" /></div>
+                  <div className="space-y-2"><Label>Mother Occupation</Label><Input value={editData.mother_occupation ?? ''} onChange={(e) => setEditData({...editData, mother_occupation: e.target.value})} data-testid="edit-mother-occupation" /></div>
                 </div>
               </div>
               {/* Documents section */}

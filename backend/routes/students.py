@@ -19,7 +19,7 @@ import string
 logger = logging.getLogger(__name__)
 
 from database import db
-from models import UserRole, StudentBase, StudentCreate, CLASSES_WITH_STREAMS
+from models import UserRole, UserBase, StudentBase, StudentCreate, CLASSES_WITH_STREAMS
 from auth_utils import (
     get_current_user, require_roles, generate_admission_number, create_audit_log,
     hash_password, get_teacher_assigned_classes
@@ -222,10 +222,20 @@ async def get_students(
         query["fee_status"] = fee_status
     if search:
         s = search.strip()
+        # Search across full name (first + space + last), admission number, father, mother, and parent_name
         query["$or"] = [
             {"first_name": {"$regex": s, "$options": "i"}},
             {"last_name": {"$regex": s, "$options": "i"}},
             {"admission_number": {"$regex": s, "$options": "i"}},
+            {"father_name": {"$regex": s, "$options": "i"}},
+            {"mother_name": {"$regex": s, "$options": "i"}},
+            {"parent_name": {"$regex": s, "$options": "i"}},
+            # Match "first last" (full name) by using $expr + concat
+            {"$expr": {"$regexMatch": {
+                "input": {"$concat": [{"$ifNull": ["$first_name", ""]}, " ", {"$ifNull": ["$last_name", ""]}]},
+                "regex": s,
+                "options": "i"
+            }}},
         ]
 
     LIST_FIELDS = {
@@ -233,6 +243,8 @@ async def get_students(
         "first_name": 1, "last_name": 1, "email": 1,
         "class_name": 1, "section": 1, "stream": 1, "academic_year": 1,
         "parent_name": 1, "parent_phone": 1,
+        "father_name": 1, "father_phone": 1,
+        "mother_name": 1, "mother_phone": 1,
         "fee_status": 1, "is_active": 1, "app_locked": 1,
         "roll_number": 1, "user_id": 1, "parent_id": 1,
     }
@@ -417,9 +429,31 @@ async def reset_student_password(student_id: str, request: Request):
     if len(new_password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
 
-    user_account = await db.users.find_one({"email": student.get("email")}, {"_id": 0})
+    # Look up user account: prefer user_id link, fall back to email
+    user_account = None
+    if student.get("user_id"):
+        user_account = await db.users.find_one({"user_id": student["user_id"]}, {"_id": 0})
+    if not user_account and student.get("email"):
+        user_account = await db.users.find_one({"email": student["email"]}, {"_id": 0})
+
+    # If still no account (legacy student onboarded before auto-account creation), make one
     if not user_account:
-        raise HTTPException(status_code=404, detail="No login account linked to this student")
+        email = student.get("email") or f"{student_id.lower()}@student.shemford.in"
+        student_user = UserBase(
+            email=email,
+            name=f"{student.get('first_name', '')} {student.get('last_name', '')}".strip(),
+            role=UserRole.STUDENT,
+            phone=student.get("phone"),
+        )
+        u_dict = student_user.model_dump()
+        u_dict["password_hash"] = hash_password(new_password)
+        u_dict["created_at"] = u_dict["created_at"].isoformat()
+        await db.users.insert_one(u_dict)
+        await db.students.update_one(
+            {"student_id": student_id},
+            {"$set": {"user_id": student_user.user_id, "email": email}}
+        )
+        return {"message": "Student account created and password set", "password": new_password, "email": email}
 
     # Store ONLY the hash — never store plaintext
     await db.users.update_one(

@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime, timezone, date
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -250,11 +250,13 @@ async def generate_payroll(body: GeneratePayrollRequest, request: Request, backg
 @router.get("/payroll")
 async def list_payroll(
     request: Request,
+    response: Response,
     month_year: Optional[str] = None,   # "YYYY-MM"
     year: Optional[int] = None,
     status: Optional[str] = None,
     employee_id: Optional[str] = None,
-    limit: int = Query(default=200, le=500),
+    limit: int = Query(default=30, le=200),
+    page: int = Query(default=1, ge=1),
 ):
     """Admin/Accountant: full payroll list. Teacher: own records only."""
     user = await get_current_user(request)
@@ -289,7 +291,16 @@ async def list_payroll(
     if status:
         query["status"] = status
 
-    records = await db.payroll.find(query, {"_id": 0}).sort("month_year", -1).limit(limit).to_list(limit)
+    import asyncio as _asyncio
+    skip = (page - 1) * limit
+    total, records = await _asyncio.gather(
+        db.payroll.count_documents(query),
+        db.payroll.find(query, {"_id": 0}).sort("month_year", -1).skip(skip).limit(limit).to_list(limit),
+    )
+    pages = max(1, -(-total // limit))
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Total-Pages"] = str(pages)
+    response.headers["X-Page"] = str(page)
 
     # Enrich with employee name (Admin/Accountant view only — teachers see their own name naturally)
     emp_ids = list({r["employee_id"] for r in records})

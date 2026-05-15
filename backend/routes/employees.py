@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from typing import Optional
 from datetime import datetime, timezone
 import secrets
@@ -111,8 +111,11 @@ async def create_employee(employee: EmployeeCreate, request: Request):
 @router.get("/employees")
 async def get_employees(
     request: Request,
+    response: Response,
     department: Optional[str] = None,
-    is_active: Optional[bool] = True
+    is_active: Optional[bool] = True,
+    page: int = 1,
+    limit: int = 30,
 ):
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     query = {}
@@ -121,7 +124,19 @@ async def get_employees(
     if is_active is not None:
         query["is_active"] = is_active
 
-    employees = await db.employees.find(query, {"_id": 0}).to_list(500)
+    import asyncio
+    total, employees = await asyncio.gather(
+        db.employees.count_documents(query),
+        db.employees.find(query, {"_id": 0})
+            .sort("first_name", 1)
+            .skip((page - 1) * limit)
+            .limit(limit)
+            .to_list(limit),
+    )
+    pages = max(1, -(-total // limit))
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Total-Pages"] = str(pages)
+    response.headers["X-Page"] = str(page)
     return [decrypt_bank_fields(e) for e in employees]
 
 

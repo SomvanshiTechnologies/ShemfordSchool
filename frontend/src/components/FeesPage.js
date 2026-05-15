@@ -1,6 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../lib/api';
+import { getCached, setCached } from '../lib/pageCache';
+
+const TopProgressBar = ({ active }) =>
+  active ? (
+    <div className="fixed top-0 left-0 right-0 z-[9999] h-[2px] overflow-hidden" style={{ background: '#fde8c8' }}>
+      <div className="h-full w-2/5" style={{ background: '#E88A1A', animation: 'topbar-slide 1.4s ease-in-out infinite' }} />
+    </div>
+  ) : null;
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -80,9 +88,10 @@ const FeesPage = () => {
   const isAdmin = user?.role === 'admin' || user?.role === 'accountant';
 
   const [activeTab, setActiveTab] = useState(
-    searchParams.get('tab') || (isParent || isStudent ? 'my-fees' : 'config')
+    searchParams.get('tab') || (isParent || isStudent ? 'my-fees' : 'collect')
   );
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Fee component config state
   const [feeConfigs, setFeeConfigs] = useState([]);
@@ -108,7 +117,7 @@ const FeesPage = () => {
   // Payment dialog
   const [showPayDialog, setShowPayDialog] = useState(false);
   const [payLedgerIds, setPayLedgerIds] = useState([]);
-  const [payForm, setPayForm] = useState({ method: 'cash', transaction_id: '', remarks: '' });
+  const [payForm, setPayForm] = useState({ method: 'cash', transaction_id: '', remarks: '', payment_date: new Date().toISOString().slice(0, 10), split_cash: '', split_online: '' });
   const [processingPayment, setProcessingPayment] = useState(false);
 
   // Admission fee payment dialog
@@ -164,16 +173,30 @@ const FeesPage = () => {
   }, [selectedYear]);
 
   const fetchAdminData = useCallback(async () => {
+    // SWR: show cached immediately if present
+    const cached = getCached('fees:admin-data');
+    if (cached) {
+      setStudents(cached.students);
+      setDueChart(cached.due);
+      setConcessions(cached.concessions);
+      setLoading(false);
+    }
+    setRefreshing(true);
     try {
       const [studRes, dueRes, concRes] = await Promise.all([
         api.get('/students', { params: { is_active: true, limit: 500 } }).catch(() => ({ data: [] })),
         api.get('/fees/due-chart').catch(() => ({ data: [] })),
         api.get('/fees/concessions').catch(() => ({ data: [] })),
       ]);
-      setStudents(studRes.data.students ?? (Array.isArray(studRes.data) ? studRes.data : []));
-      setDueChart(Array.isArray(dueRes.data) ? dueRes.data : []);
-      setConcessions(Array.isArray(concRes.data) ? concRes.data : []);
+      const studArr = studRes.data.students ?? (Array.isArray(studRes.data) ? studRes.data : []);
+      const dueArr = Array.isArray(dueRes.data) ? dueRes.data : [];
+      const concArr = Array.isArray(concRes.data) ? concRes.data : [];
+      setStudents(studArr);
+      setDueChart(dueArr);
+      setConcessions(concArr);
+      setCached('fees:admin-data', { students: studArr, due: dueArr, concessions: concArr });
     } catch {}
+    finally { setRefreshing(false); }
   }, []);
 
   const fetchParentData = useCallback(async () => {
@@ -277,13 +300,22 @@ const FeesPage = () => {
     if (!payLedgerIds.length) { toast.error('Select at least one entry to pay'); return; }
     setProcessingPayment(true);
     try {
-      const res = await api.post('/fees/pay', {
+      const payload = {
         student_id: selectedStudentId,
         ledger_ids: payLedgerIds,
         payment_method: payForm.method,
         transaction_id: payForm.transaction_id || undefined,
         remarks: payForm.remarks || undefined,
-      });
+        payment_date: payForm.payment_date || undefined,
+      };
+      if (payForm.method === 'split') {
+        const cash = parseFloat(payForm.split_cash) || 0;
+        const online = parseFloat(payForm.split_online) || 0;
+        if (cash <= 0 && online <= 0) { toast.error('Enter at least one split amount'); setProcessingPayment(false); return; }
+        payload.payment_method = 'split';
+        payload.split_payments = { cash, online };
+      }
+      const res = await api.post('/fees/pay', payload);
       toast.success(res.data.message);
       setShowPayDialog(false);
       setPayLedgerIds([]);
@@ -318,13 +350,10 @@ const FeesPage = () => {
     try {
       const res = await api.get(`/fees/receipt/${paymentId}/pdf`, { responseType: 'blob' });
       const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `receipt_${paymentId}.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch {
-      toast.error('Failed to download receipt');
+      toast.error('Failed to load receipt');
     }
   };
 
@@ -527,7 +556,8 @@ const FeesPage = () => {
 
   // ── Loading state ─────────────────────────────────────────────────────────
 
-  if (loading) return (
+  // Only show spinner on first load with no cached data
+  if (loading && students.length === 0 && myChildren.length === 0 && dueChart.length === 0) return (
     <div className="flex items-center justify-center h-64">
       <div className="animate-spin rounded-full h-8 w-8 border-2 border-slate-900 border-t-transparent" />
     </div>
@@ -542,6 +572,7 @@ const FeesPage = () => {
 
   return (
     <div data-testid="fees-page">
+      <TopProgressBar active={refreshing} />
       {/* ── Header ── */}
       <div className="page-header flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
         <div className="page-header-inner">
@@ -592,9 +623,6 @@ const FeesPage = () => {
               </TabsTrigger>
               <TabsTrigger value="due" className="rounded-xl text-xs uppercase tracking-wider font-semibold">
                 Due Chart
-              </TabsTrigger>
-              <TabsTrigger value="concessions" className="rounded-xl text-xs uppercase tracking-wider font-semibold">
-                Concessions
               </TabsTrigger>
             </>
           )}
@@ -918,48 +946,6 @@ const FeesPage = () => {
           </div>
         </TabsContent>
 
-        {/* ════════════ CONCESSIONS TAB ════════════ */}
-        <TabsContent value="concessions">
-          <div className="space-y-4">
-            <div className="flex justify-end">
-              <Button
-                size="sm"
-                className="bg-slate-900 hover:bg-slate-800 text-white text-xs"
-                onClick={() => setShowConcessionDialog(true)}
-              >
-                <Plus className="h-3 w-3 mr-1.5" />
-                Apply Concession
-              </Button>
-            </div>
-            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-slate-50">
-                    {['Student', 'Class', 'Adm. No.', 'Total Concession', 'Entries', 'Reason'].map(h => (
-                      <TableHead key={h} className="text-[10px] uppercase tracking-wider font-bold text-slate-500">{h}</TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {concessions.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={6} className="text-center py-10 text-slate-500">No concessions found</TableCell>
-                    </TableRow>
-                  ) : concessions.map(c => (
-                    <TableRow key={c.student_id}>
-                      <TableCell className="font-medium">{c.student_name}</TableCell>
-                      <TableCell>{c.class_name}-{c.section}</TableCell>
-                      <TableCell className="text-xs font-mono">{c.admission_number}</TableCell>
-                      <TableCell className="font-semibold text-green-700">{fmt(c.total_concession)}</TableCell>
-                      <TableCell>{c.entries}</TableCell>
-                      <TableCell className="text-sm text-slate-500">{c.reason}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          </div>
-        </TabsContent>
 
         {/* ════════════ MY FEES / STUDENT VIEW ════════════ */}
         <TabsContent value="my-fees">
@@ -1292,6 +1278,17 @@ const FeesPage = () => {
           </DialogHeader>
           <div className="py-3 space-y-3">
             <div>
+              <Label className="text-xs font-bold uppercase tracking-wider">Payment Date</Label>
+              <Input
+                type="date"
+                className="mt-1 h-9 text-sm"
+                value={payForm.payment_date}
+                max={new Date().toISOString().slice(0, 10)}
+                onChange={e => setPayForm(f => ({ ...f, payment_date: e.target.value }))}
+              />
+              <p className="text-[10px] text-slate-400 mt-1">For back-dated payments (e.g. fees collected earlier)</p>
+            </div>
+            <div>
               <Label className="text-xs font-bold uppercase tracking-wider">Payment Method</Label>
               <Select value={payForm.method} onValueChange={v => setPayForm(f => ({ ...f, method: v }))}>
                 <SelectTrigger className="mt-1 h-9">
@@ -1302,10 +1299,26 @@ const FeesPage = () => {
                   <SelectItem value="cheque">Cheque</SelectItem>
                   <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
                   <SelectItem value="online">Online / UPI</SelectItem>
+                  <SelectItem value="split">Split (Cash + Online)</SelectItem>
                   <SelectItem value="pos_terminal">POS Terminal (Ezetap)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+            {payForm.method === 'split' && (
+              <div className="grid grid-cols-2 gap-3 p-3 rounded-xl border border-orange-200 bg-orange-50">
+                <div>
+                  <Label className="text-xs font-bold uppercase tracking-wider">Cash Amount</Label>
+                  <Input type="number" min={0} step="0.01" className="mt-1 h-9 text-sm" value={payForm.split_cash} onChange={e => setPayForm(f => ({ ...f, split_cash: e.target.value }))} placeholder="0" />
+                </div>
+                <div>
+                  <Label className="text-xs font-bold uppercase tracking-wider">Online Amount</Label>
+                  <Input type="number" min={0} step="0.01" className="mt-1 h-9 text-sm" value={payForm.split_online} onChange={e => setPayForm(f => ({ ...f, split_online: e.target.value }))} placeholder="0" />
+                </div>
+                <p className="col-span-2 text-[10px] text-slate-500">
+                  Cash + Online must equal the total amount.
+                </p>
+              </div>
+            )}
             {payForm.method === 'pos_terminal' ? (
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm text-slate-700">
                 <p className="font-medium flex items-center gap-2"><Smartphone className="h-4 w-4" /> POS Terminal Payment</p>
@@ -1540,61 +1553,6 @@ const FeesPage = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Concession Dialog */}
-      <Dialog open={showConcessionDialog} onOpenChange={setShowConcessionDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Apply Fee Concession</DialogTitle>
-            <DialogDescription>Apply scholarship or concession to pending fee entries.</DialogDescription>
-          </DialogHeader>
-          <div className="py-3 space-y-3">
-            <div>
-              <Label className="text-xs font-bold uppercase tracking-wider">Student</Label>
-              <Select value={concessionForm.student_id} onValueChange={v => setConcessionForm(f => ({ ...f, student_id: v }))}>
-                <SelectTrigger className="mt-1 h-9">
-                  <SelectValue placeholder="Choose a student" />
-                </SelectTrigger>
-                <SelectContent>
-                  {students.map(s => (
-                    <SelectItem key={s.student_id} value={s.student_id}>
-                      {s.first_name} {s.last_name} — {s.class_name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs font-bold uppercase tracking-wider">Concession % (0–100)</Label>
-              <Input
-                type="number" min={0} max={100}
-                className="mt-1 h-9 text-sm"
-                value={concessionForm.concession_percent}
-                onChange={e => setConcessionForm(f => ({ ...f, concession_percent: e.target.value }))}
-              />
-            </div>
-            <div>
-              <Label className="text-xs font-bold uppercase tracking-wider">Reason</Label>
-              <Input
-                className="mt-1 h-9 text-sm"
-                value={concessionForm.reason}
-                onChange={e => setConcessionForm(f => ({ ...f, reason: e.target.value }))}
-                placeholder="e.g. RTE, Scholarship, Staff ward"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowConcessionDialog(false)}>Cancel</Button>
-            <Button
-              onClick={applyConcession}
-              disabled={applyingConcession}
-              className="bg-slate-900 hover:bg-slate-800 text-white"
-            >
-              {applyingConcession ? <Loader2 className="h-3 w-3 mr-2 animate-spin" /> : null}
-              Apply Concession
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 };
@@ -1643,31 +1601,36 @@ const FeeTypeDropdown = ({ label, entries, payLedgerIds, setPayLedgerIds }) => {
       </button>
 
       {open && (
-        <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-slate-200 rounded-xl shadow-lg min-w-[260px] overflow-hidden">
-          <label className="flex items-center gap-3 px-3 py-2 border-b border-slate-100 cursor-pointer hover:bg-slate-50 bg-slate-50">
-            <input type="checkbox" checked={allSelected} onChange={toggleAll} className="rounded cursor-pointer" />
+        <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-slate-200 rounded-xl shadow-lg w-72 overflow-hidden">
+          <label className="flex items-center gap-3 px-3 py-2.5 border-b border-slate-100 cursor-pointer hover:bg-slate-50 bg-slate-50">
+            <input type="checkbox" checked={allSelected} onChange={toggleAll} className="rounded cursor-pointer shrink-0" />
             <span className="text-xs font-bold text-slate-600">Select all</span>
+            <span className="ml-auto text-xs text-slate-400">{entries.length} item{entries.length !== 1 ? 's' : ''}</span>
           </label>
+          <div className="max-h-56 overflow-y-auto">
           {entries.map(e => {
             const isSel = payLedgerIds.includes(e.ledger_id);
             const entryLabel = e.description || e.month || e.ledger_id;
             const amount = e.remaining_balance > 0 ? e.remaining_balance : e.net_amount;
             return (
-              <label key={e.ledger_id} className="flex items-center gap-3 px-3 py-2 border-b border-slate-50 last:border-0 cursor-pointer hover:bg-orange-50">
+              <label key={e.ledger_id} className={`flex items-center gap-3 px-3 py-2.5 border-b border-slate-50 last:border-0 cursor-pointer hover:bg-orange-50 ${isSel ? 'bg-orange-50/50' : ''}`}>
                 <input
                   type="checkbox"
                   checked={isSel}
                   onChange={() => setPayLedgerIds(prev => isSel ? prev.filter(id => id !== e.ledger_id) : [...prev, e.ledger_id])}
-                  className="rounded cursor-pointer"
+                  className="rounded cursor-pointer shrink-0"
                 />
-                <span className={`flex-1 text-xs font-medium ${e.status === 'overdue' ? 'text-red-600' : 'text-slate-700'}`}>
+                <span className={`flex-1 text-xs font-medium truncate ${e.status === 'overdue' ? 'text-red-600' : 'text-slate-700'}`}>
                   {entryLabel}
-                  {e.status === 'overdue' && <span className="ml-1 text-[10px] bg-red-100 text-red-600 px-1 rounded">overdue</span>}
                 </span>
-                <span className="text-xs font-semibold text-slate-900">{fmt(amount)}</span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {e.status === 'overdue' && <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full font-medium">overdue</span>}
+                  <span className="text-xs font-semibold text-slate-900">₹{fmt(amount)}</span>
+                </div>
               </label>
             );
           })}
+          </div>
         </div>
       )}
     </div>
@@ -1775,7 +1738,6 @@ const LedgerView = ({
               {payableEntries.length > 0 ? (
                 <>
                   <div className="flex flex-wrap items-center gap-2 justify-between">
-                    {/* Left: quick-select */}
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Quick select:</span>
                       <button onClick={selectAll} className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium transition">
@@ -1793,8 +1755,6 @@ const LedgerView = ({
                         <button onClick={clearAll} className="text-xs px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-400 font-medium transition">Clear</button>
                       )}
                     </div>
-
-                    {/* Right: action buttons */}
                     <div className="flex items-center gap-2 shrink-0">
                       {hasAdmissionPending && (
                         <Button size="sm" variant="outline" className="text-xs h-9 border-slate-300" onClick={onPayAdmission}>
@@ -1813,7 +1773,7 @@ const LedgerView = ({
                     </div>
                   </div>
                   {payLedgerIds.length === 0 && (
-                    <p className="text-xs text-slate-400 italic mt-1.5">Select entries above to enable</p>
+                    <p className="text-xs text-slate-400 italic mt-1.5">Select entries above or use the Collect button on individual rows</p>
                   )}
                 </>
               ) : (
@@ -1829,50 +1789,25 @@ const LedgerView = ({
             <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
               {payableEntries.length > 0 ? (
                 <>
-                  {/* Quick-select by fee type */}
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Select to pay:</span>
                     <button onClick={selectAll} className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium transition">
                       All due ({payableEntries.length})
                     </button>
-
-                    <FeeTypeDropdown
-                      label="One-Time"
-                      entries={(grouped.one_time || []).filter(e => ['pending','overdue','partially_paid'].includes(e.status))}
-                      payLedgerIds={payLedgerIds}
-                      setPayLedgerIds={setPayLedgerIds}
-                    />
-                    <FeeTypeDropdown
-                      label="Yearly"
-                      entries={(grouped.yearly || []).filter(e => ['pending','overdue','partially_paid'].includes(e.status))}
-                      payLedgerIds={payLedgerIds}
-                      setPayLedgerIds={setPayLedgerIds}
-                    />
-
-                    <MonthlyDropdown
-                      monthlyDue={(grouped.monthly || []).filter(e => ['pending','overdue','partially_paid'].includes(e.status))}
-                      payLedgerIds={payLedgerIds}
-                      setPayLedgerIds={setPayLedgerIds}
-                    />
-
+                    <FeeTypeDropdown label="One-Time" entries={(grouped.one_time || []).filter(e => ['pending','overdue','partially_paid'].includes(e.status))} payLedgerIds={payLedgerIds} setPayLedgerIds={setPayLedgerIds} />
+                    <FeeTypeDropdown label="Yearly"   entries={(grouped.yearly   || []).filter(e => ['pending','overdue','partially_paid'].includes(e.status))} payLedgerIds={payLedgerIds} setPayLedgerIds={setPayLedgerIds} />
+                    <MonthlyDropdown monthlyDue={(grouped.monthly || []).filter(e => ['pending','overdue','partially_paid'].includes(e.status))} payLedgerIds={payLedgerIds} setPayLedgerIds={setPayLedgerIds} />
                     {payLedgerIds.length > 0 && (
                       <button onClick={clearAll} className="text-xs text-slate-400 underline ml-1">Clear</button>
                     )}
                   </div>
-
-                  {/* Pay button */}
                   {payLedgerIds.length > 0 ? (
-                    <RazorpayCheckout
-                      studentId={studentId}
-                      ledgerIds={payLedgerIds}
-                      onSuccess={onRazorpaySuccess}
-                      onCancel={() => {}}
-                    >
+                    <RazorpayCheckout studentId={studentId} ledgerIds={payLedgerIds} onSuccess={onRazorpaySuccess} onCancel={() => {}}>
                       <CreditCard className="h-4 w-4 mr-2" />
                       Pay {fmt(selectedTotal)} Online
                     </RazorpayCheckout>
                   ) : (
-                    <p className="text-xs text-slate-400 italic">Select a fee type above to pay</p>
+                    <p className="text-xs text-slate-400 italic">Use the Pay button on individual rows or select multiple to pay together</p>
                   )}
                 </>
               ) : (
@@ -1924,7 +1859,7 @@ const LedgerView = ({
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Net Due</TableHead>
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Due Date</TableHead>
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Status</TableHead>
-                    {!readOnly && <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Receipt</TableHead>}
+                    <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1951,20 +1886,27 @@ const LedgerView = ({
                         {entry.due_date ? new Date(entry.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
                       </TableCell>
                       <TableCell><StatusBadge status={entry.status} /></TableCell>
-                      {!readOnly && (
-                        <TableCell>
-                          {entry.payment_id && (
-                            <Button
-                              variant="ghost" size="sm"
-                              className="h-7 px-2 text-xs"
-                              onClick={() => onDownloadReceipt(entry.payment_id)}
-                            >
-                              <Download className="h-3 w-3 mr-1" />
-                              PDF
+                      <TableCell>
+                        {entry.status === 'paid' || entry.status === 'waived' ? (
+                          entry.payment_id && (
+                            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs"
+                              onClick={() => onDownloadReceipt(entry.payment_id)}>
+                              <Download className="h-3 w-3 mr-1" />PDF
                             </Button>
-                          )}
-                        </TableCell>
-                      )}
+                          )
+                        ) : readOnly ? (
+                          <RazorpayCheckout studentId={studentId} ledgerIds={[entry.ledger_id]} onSuccess={onRazorpaySuccess} onCancel={() => {}}>
+                            <CreditCard className="h-3 w-3 mr-1" />Pay
+                          </RazorpayCheckout>
+                        ) : (
+                          <Button size="sm"
+                            className="h-7 px-2.5 text-xs bg-orange-500 hover:bg-orange-600 text-white"
+                            onClick={() => { setPayLedgerIds([entry.ledger_id]); onPaySelected && onPaySelected(); }}
+                          >
+                            <CreditCard className="h-3 w-3 mr-1" />Collect
+                          </Button>
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

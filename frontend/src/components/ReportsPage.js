@@ -67,6 +67,22 @@ const ReportsPage = () => {
     }
   };
 
+  const downloadReport = async (endpoint, params, filename) => {
+    try {
+      const res = await api.get(endpoint, { params, responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast.error('Failed to download report');
+    }
+  };
+
   const fetchFinancialReport = async () => {
     setLoading(true);
     try {
@@ -199,32 +215,10 @@ const ReportsPage = () => {
                     {loading ? 'Loading...' : 'Generate Report'}
                   </Button>
                   <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const params = new URLSearchParams();
-                        params.set('format', 'pdf');
-                        if (startDate) params.set('start_date', startDate);
-                        if (endDate) params.set('end_date', endDate);
-                        window.open(`${process.env.REACT_APP_BACKEND_URL}/api/reports/financial/export?${params.toString()}`, '_blank');
-                      }}
-                      data-testid="export-financial-pdf"
-                    >
+                    <Button variant="outline" size="sm" onClick={() => downloadReport('/reports/financial/export', { format: 'pdf', ...(startDate && { start_date: startDate }), ...(endDate && { end_date: endDate }) }, 'financial-report.pdf')} data-testid="export-financial-pdf">
                       <Download className="h-4 w-4 mr-1" /> PDF
                     </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const params = new URLSearchParams();
-                        params.set('format', 'excel');
-                        if (startDate) params.set('start_date', startDate);
-                        if (endDate) params.set('end_date', endDate);
-                        window.open(`${process.env.REACT_APP_BACKEND_URL}/api/reports/financial/export?${params.toString()}`, '_blank');
-                      }}
-                      data-testid="export-financial-excel"
-                    >
+                    <Button variant="outline" size="sm" onClick={() => downloadReport('/reports/financial/export', { format: 'excel', ...(startDate && { start_date: startDate }), ...(endDate && { end_date: endDate }) }, 'financial-report.xlsx')} data-testid="export-financial-excel">
                       <FileText className="h-4 w-4 mr-1" /> Excel
                     </Button>
                   </div>
@@ -347,28 +341,10 @@ const ReportsPage = () => {
                 </Button>
                 {selectedClass && (
                   <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const params = new URLSearchParams({ format: 'pdf', class_name: selectedClass });
-                        if (selectedSection) params.set('section', selectedSection);
-                        window.open(`${process.env.REACT_APP_BACKEND_URL}/api/reports/academic/export?${params.toString()}`, '_blank');
-                      }}
-                      data-testid="export-academic-pdf"
-                    >
+                    <Button variant="outline" size="sm" onClick={() => downloadReport('/reports/academic/export', { format: 'pdf', class_name: selectedClass, ...(selectedSection && { section: selectedSection }) }, 'academic-report.pdf')} data-testid="export-academic-pdf">
                       <Download className="h-4 w-4 mr-1" /> PDF
                     </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const params = new URLSearchParams({ format: 'excel', class_name: selectedClass });
-                        if (selectedSection) params.set('section', selectedSection);
-                        window.open(`${process.env.REACT_APP_BACKEND_URL}/api/reports/academic/export?${params.toString()}`, '_blank');
-                      }}
-                      data-testid="export-academic-excel"
-                    >
+                    <Button variant="outline" size="sm" onClick={() => downloadReport('/reports/academic/export', { format: 'excel', class_name: selectedClass, ...(selectedSection && { section: selectedSection }) }, 'academic-report.xlsx')} data-testid="export-academic-excel">
                       <FileText className="h-4 w-4 mr-1" /> Excel
                     </Button>
                   </div>
@@ -489,33 +465,10 @@ const ReportsPage = () => {
                     {loading ? 'Loading...' : 'Generate Report'}
                   </Button>
                   <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const params = new URLSearchParams({ format: 'pdf' });
-                        if (attClass) params.set('class_name', attClass);
-                        if (attDate) params.set('date', attDate);
-                        if (attStartDate) params.set('start_date', attStartDate);
-                        if (attEndDate) params.set('end_date', attEndDate);
-                        window.open(`${process.env.REACT_APP_BACKEND_URL}/api/reports/attendance/export?${params.toString()}`, '_blank');
-                      }}
-                      data-testid="export-attendance-pdf"
-                    >
+                    <Button variant="outline" size="sm" onClick={() => downloadReport('/reports/attendance/export', { format: 'pdf', ...(attClass && { class_name: attClass }), ...(attDate && { date: attDate }), ...(attStartDate && { start_date: attStartDate }), ...(attEndDate && { end_date: attEndDate }) }, 'attendance-report.pdf')} data-testid="export-attendance-pdf">
                       <Download className="h-4 w-4 mr-1" /> PDF
                     </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const params = new URLSearchParams({ format: 'excel' });
-                        if (attClass) params.set('class_name', attClass);
-                        if (attDate) params.set('date', attDate);
-                        if (attStartDate) params.set('start_date', attStartDate);
-                        if (attEndDate) params.set('end_date', attEndDate);
-                        window.open(`${process.env.REACT_APP_BACKEND_URL}/api/reports/attendance/export?${params.toString()}`, '_blank');
-                      }}
-                      data-testid="export-attendance-excel"
+                    <Button variant="outline" size="sm" onClick={() => downloadReport('/reports/attendance/export', { format: 'excel', ...(attClass && { class_name: attClass }), ...(attDate && { date: attDate }), ...(attStartDate && { start_date: attStartDate }), ...(attEndDate && { end_date: attEndDate }) }, 'attendance-report.xlsx')} data-testid="export-attendance-excel"
                     >
                       <FileText className="h-4 w-4 mr-1" /> Excel
                     </Button>

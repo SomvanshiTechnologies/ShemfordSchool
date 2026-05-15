@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { currentAcademicYear } from '../lib/academicYear';
 import api from '../lib/api';
+import { getCached, setCached } from '../lib/pageCache';
 import { useAuth } from '../contexts/AuthContext';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
@@ -85,6 +86,13 @@ const SyllabusPage = () => {
   }, [filterClass, filterSubject]);
 
   const fetchData = async () => {
+    const cacheKey = `syllabus:${filterClass}:${filterSubject}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      setSyllabusList(cached.syllabus);
+      setClasses(cached.classes);
+      setLoading(false);
+    }
     try {
       const params = {};
       if (filterClass) params.class_name = filterClass;
@@ -110,8 +118,9 @@ const SyllabusPage = () => {
 
       setSyllabusList(syllabus);
       setClasses(classesRes.data);
+      setCached(cacheKey, { syllabus, classes: classesRes.data });
     } catch (error) {
-      toast.error('Failed to fetch syllabus data');
+      if (!cached) toast.error('Failed to fetch syllabus data');
     } finally {
       setLoading(false);
     }

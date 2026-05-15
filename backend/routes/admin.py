@@ -9,7 +9,7 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from database import db
 from models import UserRole
@@ -194,10 +194,12 @@ _RESTORABLE_ENTITIES = {
 @router.get("/admin/audit-trail")
 async def list_audit_trail(
     request: Request,
+    response: Response,
     only_non_admin: bool = Query(True, description="If true, hide deletions performed by admins"),
     include_restored: bool = Query(False, description="If true, include already-restored entries"),
     entity_type: Optional[str] = Query(None, description="Filter by entity type"),
-    limit: int = Query(200, ge=1, le=1000),
+    limit: int = Query(30, ge=1, le=200),
+    page: int = Query(1, ge=1),
 ):
     """
     List deletion (deactivate) events from audit_logs, with optional filters.
@@ -213,14 +215,21 @@ async def list_audit_trail(
     if entity_type:
         query["entity_type"] = entity_type
 
-    entries = (
-        await db.audit_logs.find(query, {"_id": 0})
-        .sort("created_at", -1)
-        .limit(limit)
-        .to_list(limit)
+    import asyncio
+    total, entries = await asyncio.gather(
+        db.audit_logs.count_documents(query),
+        db.audit_logs.find(query, {"_id": 0})
+            .sort("created_at", -1)
+            .skip((page - 1) * limit)
+            .limit(limit)
+            .to_list(limit),
     )
+    pages = max(1, -(-total // limit))
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Total-Pages"] = str(pages)
+    response.headers["X-Page"] = str(page)
     return {
-        "count": len(entries),
+        "count": total,
         "entries": entries,
         "restorable_entity_types": sorted(_RESTORABLE_ENTITIES.keys()),
     }

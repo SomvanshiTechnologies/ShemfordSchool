@@ -34,6 +34,7 @@ export default function UpgradationPage() {
   const [graduating, setGraduating] = useState(false);
   const [result, setResult] = useState(null);
   const [feeBlockMsg, setFeeBlockMsg] = useState(null);
+  const [duesLoading, setDuesLoading] = useState(false);
 
   // Collect pending fees dialog
   const [showCollectDialog, setShowCollectDialog] = useState(false);
@@ -96,14 +97,22 @@ export default function UpgradationPage() {
     setSearch(`${s.first_name} ${s.last_name} (${s.admission_number || s.student_id})`);
     setResult(null);
 
-    // Show fee warning immediately if this student has pending/overdue fees
+    // Show fee warning + fetch pending dues immediately
     if (s.fee_status === 'pending' || s.fee_status === 'overdue') {
       const yr = s.academic_year || 'current year';
-      setFeeBlockMsg(
-        `Fees for ${yr} are ${s.fee_status}. Please collect the ${yr} fees from Fees → Collect before upgrading this student.`
-      );
+      setFeeBlockMsg(`Fees for ${yr} are ${s.fee_status}.`);
+      setPendingEntries([]);
+      setDuesLoading(true);
+      api.get(`/fees/ledger/${s.student_id}`).then(res => {
+        const ledger = res.data?.ledger || {};
+        const all = [...(ledger.one_time || []), ...(ledger.yearly || []), ...(ledger.monthly || [])];
+        const pending = all.filter(e => e.status === 'pending' || e.status === 'overdue');
+        setPendingEntries(pending);
+        setCollectIds(pending.map(e => e.ledger_id));
+      }).catch(() => {}).finally(() => setDuesLoading(false));
     } else {
       setFeeBlockMsg(null);
+      setPendingEntries([]);
     }
 
     // Auto-advance to the next academic year based on student's current year
@@ -387,9 +396,54 @@ export default function UpgradationPage() {
 
           {/* Target class — only for non-12th students */}
           {selected && selected.class_name !== '12th' && feeBlockMsg && (
-            <div className="border border-red-200 bg-red-50 rounded-2xl p-5 space-y-3">
-              <p className="font-semibold text-red-700">⚠ Cannot Upgrade — Fees Pending</p>
-              <p className="text-sm text-red-600">{feeBlockMsg}</p>
+            <div className="border border-red-200 bg-red-50 rounded-2xl p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="font-semibold text-red-700">⚠ Cannot Upgrade — Fees Pending</p>
+                <p className="text-xs text-red-500">{feeBlockMsg}</p>
+              </div>
+
+              {/* Pending dues table */}
+              {duesLoading ? (
+                <div className="flex items-center gap-2 text-sm text-red-500">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Loading pending dues...
+                </div>
+              ) : pendingEntries.length > 0 ? (
+                <div className="rounded-xl border border-red-200 overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-red-100">
+                      <tr>
+                        <th className="text-left px-3 py-2 text-red-700 font-medium">Fee</th>
+                        <th className="text-left px-3 py-2 text-red-700 font-medium">Due Date</th>
+                        <th className="text-left px-3 py-2 text-red-700 font-medium">Status</th>
+                        <th className="text-right px-3 py-2 text-red-700 font-medium">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-red-100">
+                      {pendingEntries.map(e => (
+                        <tr key={e.ledger_id}>
+                          <td className="px-3 py-2 text-slate-700">{e.description || e.fee_component}</td>
+                          <td className="px-3 py-2 text-slate-500">{e.due_date || '—'}</td>
+                          <td className="px-3 py-2">
+                            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${e.status === 'overdue' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                              {e.status}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-right font-medium text-slate-800">₹{fmt(e.net_amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="bg-red-50">
+                      <tr>
+                        <td colSpan={3} className="px-3 py-2 text-sm font-semibold text-red-700">Total Pending</td>
+                        <td className="px-3 py-2 text-right font-bold text-red-700">
+                          ₹{fmt(pendingEntries.reduce((s, e) => s + e.net_amount, 0))}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              ) : null}
+
               <Button
                 onClick={openCollectDialog}
                 className="bg-red-600 hover:bg-red-700 text-white flex items-center gap-2"
@@ -572,8 +626,8 @@ export default function UpgradationPage() {
 
       {/* ── Payment Dialog ───────────────────────────────────────────────────── */}
       {showPayDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm space-y-4 shadow-xl">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-4 sm:p-6 w-full max-w-sm space-y-4 shadow-xl max-h-[85vh] overflow-y-auto">
             <h3 className="text-lg font-semibold">Collect Upgradation Fee</h3>
             <p className="text-sm text-muted-foreground">
               Amount: <strong>₹{fmt(result?.upgradation_fee)}</strong>
@@ -614,8 +668,8 @@ export default function UpgradationPage() {
 
       {/* ── Collect Pending Fees Dialog ──────────────────────────────────────── */}
       {showCollectDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md space-y-4 shadow-xl">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-4 sm:p-6 w-full max-w-md space-y-4 shadow-xl max-h-[85vh] overflow-y-auto">
             <h3 className="text-lg font-semibold">Collect Pending Fees</h3>
             <p className="text-sm text-muted-foreground">Student: <strong>{selected?.first_name} {selected?.last_name}</strong></p>
             {collectLoading ? (

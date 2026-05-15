@@ -1,5 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../lib/api';
+import { getCached, setCached } from '../lib/pageCache';
+
+const TopProgressBar = ({ active }) =>
+  active ? (
+    <div className="fixed top-0 left-0 right-0 z-[9999] h-[2px] overflow-hidden" style={{ background: '#fde8c8' }}>
+      <div className="h-full w-2/5" style={{ background: '#E88A1A', animation: 'topbar-slide 1.4s ease-in-out infinite' }} />
+    </div>
+  ) : null;
 import { useAuth } from '../contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -32,13 +40,20 @@ import {
 } from './ui/table';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { toast } from 'sonner';
-import { Search, Users, Shield, Edit, X } from 'lucide-react';
+import { Search, Users, Shield, Edit, X, Loader2 } from 'lucide-react';
 import { getInitials, formatDate } from '../lib/utils';
 
 const UsersPage = () => {
   const { user: currentUser } = useAuth();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalUsers, setTotalUsers] = useState(0);
+  const sentinelRef = useRef(null);
+  const PAGE_SIZE = 30;
   const [searchTerm, setSearchTerm] = useState('');
   const [filterRole, setFilterRole] = useState('');
   const [showEditDialog, setShowEditDialog] = useState(false);
@@ -49,22 +64,64 @@ const UsersPage = () => {
     name: '', email: '', password: '', role: 'teacher', phone: ''
   });
 
-  useEffect(() => {
-    fetchUsers();
-  }, [filterRole]);
+  const fetchUsers = useCallback(async (pg = 1, append = false) => {
+    const cacheKey = `users:${filterRole}:${pg}`;
+    const cached = getCached(cacheKey);
 
-  const fetchUsers = async () => {
+    if (!append) {
+      if (cached) {
+        setUsers(cached.users);
+        setTotalUsers(cached.total);
+        setTotalPages(cached.pages);
+        setLoading(false);
+      }
+      setRefreshing(true);
+    } else {
+      setLoadingMore(true);
+    }
+
     try {
-      const params = {};
+      const params = { page: pg, limit: PAGE_SIZE };
       if (filterRole) params.role = filterRole;
-      const response = await api.get('/users', { params });
-      setUsers(response.data);
+      const res = await api.get('/users', { params });
+      const arr = Array.isArray(res.data) ? res.data : (res.data?.users ?? []);
+      const total = parseInt(res.headers?.['x-total-count'] ?? arr.length);
+      const pages = parseInt(res.headers?.['x-total-pages'] ?? 1);
+      setCached(cacheKey, { users: arr, total, pages });
+      setUsers(prev => append ? [...prev, ...arr] : arr);
+      setTotalUsers(total);
+      setTotalPages(pages);
     } catch (error) {
-      toast.error('Failed to fetch users');
+      if (!cached && !append) toast.error('Failed to fetch users');
     } finally {
       setLoading(false);
+      setRefreshing(false);
+      setLoadingMore(false);
     }
-  };
+  }, [filterRole]);
+
+  useEffect(() => {
+    setPage(1);
+    setUsers([]);
+    fetchUsers(1, false);
+  }, [fetchUsers]);
+
+  // Infinite scroll
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && !loadingMore && !loading) {
+        setPage(prev => {
+          const next = prev + 1;
+          if (next <= totalPages) { fetchUsers(next, true); return next; }
+          return prev;
+        });
+      }
+    }, { rootMargin: '200px' });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loadingMore, loading, totalPages, fetchUsers]);
 
   const handleUpdateRole = async () => {
     if (!selectedUser || !newRole) return;
@@ -73,7 +130,7 @@ const UsersPage = () => {
       await api.put(`/users/${selectedUser.user_id}/role`, { role: newRole });
       toast.success('Role updated successfully');
       setShowEditDialog(false);
-      fetchUsers();
+      setPage(1); setUsers([]); fetchUsers(1, false);
     } catch (error) {
       toast.error('Failed to update role');
     }
@@ -86,7 +143,7 @@ const UsersPage = () => {
       toast.success('User account created successfully');
       setShowCreateDialog(false);
       setCreateData({ name: '', email: '', password: '', role: 'teacher', phone: '' });
-      fetchUsers();
+      setPage(1); setUsers([]); fetchUsers(1, false);
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to create user');
     }
@@ -119,6 +176,7 @@ const UsersPage = () => {
 
   return (
     <div data-testid="users-page">
+      <TopProgressBar active={refreshing} />
       <div className="page-header flex justify-between items-start">
         <div className="page-header-inner">
           <div className="page-header-accent" />
@@ -219,7 +277,7 @@ const UsersPage = () => {
       )}
       <Card>
         <CardContent className="p-0">
-          {loading ? (
+          {loading && filteredUsers.length === 0 ? (
             <div className="flex items-center justify-center h-64">
               <div className="animate-spin rounded-full h-8 w-8 border-2 border-slate-900 border-t-transparent"></div>
             </div>
@@ -275,6 +333,15 @@ const UsersPage = () => {
                 ))}
               </TableBody>
             </Table>
+          )}
+          <div ref={sentinelRef} className="h-4" />
+          {loadingMore && (
+            <div className="flex items-center justify-center py-4 gap-2 text-sm text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading more...
+            </div>
+          )}
+          {!loading && !loadingMore && page >= totalPages && totalUsers > 0 && (
+            <p className="text-center text-xs text-slate-400 py-3">{totalUsers} user{totalUsers !== 1 ? 's' : ''} total</p>
           )}
         </CardContent>
       </Card>

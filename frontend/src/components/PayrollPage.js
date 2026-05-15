@@ -43,6 +43,12 @@ const currentMonth = new Date().getMonth() + 1;
 const AdminPayrollView = ({ canManage = true }) => {
   const [records,      setRecords]      = useState([]);
   const [loading,      setLoading]      = useState(false);
+  const [loadingMore,  setLoadingMore]  = useState(false);
+  const [page,         setPage]         = useState(1);
+  const [totalPages,   setTotalPages]   = useState(1);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const sentinelRef = React.useRef(null);
+  const PAGE_SIZE = 30;
   const [month,        setMonth]        = useState(currentMonth);
   const [year,         setYear]         = useState(currentYear);
   const [generating,   setGenerating]   = useState(false);
@@ -56,19 +62,43 @@ const AdminPayrollView = ({ canManage = true }) => {
 
   const monthYear = `${year}-${String(month).padStart(2, '0')}`;
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (pg = 1, append = false) => {
+    if (append) setLoadingMore(true);
+    else setLoading(true);
     try {
-      const res = await api.get('/payroll', { params: { month_year: monthYear, limit: 200 } });
-      setRecords(res.data.records || res.data || []);
+      const res = await api.get('/payroll', { params: { month_year: monthYear, page: pg, limit: PAGE_SIZE } });
+      const arr = Array.isArray(res.data) ? res.data : (res.data.records || []);
+      const total = parseInt(res.headers?.['x-total-count'] ?? arr.length);
+      const pages = parseInt(res.headers?.['x-total-pages'] ?? 1);
+      setRecords(prev => append ? [...prev, ...arr] : arr);
+      setTotalRecords(total);
+      setTotalPages(pages);
     } catch {
-      setRecords([]);
+      if (!append) setRecords([]);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   }, [monthYear]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setPage(1); setRecords([]); load(1, false); }, [load]);
+
+  // Infinite scroll
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && !loadingMore && !loading) {
+        setPage(prev => {
+          const next = prev + 1;
+          if (next <= totalPages) { load(next, true); return next; }
+          return prev;
+        });
+      }
+    }, { rootMargin: '200px' });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loadingMore, loading, totalPages, load]);
 
   const generate = async () => {
     setGenerating(true);
@@ -302,6 +332,15 @@ const AdminPayrollView = ({ canManage = true }) => {
                 ))}
               </TableBody>
             </Table>
+          )}
+          <div ref={sentinelRef} className="h-4" />
+          {loadingMore && (
+            <div className="flex items-center justify-center py-4 gap-2 text-sm text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading more...
+            </div>
+          )}
+          {!loading && !loadingMore && page >= totalPages && totalRecords > 0 && (
+            <p className="text-center text-xs text-slate-400 py-3">{totalRecords} record{totalRecords !== 1 ? 's' : ''} total</p>
           )}
         </CardContent>
       </Card>

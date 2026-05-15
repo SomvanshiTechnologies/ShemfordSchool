@@ -73,20 +73,38 @@ def _rzp_auth():
 
 async def _rzp_post(path: str, payload: dict) -> dict:
     auth = _rzp_auth()
-    async with httpx.AsyncClient(timeout=30) as http:
-        r = await http.post(f"{RZP_BASE}{path}", json=payload, auth=auth)
-        if r.status_code not in (200, 201):
-            raise HTTPException(status_code=502, detail=f"Razorpay error: {r.text[:300]}")
-        return r.json()
+    try:
+        async with httpx.AsyncClient(timeout=15) as http:
+            r = await http.post(f"{RZP_BASE}{path}", json=payload, auth=auth)
+            if r.status_code not in (200, 201):
+                raise HTTPException(status_code=502, detail=f"Razorpay error: {r.text[:300]}")
+            return r.json()
+    except HTTPException:
+        raise
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+        logger.error("Razorpay connectivity error: %s", exc)
+        raise HTTPException(status_code=503, detail="Cannot reach Razorpay servers. Please check your internet connection and try again.")
+    except Exception as exc:
+        logger.error("Razorpay unexpected error: %s", exc)
+        raise HTTPException(status_code=502, detail="Razorpay request failed. Please try again.")
 
 
 async def _rzp_get(path: str) -> dict:
     auth = _rzp_auth()
-    async with httpx.AsyncClient(timeout=30) as http:
-        r = await http.get(f"{RZP_BASE}{path}", auth=auth)
-        if r.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"Razorpay error: {r.text[:300]}")
-        return r.json()
+    try:
+        async with httpx.AsyncClient(timeout=15) as http:
+            r = await http.get(f"{RZP_BASE}{path}", auth=auth)
+            if r.status_code != 200:
+                raise HTTPException(status_code=502, detail=f"Razorpay error: {r.text[:300]}")
+            return r.json()
+    except HTTPException:
+        raise
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+        logger.error("Razorpay connectivity error: %s", exc)
+        raise HTTPException(status_code=503, detail="Cannot reach Razorpay servers. Please try again.")
+    except Exception as exc:
+        logger.error("Razorpay unexpected error: %s", exc)
+        raise HTTPException(status_code=502, detail="Razorpay request failed. Please try again.")
 
 
 # ── Request/Response schemas ──────────────────────────────────────────────────

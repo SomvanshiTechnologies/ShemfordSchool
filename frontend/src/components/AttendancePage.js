@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../lib/api';
+import { getCached, setCached } from '../lib/pageCache';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -158,18 +159,29 @@ const MarkAttendanceView = () => {
 
   useEffect(() => {
     if (selectedClass && selectedSection && selectedDate) {
-      setLoading(true);
+      const cacheKey = `attendance:${selectedClass}:${selectedSection}:${selectedDate}`;
+      const cached = getCached(cacheKey);
+      if (cached) {
+        setStudents(cached.students);
+        setSessionStatus(cached.sessionStatus);
+        setAttendanceData(cached.attMap);
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
       Promise.all([
         api.get('/students', { params: { class_name: selectedClass, section: selectedSection } }),
         api.get('/attendance', { params: { entity_type: 'student', date: selectedDate, class_name: selectedClass, section: selectedSection } }),
         api.get('/attendance/session-status', { params: { class_name: selectedClass, section: selectedSection, date: selectedDate } }),
       ]).then(([s, a, sess]) => {
-        setStudents(s.data.students ?? s.data ?? []);
-        setSessionStatus(sess.data);
+        const studentList = s.data.students ?? s.data ?? [];
         const attMap = {};
         a.data.forEach(r => { attMap[r.entity_id] = r.status; });
+        setStudents(studentList);
+        setSessionStatus(sess.data);
         setAttendanceData(attMap);
-      }).catch(() => toast.error('Failed to fetch data')).finally(() => setLoading(false));
+        setCached(cacheKey, { students: studentList, sessionStatus: sess.data, attMap });
+      }).catch(() => { if (!cached) toast.error('Failed to fetch data'); }).finally(() => setLoading(false));
     }
   }, [selectedClass, selectedSection, selectedDate]);
 

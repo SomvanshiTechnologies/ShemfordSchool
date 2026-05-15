@@ -272,6 +272,25 @@ def build_admission_fee_breakdown(cfg: dict, is_sibling: bool) -> List[dict]:
     return items
 
 
+def _due_date(year_month: str, due_day: int) -> str:
+    """
+    Compute due date for a fee entry: YYYY-MM-{due_day}.
+    If the due date would be in the past (entry created late), push it to next month so the
+    entry isn't immediately overdue on creation.
+    """
+    yr, mn = year_month.split("-")
+    candidate = f"{yr}-{mn}-{str(due_day).zfill(2)}"
+    today = datetime.now().strftime("%Y-%m-%d")
+    if candidate < today:
+        m, y = int(mn), int(yr)
+        if m == 12:
+            m, y = 1, y + 1
+        else:
+            m += 1
+        candidate = f"{y}-{str(m).zfill(2)}-{str(due_day).zfill(2)}"
+    return candidate
+
+
 async def create_admission_ledger(student: dict, cfg: dict, academic_year: str, admission_month: str):
     """
     Create all ledger entries for a newly admitted student:
@@ -305,8 +324,9 @@ async def create_admission_ledger(student: dict, cfg: dict, academic_year: str, 
         gross = cfg.get(cfg_field, 0)
         if gross <= 0:
             continue
-        # Skip if already exists for this student/class/year
-        if await db.student_ledger.find_one({"student_id": student_id, "fee_component": CFG_FIELD_TO_COMPONENT[cfg_field], "academic_year": academic_year, "class_name": class_name}, {"_id": 1}):
+        # One-time fees (Registration, Admission, Caution Deposit) are charged ONCE per student.
+        # Skip if the student already has this fee in ANY class/year — even if paid in a previous class.
+        if await db.student_ledger.find_one({"student_id": student_id, "fee_component": CFG_FIELD_TO_COMPONENT[cfg_field]}, {"_id": 1}):
             continue
         disc = 0
         disc_reason = None
@@ -1023,6 +1043,10 @@ async def pay_fee(request: Request):
     transaction_id = body.get("transaction_id")
     remarks = body.get("remarks")
     ledger_ids = body.get("ledger_ids")  # optional list of specific entry IDs
+    # Optional back-dated payment date (admin only). Must not be in the future.
+    custom_payment_date = body.get("payment_date")
+    # Split payments: { "cash": 1500, "online": 500 } — sums must equal total
+    split_payments = body.get("split_payments")
 
     # Auth
     if user["role"] == UserRole.PARENT:
@@ -1077,13 +1101,35 @@ async def pay_fee(request: Request):
     pay_dict["receipt_number"] = receipt_number
     pay_dict["created_at"] = pay_dict["created_at"].isoformat()
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    # Resolve payment date (back-date if admin/accountant explicitly set one)
+    paid_date = today_str
+    if custom_payment_date and user["role"] in (UserRole.ADMIN, UserRole.ACCOUNTANT):
+        try:
+            d = datetime.strptime(custom_payment_date, "%Y-%m-%d").date()
+            if d <= datetime.now().date():
+                paid_date = custom_payment_date
+                pay_dict["payment_date"] = custom_payment_date
+        except ValueError:
+            pass
+
+    # Attach split payment breakdown if provided
+    if split_payments and isinstance(split_payments, dict):
+        try:
+            split_total = round(sum(float(v) for v in split_payments.values()), 2)
+            if abs(split_total - total) < 0.01:
+                pay_dict["split_payments"] = {k: float(v) for k, v in split_payments.items() if float(v) > 0}
+            else:
+                raise HTTPException(status_code=400, detail=f"Split payment total ({split_total}) does not match fee total ({total})")
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid split_payments format")
+
     ledger_updates = [
         UpdateOne(
             {"ledger_id": entry["ledger_id"]},
             {"$set": {
                 "status": "paid",
-                "paid_date": today,
+                "paid_date": paid_date,
                 "payment_id": payment.payment_id,
                 "receipt_number": receipt_number,
             }}

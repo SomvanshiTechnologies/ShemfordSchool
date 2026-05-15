@@ -1,5 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../lib/api';
+import { getCached, setCached } from '../lib/pageCache';
+
+const TopProgressBar = ({ active }) =>
+  active ? (
+    <div className="fixed top-0 left-0 right-0 z-[9999] h-[2px] overflow-hidden" style={{ background: '#fde8c8' }}>
+      <div className="h-full w-2/5" style={{ background: '#E88A1A', animation: 'topbar-slide 1.4s ease-in-out infinite' }} />
+    </div>
+  ) : null;
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -46,6 +54,13 @@ const EmployeesPage = () => {
   const [employees, setEmployees] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalEmployees, setTotalEmployees] = useState(0);
+  const sentinelRef = useRef(null);
+  const PAGE_SIZE = 30;
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDept, setFilterDept] = useState('');
   const [filterStatus, setFilterStatus] = useState('true');
@@ -88,23 +103,66 @@ const EmployeesPage = () => {
   });
 
   useEffect(() => {
-    fetchEmployees();
+    setPage(1);
+    setEmployees([]);
+    fetchEmployees(1, false);
     fetchDepartments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterDept, filterStatus]);
 
-  const fetchEmployees = async () => {
+  const fetchEmployees = useCallback(async (pg = 1, append = false) => {
+    const cacheKey = `employees:${filterStatus}:${filterDept}:${pg}`;
+    const cached = getCached(cacheKey);
+
+    if (!append) {
+      if (cached) {
+        setEmployees(cached.employees);
+        setTotalEmployees(cached.total);
+        setTotalPages(cached.pages);
+        setLoading(false);
+      }
+      setRefreshing(true);
+    } else {
+      setLoadingMore(true);
+    }
+
     try {
-      const params = { is_active: filterStatus === 'true' };
+      const params = { is_active: filterStatus === 'true', page: pg, limit: PAGE_SIZE };
       if (filterDept) params.department = filterDept;
-      
-      const response = await api.get('/employees', { params });
-      setEmployees(response.data);
+      const res = await api.get('/employees', { params });
+      const arr = Array.isArray(res.data) ? res.data : (res.data?.employees ?? []);
+      const total = parseInt(res.headers?.['x-total-count'] ?? arr.length);
+      const pages = parseInt(res.headers?.['x-total-pages'] ?? 1);
+      const result = { employees: arr, total, pages };
+      setCached(cacheKey, result);
+      setEmployees(prev => append ? [...prev, ...arr] : arr);
+      setTotalEmployees(total);
+      setTotalPages(pages);
     } catch (error) {
-      toast.error('Failed to fetch employees');
+      if (!cached && !append) toast.error('Failed to fetch employees');
     } finally {
       setLoading(false);
+      setRefreshing(false);
+      setLoadingMore(false);
     }
-  };
+  }, [filterStatus, filterDept]);
+
+  // Infinite scroll
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && !loadingMore && !loading) {
+        setPage(prev => {
+          const next = prev + 1;
+          if (next <= totalPages) { fetchEmployees(next, true); return next; }
+          return prev;
+        });
+      }
+    }, { rootMargin: '200px' });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loadingMore, loading, totalPages, fetchEmployees]);
 
   const fetchDepartments = async () => {
     try {
@@ -142,7 +200,7 @@ const EmployeesPage = () => {
         bank_name: '',
         bank_account_holder: ''
       });
-      fetchEmployees();
+      setPage(1); setEmployees([]); fetchEmployees(1, false);
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to add employee');
     } finally {
@@ -155,7 +213,7 @@ const EmployeesPage = () => {
       await api.put(`/employees/${employeeId}`, { is_active: false });
       toast.success('Employee deactivated');
       setDeactivateTarget(null);
-      fetchEmployees();
+      setPage(1); setEmployees([]); fetchEmployees(1, false);
     } catch (error) {
       toast.error('Failed to deactivate employee');
     }
@@ -193,7 +251,7 @@ const EmployeesPage = () => {
       await api.put(`/employees/${selectedEmployee.employee_id}`, data);
       toast.success('Employee updated successfully');
       setShowEditDialog(false);
-      fetchEmployees();
+      setPage(1); setEmployees([]); fetchEmployees(1, false);
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to update employee');
     } finally {
@@ -208,7 +266,7 @@ const EmployeesPage = () => {
       setLinkedPassword(res.data.temp_password);
       setPasswordCopied(false);
       setShowPasswordDialog(true);
-      fetchEmployees();
+      setPage(1); setEmployees([]); fetchEmployees(1, false);
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to link user account');
     } finally {
@@ -232,6 +290,7 @@ const EmployeesPage = () => {
 
   return (
     <div data-testid="employees-page">
+      <TopProgressBar active={refreshing} />
       <div className="page-header flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
         <div className="page-header-inner">
           <div className="page-header-accent" />
@@ -486,7 +545,7 @@ const EmployeesPage = () => {
       )}
       <Card>
         <CardContent className="p-0">
-          {loading ? (
+          {loading && filteredEmployees.length === 0 ? (
             <div className="flex items-center justify-center h-64">
               <div className="animate-spin rounded-full h-8 w-8 border-2 border-slate-900 border-t-transparent"></div>
             </div>
@@ -570,6 +629,16 @@ const EmployeesPage = () => {
                 ))}
               </TableBody>
             </Table>
+          )}
+          {/* Infinite scroll sentinel */}
+          <div ref={sentinelRef} className="h-4" />
+          {loadingMore && (
+            <div className="flex items-center justify-center py-4 gap-2 text-sm text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading more...
+            </div>
+          )}
+          {!loading && !loadingMore && page >= totalPages && totalEmployees > 0 && (
+            <p className="text-center text-xs text-slate-400 py-3">{totalEmployees} employee{totalEmployees !== 1 ? 's' : ''} total</p>
           )}
         </CardContent>
       </Card>

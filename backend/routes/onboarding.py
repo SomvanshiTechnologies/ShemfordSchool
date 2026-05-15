@@ -499,6 +499,32 @@ async def complete_onboarding(onboarding_id: str, request: Request):
                 {"$set": {"parent_id": existing_parent["user_id"]}}
             )
 
+    # Create student login account with auto-generated password
+    student_account = None
+    student_email = app.get("email") or f"{student_obj.student_id.lower()}@student.shemford.in"
+    existing_student_user = await db.users.find_one({"email": student_email}, {"_id": 0})
+    if not existing_student_user:
+        student_temp_password = secrets.token_urlsafe(8)
+        student_user = UserBase(
+            email=student_email,
+            name=f"{app['first_name']} {app.get('last_name', '')}".strip(),
+            role=UserRole.STUDENT,
+            phone=app.get("phone"),
+        )
+        su_dict = student_user.model_dump()
+        su_dict["password_hash"] = hash_password(student_temp_password)
+        su_dict["created_at"] = su_dict["created_at"].isoformat()
+        await db.users.insert_one(su_dict)
+        await db.students.update_one(
+            {"student_id": student_obj.student_id},
+            {"$set": {"user_id": student_user.user_id, "email": student_email}}
+        )
+        student_account = {
+            "email": student_email,
+            "temp_password": student_temp_password,
+            "user_id": student_user.user_id,
+        }
+
     # Attach student_id to uploaded documents
     await db.student_documents.update_many(
         {"onboarding_id": onboarding_id},
@@ -533,6 +559,7 @@ async def complete_onboarding(onboarding_id: str, request: Request):
         "academic_year": academic_year,
         "ledger_entries_created": ledger_count,
         "parent_account": parent_account,
+        "student_account": student_account,
         "message": f"Student admitted successfully. Admission No: {admission_number}",
     }
 

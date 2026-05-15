@@ -1,5 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import api from '../lib/api';
+import { getCached, setCached } from '../lib/pageCache';
+
+const TopProgressBar = ({ active }) =>
+  active ? (
+    <div className="fixed top-0 left-0 right-0 z-[9999] h-[2px] overflow-hidden" style={{ background: '#fde8c8' }}>
+      <div className="h-full w-2/5" style={{ background: '#E88A1A', animation: 'topbar-slide 1.4s ease-in-out infinite' }} />
+    </div>
+  ) : null;
 import { useAuth } from '../contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -86,15 +94,18 @@ const AnnouncementsPage = () => {
   const [announcements, setAnnouncements] = useState([]);
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [posting, setPosting] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [activeCategory, setActiveCategory] = useState('general');
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [formData, setFormData] = useState({
     title: '',
     content: '',
     target_type: 'all',
     target_value: '',
-    priority: 'normal'
+    priority: 'normal',
+    announcement_type: 'general',
   });
   const voice = useVoiceRecorder();
 
@@ -103,6 +114,13 @@ const AnnouncementsPage = () => {
   }, []);
 
   const fetchData = async () => {
+    const cached = getCached('announcements:all');
+    if (cached) {
+      setAnnouncements(cached.announcements);
+      setClasses(cached.classes);
+      setLoading(false);
+    }
+    setRefreshing(true);
     try {
       const [announcementsRes, classesRes] = await Promise.all([
         api.get('/announcements'),
@@ -110,10 +128,12 @@ const AnnouncementsPage = () => {
       ]);
       setAnnouncements(announcementsRes.data);
       setClasses(classesRes.data);
+      setCached('announcements:all', { announcements: announcementsRes.data, classes: classesRes.data });
     } catch (error) {
-      toast.error('Failed to fetch announcements');
+      if (!cached) toast.error('Failed to fetch announcements');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -141,7 +161,7 @@ const AnnouncementsPage = () => {
       toast.success('Announcement posted');
       setShowAddDialog(false);
       voice.discard();
-      setFormData({ title: '', content: '', target_type: 'all', target_value: '', priority: 'normal' });
+      setFormData({ title: '', content: '', target_type: 'all', target_value: '', priority: 'normal', announcement_type: activeCategory });
       fetchData();
     } catch (error) {
       toast.error('Failed to post announcement');
@@ -180,13 +200,24 @@ const AnnouncementsPage = () => {
     }
   };
 
-  const filteredAnnouncements = announcements.filter(a => 
-    a.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    a.content.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const CATEGORIES = [
+    { key: 'general', label: 'General' },
+    { key: 'homework', label: 'Homework' },
+    { key: 'classwork', label: 'Classwork' },
+  ];
+
+  const filteredAnnouncements = announcements.filter(a => {
+    const cat = a.announcement_type || 'general';
+    const matchCat = cat === activeCategory;
+    const matchSearch = !searchTerm ||
+      a.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      a.content.toLowerCase().includes(searchTerm.toLowerCase());
+    return matchCat && matchSearch;
+  });
 
   return (
     <div data-testid="announcements-page">
+      <TopProgressBar active={refreshing} />
       <div className="page-header flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
         <div className="page-header-inner">
           <div className="page-header-accent" />
@@ -210,6 +241,17 @@ const AnnouncementsPage = () => {
               </DialogHeader>
               <form onSubmit={handleSubmit}>
                 <div className="grid gap-4 py-4">
+                  <div className="space-y-2">
+                    <Label>Category *</Label>
+                    <Select value={formData.announcement_type} onValueChange={v => setFormData({...formData, announcement_type: v})}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="general">General</SelectItem>
+                        <SelectItem value="homework">Homework</SelectItem>
+                        <SelectItem value="classwork">Classwork</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <div className="space-y-2">
                     <Label>Title *</Label>
                     <Input
@@ -299,6 +341,26 @@ const AnnouncementsPage = () => {
         )}
       </div>
 
+      {/* Category Tabs */}
+      <div className="flex gap-1 mb-4 bg-slate-100 p-1 rounded-xl w-fit">
+        {CATEGORIES.map(cat => (
+          <button
+            key={cat.key}
+            onClick={() => { setActiveCategory(cat.key); setFormData(f => ({...f, announcement_type: cat.key})); }}
+            className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+              activeCategory === cat.key
+                ? 'bg-white shadow text-slate-900'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            {cat.label}
+            <span className="ml-1.5 text-[10px] text-slate-400">
+              ({announcements.filter(a => (a.announcement_type || 'general') === cat.key).length})
+            </span>
+          </button>
+        ))}
+      </div>
+
       {/* Search */}
       <Card className="mb-6">
         <CardContent className="p-4">
@@ -321,7 +383,7 @@ const AnnouncementsPage = () => {
       </Card>
 
       {/* Announcements List */}
-      {loading ? (
+      {loading && announcements.length === 0 ? (
         <div className="flex items-center justify-center h-64">
           <div className="animate-spin rounded-full h-8 w-8 border-2 border-slate-900 border-t-transparent"></div>
         </div>

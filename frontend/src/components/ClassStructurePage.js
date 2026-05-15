@@ -1,6 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../lib/api';
+import { getCached, setCached } from '../lib/pageCache';
+
+const TopProgressBar = ({ active }) =>
+  active ? (
+    <div className="fixed top-0 left-0 right-0 z-[9999] h-[2px] overflow-hidden" style={{ background: '#fde8c8' }}>
+      <div className="h-full w-2/5" style={{ background: '#E88A1A', animation: 'topbar-slide 1.4s ease-in-out infinite' }} />
+    </div>
+  ) : null;
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -59,6 +67,7 @@ const ClassStructurePage = () => {
   const isAdmin = user?.role === 'admin';
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [selectedClass, setSelectedClass] = useState(null);
   const [classStudents, setClassStudents] = useState([]);
   const [showAddDialog, setShowAddDialog] = useState(false);
@@ -73,12 +82,18 @@ const ClassStructurePage = () => {
   useEffect(() => { fetchClasses(); fetchTeachers(); }, []);
 
   const fetchClasses = async () => {
-    setLoading(true);
+    const cached = getCached('classes:all');
+    if (cached) {
+      setClasses(cached);
+      setLoading(false);
+    }
+    setRefreshing(true);
     try {
       const res = await api.get('/classes');
       setClasses(res.data);
-    } catch { toast.error('Failed to load classes'); }
-    finally { setLoading(false); }
+      setCached('classes:all', res.data);
+    } catch { if (!cached) toast.error('Failed to load classes'); }
+    finally { setLoading(false); setRefreshing(false); }
   };
 
   const fetchTeachers = async () => {
@@ -177,10 +192,11 @@ const ClassStructurePage = () => {
     </div>
   );
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="animate-spin h-8 w-8 border-4 border-slate-900 border-t-transparent rounded-full" /></div>;
+  if (loading && classes.length === 0) return <div className="flex items-center justify-center h-64"><div className="animate-spin h-8 w-8 border-4 border-slate-900 border-t-transparent rounded-full" /></div>;
 
   return (
     <div data-testid="class-structure-page">
+      <TopProgressBar active={refreshing} />
       <div className="mb-8 pb-6 border-b border-slate-200 flex justify-between items-start">
         <div className="flex items-center gap-3">
           <div>

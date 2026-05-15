@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../lib/api';
+import { getCached, setCached } from '../lib/pageCache';
 import { useAuth } from '../contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -50,13 +51,20 @@ const IssuesPage = () => {
   }, [filterStatus]);
 
   const fetchIssues = async () => {
+    const cacheKey = `issues:${filterStatus || 'all'}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      setIssues(cached);
+      setLoading(false);
+    }
     try {
       const params = {};
       if (filterStatus) params.status = filterStatus;
       const response = await api.get('/issues', { params });
       setIssues(response.data);
+      setCached(cacheKey, response.data);
     } catch (error) {
-      toast.error('Failed to fetch issues');
+      if (!cached) toast.error('Failed to fetch issues');
     } finally {
       setLoading(false);
     }

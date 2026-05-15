@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import api from '../lib/api';
+import { getCached, setCached } from '../lib/pageCache';
 import { useAuth } from '../contexts/AuthContext';
 import { VoiceNotePlayer, VoiceNoteRecorder, useVoiceRecorder } from './VoiceNote';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -65,17 +66,21 @@ const MessagesPage = () => {
   };
 
   const fetchMessages = async () => {
-    setLoading(true);
+    const cacheKey = `messages:${activeTab}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      if (activeTab === 'inbox') setMessages(cached); else setSentMessages(cached);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     try {
-      if (activeTab === 'inbox') {
-        const response = await api.get('/messages', { params: { sent: false } });
-        setMessages(response.data);
-      } else {
-        const response = await api.get('/messages', { params: { sent: true } });
-        setSentMessages(response.data);
-      }
+      const response = await api.get('/messages', { params: { sent: activeTab !== 'inbox' } });
+      if (activeTab === 'inbox') setMessages(response.data);
+      else setSentMessages(response.data);
+      setCached(cacheKey, response.data);
     } catch (error) {
-      toast.error('Failed to fetch messages');
+      if (!cached) toast.error('Failed to fetch messages');
     } finally {
       setLoading(false);
     }

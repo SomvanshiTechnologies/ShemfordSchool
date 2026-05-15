@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../lib/api';
+import { getCached, setCached } from '../lib/pageCache';
 import { currentAcademicYear } from '../lib/academicYear';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -68,6 +69,13 @@ const MarksPage = () => {
   const [marksheetSearch, setMarksheetSearch] = useState('');
 
   useEffect(() => {
+    // SWR: show cached data immediately, then refresh in background
+    const cached = getCached('marks:init');
+    if (cached) {
+      setClasses(cached.classes);
+      setSubjects(cached.subjects);
+      setExams(cached.exams);
+    }
     Promise.all([
       api.get('/classes'),
       api.get('/subjects'),
@@ -76,6 +84,7 @@ const MarksPage = () => {
       setClasses(c.data);
       setSubjects(s.data);
       setExams(e.data);
+      setCached('marks:init', { classes: c.data, subjects: s.data, exams: e.data });
     }).catch(() => {});
   }, []);
 
@@ -91,9 +100,14 @@ const MarksPage = () => {
     setMarksheetData(null);
     setMarksheetStudentId('');
     setMarksheetSearch('');
+    // Use cache if available — gives instant list
+    const cached = getCached('marks:student-list');
+    if (cached) setMarksheetStudents(cached);
     try {
       const res = await api.get('/students');
-      setMarksheetStudents(res.data);
+      const arr = Array.isArray(res.data) ? res.data : (res.data?.students ?? []);
+      setMarksheetStudents(arr);
+      setCached('marks:student-list', arr);
     } catch (e) {}
   };
 
@@ -175,15 +189,24 @@ const MarksPage = () => {
   // ====== MARKS ENTRY ======
   const loadStudentsForMarks = useCallback(async () => {
     if (!selectedExam || !selectedSection) return;
-    setMarksLoading(true);
+    const cacheKey = `marks:${selectedExam.exam_id}:${selectedSection}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      setStudents(cached.students);
+      setExistingMarks(cached.existingMarks);
+      setMarksData(cached.marksData);
+      setMarksLoading(false);
+    } else {
+      setMarksLoading(true);
+    }
     try {
       const [studRes, marksRes] = await Promise.all([
         api.get('/students', { params: { class_name: selectedExam.class_name, section: selectedSection } }),
         api.get('/marks', { params: { exam_id: selectedExam.exam_id, class_name: selectedExam.class_name, section: selectedSection } }),
       ]);
-      setStudents(studRes.data.students ?? studRes.data ?? []);
+      const studArr = studRes.data.students ?? studRes.data ?? [];
+      setStudents(studArr);
       setExistingMarks(marksRes.data);
-
       // Build marks map: { student_id: { subject: marks_obtained } }
       const map = {};
       marksRes.data.forEach(m => {
@@ -191,8 +214,9 @@ const MarksPage = () => {
         map[m.student_id][m.subject] = m.marks_obtained;
       });
       setMarksData(map);
+      setCached(cacheKey, { students: studArr, existingMarks: marksRes.data, marksData: map });
     } catch (error) {
-      toast.error('Failed to load data');
+      if (!cached) toast.error('Failed to load data');
     } finally {
       setMarksLoading(false);
     }
@@ -834,8 +858,15 @@ const MarksPage = () => {
                   <Button variant="outline" className="rounded-xl text-xs" onClick={() => window.print()} data-testid="print-marksheet-btn">
                     <Download className="h-4 w-4 mr-2" strokeWidth={1.5} /> Print
                   </Button>
-                  <Button className="bg-slate-900 text-white hover:bg-slate-800 rounded-xl text-xs" onClick={() => {
-                    window.open(`${process.env.REACT_APP_BACKEND_URL}/api/marks/marksheet/${marksheetStudentId}/pdf?academic_year=${currentAcademicYear()}`, '_blank');
+                  <Button className="bg-slate-900 text-white hover:bg-slate-800 rounded-xl text-xs" onClick={async () => {
+                    try {
+                      const res = await api.get(`/marks/marksheet/${marksheetStudentId}/pdf`, { params: { academic_year: currentAcademicYear() }, responseType: 'blob' });
+                      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+                      const a = document.createElement('a');
+                      a.href = url; a.download = `marksheet-${marksheetStudentId}.pdf`;
+                      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                      URL.revokeObjectURL(url);
+                    } catch { toast.error('Failed to download marksheet'); }
                   }} data-testid="download-marksheet-pdf">
                     <Download className="h-4 w-4 mr-2" strokeWidth={1.5} /> PDF
                   </Button>

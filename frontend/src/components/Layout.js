@@ -237,7 +237,7 @@ const Layout = ({ children }) => {
         )}
 
         {/* ── Main ── */}
-        <main className="p-8">
+        <main className="p-4 sm:p-6 lg:p-8 min-w-0 overflow-x-hidden">
           {isLockedOut ? (
             <div className="flex flex-col items-center justify-center h-64 text-center" data-testid="locked-content">
               <div className="h-20 w-20 rounded-3xl bg-orange-50 flex items-center justify-center mb-5">

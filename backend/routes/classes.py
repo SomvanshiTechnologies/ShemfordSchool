@@ -19,6 +19,17 @@ def _default_sections(capacity: int = 45) -> list:
     ]
 
 
+SENIOR_STREAMS = ["Science", "Humanities"]
+
+
+def _senior_sections(capacity: int = 45) -> list:
+    """Sections for Class 11 and 12 use stream names instead of colours."""
+    return [
+        {"section_name": s, "capacity": capacity, "class_teacher_id": None, "class_teacher_name": None}
+        for s in SENIOR_STREAMS
+    ]
+
+
 def _build_shemford_defaults() -> list:
     """
     Return the full default class list for Shemford Futuristic School.
@@ -39,9 +50,9 @@ def _build_shemford_defaults() -> list:
             "name": cls_name,
             "display_name": cls_name if cls_name in ("SF. SR.", "LKG", "UKG") else f"Class {cls_name}",
             "sort_order": order,
-            "sections": _default_sections(45),
+            "sections": _senior_sections(45) if is_senior else _default_sections(45),
             "has_streams": is_senior,
-            "streams": ["science", "humanities"] if is_senior else [],
+            "streams": ["Science", "Humanities"] if is_senior else [],
             "annual_fee": fee_map.get(cls_name, 50000),
         }
         defaults.append(entry)
