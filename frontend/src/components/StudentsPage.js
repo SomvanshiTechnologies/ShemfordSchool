@@ -155,7 +155,8 @@ const StudentsPage = () => {
       if (filterStatus) params.status = filterStatus;
       if (search.trim()) params.search = search.trim();
       const { data } = await api.get('/students', { params });
-      const result = { students: data.students ?? data, total: data.total ?? data.length, pages: data.pages ?? 1 };
+      const arr = Array.isArray(data) ? data : (Array.isArray(data?.students) ? data.students : []);
+      const result = { students: arr, total: data?.total ?? arr.length, pages: data?.pages ?? 1 };
       setCached(cacheKey, result);
       setStudents(result.students);
       setTotalStudents(result.total);
@@ -178,7 +179,7 @@ const StudentsPage = () => {
   const fetchClasses = async () => {
     try {
       const response = await api.get('/classes');
-      setClasses(response.data);
+      setClasses(Array.isArray(response.data) ? response.data : []);
     } catch {}
   };
 
@@ -525,7 +526,7 @@ const StudentsPage = () => {
   };
 
   // Server handles filtering/search — students is already the current page
-  const filteredStudents = students;
+  const filteredStudents = Array.isArray(students) ? students : [];
 
   const getStatusBadge = (status) => {
     const map = {
