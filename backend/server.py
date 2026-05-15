@@ -158,6 +158,7 @@ app.add_middleware(
     allow_origins=_cors_origins,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-Request-ID"],
+    expose_headers=["X-Total-Count", "X-Total-Pages", "X-Page", "X-Request-ID"],
 )
 
 

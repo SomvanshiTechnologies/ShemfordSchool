@@ -159,9 +159,11 @@ const StudentsPage = () => {
       if (filterSection) params.section = filterSection;
       if (filterStatus) params.status = filterStatus;
       if (search.trim()) params.search = search.trim();
-      const { data } = await api.get('/students', { params });
-      const arr = Array.isArray(data) ? data : (Array.isArray(data?.students) ? data.students : []);
-      const result = { students: arr, total: data?.total ?? arr.length, pages: data?.pages ?? 1 };
+      const res = await api.get('/students', { params });
+      const arr = Array.isArray(res.data) ? res.data : (Array.isArray(res.data?.students) ? res.data.students : []);
+      const total = parseInt(res.headers?.['x-total-count'] ?? res.data?.total ?? arr.length);
+      const pages = parseInt(res.headers?.['x-total-pages'] ?? res.data?.pages ?? 1);
+      const result = { students: arr, total, pages };
       setCached(cacheKey, result);
       setStudents(prev => append ? [...prev, ...result.students] : result.students);
       setTotalStudents(result.total);

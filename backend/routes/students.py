@@ -5,7 +5,7 @@ All student records must flow through the onboarding process for proper fee ledg
 Direct student creation (this file) is for admin convenience only — it will also
 attempt to create fee ledger entries if a fee config exists.
 """
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Request, Response, UploadFile, File, Form
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 import asyncio
@@ -182,6 +182,7 @@ async def create_student(student: StudentCreate, request: Request):
 @router.get("/students")
 async def get_students(
     request: Request,
+    response: Response,
     class_name: Optional[str] = None,
     section: Optional[str] = None,
     fee_status: Optional[str] = None,
@@ -248,12 +249,11 @@ async def get_students(
             .to_list(limit),
     )
 
-    return {
-        "students": students,
-        "total": total,
-        "page": page,
-        "pages": max(1, -(-total // limit)),  # ceiling division
-    }
+    pages = max(1, -(-total // limit))
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Total-Pages"] = str(pages)
+    response.headers["X-Page"] = str(page)
+    return students
 
 
 @router.get("/students/{student_id}")
