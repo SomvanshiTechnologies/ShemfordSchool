@@ -80,13 +80,10 @@ async def create_student(student: StudentCreate, request: Request):
     user = await require_roles(UserRole.ADMIN)(request)
 
     # ── Required field validation ───────────────────────────────────────────
+    # Parent / guardian details are intentionally optional — they can be filled in later.
     errors = {}
     if not student.date_of_birth:
         errors["date_of_birth"] = "Date of Birth is required"
-    if not student.parent_name:
-        errors["parent_name"] = "Father / Guardian Name is required"
-    if not student.parent_phone:
-        errors["parent_phone"] = "Contact Number is required"
     if errors:
         raise HTTPException(status_code=422, detail={"validation_errors": errors})
 
@@ -451,19 +448,27 @@ async def reset_student_password(student_id: str, request: Request):
         await db.users.insert_one(u_dict)
         await db.students.update_one(
             {"student_id": student_id},
-            {"$set": {"user_id": student_user.user_id, "email": email}}
+            {"$set": {
+                "user_id": student_user.user_id,
+                "email": email,
+                "temp_password": new_password,
+            }}
         )
         return {"message": "Student account created and password set", "password": new_password, "email": email}
 
-    # Store ONLY the hash — never store plaintext
+    # Hash for auth; also persist plaintext on student record so admin can re-view/share.
     await db.users.update_one(
         {"user_id": user_account["user_id"]},
         {"$set": {"password_hash": hash_password(new_password)}}
     )
+    await db.students.update_one(
+        {"student_id": student_id},
+        {"$set": {"temp_password": new_password}}
+    )
 
     return {
         "message": "Password reset successfully",
-        "password": new_password,   # returned once to admin; never stored
+        "password": new_password,
         "email": student.get("email")
     }
 
@@ -471,22 +476,17 @@ async def reset_student_password(student_id: str, request: Request):
 @router.get("/students/{student_id}/password")
 async def get_student_password_hint(student_id: str, request: Request):
     """
-    Returns the last generated password (only if it was explicitly set by admin
-    and stored temporarily). Production note: passwords should be communicated
-    via email/SMS rather than retrieved via API.
+    Returns the auto-generated / last-reset password stored on the student record.
+    Admin-only. Empty if never generated or wiped after a self-service change.
     """
     await require_roles(UserRole.ADMIN)(request)
     student = await db.students.find_one({"student_id": student_id}, {"_id": 0})
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-    user_account = await db.users.find_one({"email": student.get("email")}, {"_id": 0})
-    if not user_account:
-        raise HTTPException(status_code=404, detail="No login account found")
-    # We no longer store plaintext — return a hint to reset instead
     return {
-        "message": "Plaintext passwords are not stored. Use reset-password to set a new one.",
+        "password": student.get("temp_password") or None,
         "email": student.get("email"),
-        "has_account": True
+        "has_account": bool(student.get("user_id") or student.get("email")),
     }
 
 
@@ -499,11 +499,8 @@ async def get_parent_password_hint(student_id: str, request: Request):
     parent_email = student.get("parent_email")
     if not parent_email:
         raise HTTPException(status_code=404, detail="No parent email on record")
-    user_account = await db.users.find_one({"email": parent_email}, {"_id": 0})
-    if not user_account:
-        raise HTTPException(status_code=404, detail="No parent login account found")
     return {
-        "message": "Plaintext passwords are not stored. Use reset-password to set a new one.",
+        "password": student.get("parent_temp_password") or None,
         "email": parent_email,
         "has_account": True,
         "parent_name": student.get("parent_name", "")

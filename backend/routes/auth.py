@@ -518,6 +518,24 @@ async def update_user(user_id: str, request: Request):
         raise HTTPException(status_code=400, detail="No valid updatable fields provided.")
 
     await db.users.update_one({"user_id": user_id}, {"$set": allowed_body})
+
+    # Cascade is_active to the linked student / employee record so the two
+    # sides stay in sync. Without this, the admin Users page can deactivate a
+    # user while the Students/Employees row stays active (SFS2026/0002 bug).
+    if "is_active" in allowed_body:
+        target = await db.users.find_one({"user_id": user_id}, {"_id": 0, "role": 1, "email": 1})
+        role = (target or {}).get("role")
+        if role == UserRole.STUDENT:
+            await db.students.update_one(
+                {"$or": [{"user_id": user_id}, {"email": target.get("email")}]},
+                {"$set": {"is_active": allowed_body["is_active"]}}
+            )
+        elif role in (UserRole.TEACHER, UserRole.ACCOUNTANT):
+            await db.employees.update_one(
+                {"$or": [{"user_id": user_id}, {"email": target.get("email")}]},
+                {"$set": {"is_active": allowed_body["is_active"]}}
+            )
+
     await create_audit_log("user", user_id, "update", allowed_body, current_user)
 
     updated = await db.users.find_one({"user_id": user_id}, {"_id": 0, "password_hash": 0})

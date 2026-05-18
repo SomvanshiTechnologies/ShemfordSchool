@@ -194,6 +194,8 @@ class EmployeeBase(BaseModel):
 
 
 class EmployeeCreate(BaseModel):
+    # Optional custom ID — admin may supply one, else EmployeeBase auto-generates
+    employee_id: Optional[str] = None
     first_name: str
     last_name: str
     email: EmailStr
@@ -309,7 +311,16 @@ class StudentDocument(BaseModel):
 
 
 class UpgradationRecord(BaseModel):
-    """Tracks a student's class promotion / upgradation."""
+    """
+    Tracks a student's class promotion / upgradation request.
+
+    Workflow:
+      1. Request is created with status="pending_approval" — student is NOT moved yet.
+      2. Admin reviews under "Pending Approvals" and either:
+         - approves → student.class/section/stream updated, fee ledger entries created,
+           status="approved"
+         - rejects → status="rejected", student record untouched.
+    """
     model_config = ConfigDict(extra="ignore")
     upgradation_id: str = Field(default_factory=lambda: f"upg_{uuid.uuid4().hex[:10]}")
     student_id: str
@@ -323,7 +334,13 @@ class UpgradationRecord(BaseModel):
     upgradation_fee: float = 0
     upgradation_fee_ledger_id: Optional[str] = None
     upgradation_fee_paid: bool = False
-    performed_by: str
+    # Approval workflow
+    status: str = "pending_approval"   # pending_approval | approved | rejected
+    requested_by: Optional[str] = None
+    approved_by: Optional[str] = None
+    approved_at: Optional[str] = None
+    rejection_reason: Optional[str] = None
+    performed_by: str   # who initiated the request (kept for back-compat)
     notes: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -478,7 +495,9 @@ class Announcement(BaseModel):
     content: str
     target_type: str
     target_value: Optional[str] = None
+    target_audiences: Optional[List[str]] = None  # subset of ["student","parent","teacher"]
     priority: str = "normal"
+    announcement_type: str = "general"  # general | homework | classwork
     created_by: str
     is_active: bool = True
     voice_note_id: Optional[str] = None
@@ -690,6 +709,7 @@ class OnboardingApplication(BaseModel):
     parent_email: Optional[EmailStr] = None
     mother_name: Optional[str] = None
     mother_phone: Optional[str] = None
+    mother_email: Optional[EmailStr] = None
     class_name: Optional[str] = None
     section: Optional[str] = None
     stream: Optional[str] = None  # for class 11/12

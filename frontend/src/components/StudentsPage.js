@@ -123,7 +123,7 @@ const StudentsPage = () => {
     first_name: '', last_name: '', email: '', phone: '',
     date_of_birth: '', gender: 'male', address: '',
     parent_name: '', parent_phone: '', parent_email: '',
-    mother_name: '', mother_phone: '',
+    mother_name: '', mother_phone: '', mother_email: '',
     is_sibling: false, sibling_student_id: '',
   });
   const [onbClassData, setOnbClassData] = useState({ class_name: '', section: '', stream: '' });
@@ -216,7 +216,7 @@ const StudentsPage = () => {
       first_name: '', last_name: '', email: '', phone: '',
       date_of_birth: '', gender: 'male', address: '',
       parent_name: '', parent_phone: '', parent_email: '',
-      mother_name: '', mother_phone: '',
+      mother_name: '', mother_phone: '', mother_email: '',
       is_sibling: false, sibling_student_id: '',
     });
     setOnbClassData({ class_name: '', section: '', stream: '' });
@@ -238,10 +238,7 @@ const StudentsPage = () => {
     if (!onbData.last_name?.trim()) errors.last_name = 'Last Name is required';
     if (!onbData.gender) errors.gender = 'Gender is required';
     if (!onbData.date_of_birth) errors.date_of_birth = 'Date of Birth is required';
-    if (!onbData.parent_name?.trim()) errors.parent_name = 'Father / Guardian Name is required';
-    if (!onbData.parent_phone?.trim()) errors.parent_phone = 'Contact Number is required';
-    if (!onbData.mother_name?.trim()) errors.mother_name = 'Mother Name is required';
-    if (!onbData.mother_phone?.trim()) errors.mother_phone = 'Mother Contact Number is required';
+    // Parent / guardian details are optional — admins can fill them in later
     setOnbErrors(errors);
     if (Object.keys(errors).length > 0) {
       toast.error('Please fill in all required fields');
@@ -920,15 +917,7 @@ const StudentsPage = () => {
               <TableBody>
                 {filteredStudents.map((student) => (
                   <TableRow key={student.student_id} data-testid={`student-row-${student.student_id}`} className={!student.is_active ? 'opacity-60 bg-slate-50' : ''}>
-                    <TableCell className="font-mono text-sm">
-                      <button
-                        className="hover:text-orange-600 transition-colors cursor-copy"
-                        title="Click to copy"
-                        onClick={() => { navigator.clipboard.writeText(student.admission_number || ''); toast.success('Admission number copied'); }}
-                      >
-                        {student.admission_number}
-                      </button>
-                    </TableCell>
+                    <TableCell className="font-mono text-sm">{student.admission_number}</TableCell>
                     <TableCell>
                       <p className="font-medium text-foreground">{student.first_name} {student.last_name}</p>
                       <p className="text-sm text-muted-foreground">{student.email || ''}</p>
@@ -942,7 +931,7 @@ const StudentsPage = () => {
                         <div className="text-sm leading-tight space-y-1">
                           {(student.father_name || student.parent_name) && (
                             <div>
-                              <p className="text-foreground">{student.father_name || student.parent_name}</p>
+                              <p className="font-semibold text-foreground">{student.father_name || student.parent_name}</p>
                               {(student.father_phone || student.parent_phone) && (
                                 <p className="text-xs text-muted-foreground">{student.father_phone || student.parent_phone}</p>
                               )}
@@ -950,7 +939,7 @@ const StudentsPage = () => {
                           )}
                           {student.mother_name && (
                             <div>
-                              <p className="text-slate-500">{student.mother_name}</p>
+                              <p className="font-semibold text-foreground">{student.mother_name}</p>
                               {student.mother_phone && (
                                 <p className="text-xs text-muted-foreground">{student.mother_phone}</p>
                               )}
@@ -1111,13 +1100,13 @@ const StudentsPage = () => {
                 <h4 className="font-medium mb-3 text-foreground">Parent / Guardian Details</h4>
                 <div className="grid gap-4">
                   <div className="space-y-1">
-                    <Label>Father / Guardian Name <span className="text-red-500">*</span></Label>
+                    <Label>Father / Guardian Name</Label>
                     <Input value={onbData.parent_name} onChange={(e) => { setOnbData({...onbData, parent_name: e.target.value}); setOnbErrors(p => ({...p, parent_name: ''})); }} className={onbErrors.parent_name ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-parent-name" />
                     {onbErrors.parent_name && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.parent_name}</p>}
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1">
-                      <Label>Contact Number <span className="text-red-500">*</span></Label>
+                      <Label>Contact Number</Label>
                       <Input value={onbData.parent_phone} onChange={(e) => { setOnbData({...onbData, parent_phone: e.target.value}); setOnbErrors(p => ({...p, parent_phone: ''})); }} className={onbErrors.parent_phone ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-parent-phone" />
                       {onbErrors.parent_phone && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.parent_phone}</p>}
                     </div>
@@ -1129,14 +1118,23 @@ const StudentsPage = () => {
                 <h4 className="font-medium mb-3 text-foreground">Mother Details</h4>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <Label>Mother Name <span className="text-red-500">*</span></Label>
+                    <Label>Mother Name</Label>
                     <Input value={onbData.mother_name} onChange={(e) => { setOnbData({...onbData, mother_name: e.target.value}); setOnbErrors(p => ({...p, mother_name: ''})); }} className={onbErrors.mother_name ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-mother-name" />
                     {onbErrors.mother_name && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.mother_name}</p>}
                   </div>
                   <div className="space-y-1">
-                    <Label>Mother Contact Number <span className="text-red-500">*</span></Label>
+                    <Label>Mother Contact Number</Label>
                     <Input value={onbData.mother_phone} onChange={(e) => { setOnbData({...onbData, mother_phone: e.target.value}); setOnbErrors(p => ({...p, mother_phone: ''})); }} className={onbErrors.mother_phone ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-mother-phone" />
                     {onbErrors.mother_phone && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.mother_phone}</p>}
+                  </div>
+                  <div className="space-y-1 col-span-2">
+                    <Label>Mother Email</Label>
+                    <Input
+                      type="email"
+                      value={onbData.mother_email}
+                      onChange={(e) => setOnbData({ ...onbData, mother_email: e.target.value })}
+                      data-testid="onb-mother-email"
+                    />
                   </div>
                 </div>
               </div>
@@ -1554,7 +1552,18 @@ const StudentsPage = () => {
                 <div className="h-16 w-16 rounded-full bg-slate-100 flex items-center justify-center"><GraduationCap className="h-8 w-8 text-slate-500" /></div>
                 <div>
                   <h3 className="text-xl font-semibold text-foreground">{selectedStudent.first_name} {selectedStudent.last_name}</h3>
-                  <p className="text-muted-foreground">Admission No: {selectedStudent.admission_number}</p>
+                  <p className="text-muted-foreground flex items-center gap-2">
+                    <span>Admission No: <span className="font-mono font-semibold text-foreground">{selectedStudent.admission_number}</span></span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      title="Copy admission number"
+                      onClick={() => { navigator.clipboard.writeText(selectedStudent.admission_number || ''); toast.success('Admission number copied'); }}
+                    >
+                      <Copy className="h-3 w-3" />
+                    </Button>
+                  </p>
                 </div>
                 {getStatusBadge(selectedStudent.fee_status)}
               </div>

@@ -56,7 +56,18 @@ async def create_employee(employee: EmployeeCreate, request: Request):
     if employee.monthly_salary <= 0 and (not employee.salary or employee.salary <= 0):
         raise HTTPException(status_code=400, detail="monthly_salary must be greater than 0.")
 
-    employee_obj = EmployeeBase(**employee.model_dump())
+    # Honor admin-supplied employee_id; otherwise EmployeeBase auto-generates one.
+    create_payload = employee.model_dump()
+    custom_id = (create_payload.get("employee_id") or "").strip()
+    if custom_id:
+        existing_with_id = await db.employees.find_one({"employee_id": custom_id}, {"_id": 0, "employee_id": 1})
+        if existing_with_id:
+            raise HTTPException(status_code=409, detail=f"Employee ID '{custom_id}' is already in use.")
+        create_payload["employee_id"] = custom_id
+    else:
+        create_payload.pop("employee_id", None)  # let the model factory fire
+
+    employee_obj = EmployeeBase(**create_payload)
     employee_dict = employee_obj.model_dump()
     employee_dict["created_at"] = employee_dict["created_at"].isoformat()
 
@@ -140,6 +151,14 @@ async def get_employees(
     return [decrypt_bank_fields(e) for e in employees]
 
 
+@router.get("/employees/departments")
+async def list_employee_departments(request: Request):
+    """List distinct active departments. Used by the announcement composer to scope announcements."""
+    await require_roles(UserRole.ADMIN, UserRole.TEACHER, UserRole.ACCOUNTANT)(request)
+    depts = await db.employees.distinct("department", {"is_active": True})
+    return sorted([d for d in depts if d])
+
+
 @router.get("/employees/me")
 async def get_my_employee_record(request: Request):
     """Any logged-in user can fetch their own employee record (used by teachers for payroll)."""
@@ -205,6 +224,22 @@ async def update_employee(employee_id: str, request: Request):
     if not old_employee:
         raise HTTPException(status_code=404, detail="Employee not found")
 
+    # Allow admin to rename the Employee ID — validate uniqueness first.
+    # If the new id matches the current one, just drop the field so we don't
+    # trigger the no-op rename branch below.
+    new_employee_id = (body.get("employee_id") or "").strip() or None
+    if new_employee_id and new_employee_id != employee_id:
+        clash = await db.employees.find_one(
+            {"employee_id": new_employee_id}, {"_id": 0, "employee_id": 1}
+        )
+        if clash:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Employee ID '{new_employee_id}' is already in use."
+            )
+    elif "employee_id" in body:
+        body.pop("employee_id", None)
+
     # STRICT: Cannot delete employees, only deactivate
     if "is_active" in body and not body["is_active"]:
         body["deactivated_at"] = datetime.now(timezone.utc).isoformat()
@@ -238,10 +273,13 @@ async def update_employee(employee_id: str, request: Request):
         encrypt_bank_fields(body)
 
     await db.employees.update_one({"employee_id": employee_id}, {"$set": body})
-    updated = await db.employees.find_one({"employee_id": employee_id}, {"_id": 0})
+
+    # If the employee_id was renamed, look up by the new id; otherwise the original.
+    lookup_id = new_employee_id if new_employee_id and new_employee_id != employee_id else employee_id
+    updated = await db.employees.find_one({"employee_id": lookup_id}, {"_id": 0})
 
     if changes:
-        await create_audit_log("employee", employee_id, "update", changes, user)
+        await create_audit_log("employee", lookup_id, "update", changes, user)
 
     return decrypt_bank_fields(updated)
 

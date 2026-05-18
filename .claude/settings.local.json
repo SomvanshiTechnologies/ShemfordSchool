@@ -157,7 +157,8 @@
       "Bash(venv/bin/python -u seed_data.py)",
       "Bash(venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000 --reload)",
       "Bash(git pull *)",
-      "Bash(git stash *)"
+      "Bash(git stash *)",
+      "Bash(awk 'NR>=755 && NR<=810' \"c:\\\\Users\\\\psbho\\\\ShemfordSchool\\\\frontend\\\\src\\\\components\\\\MarksPage.js\")"
     ]
   }
 }

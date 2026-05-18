@@ -1,6 +1,7 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Mic, MicOff, Play, Pause, Trash2 } from 'lucide-react';
 import { Button } from './ui/button';
+import api from '../lib/api';
 
 // ─── Custom audio player ──────────────────────────────────────────────────────
 export const VoiceNotePlayer = ({ url }) => {
@@ -9,6 +10,36 @@ export const VoiceNotePlayer = ({ url }) => {
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
+  const [blobUrl, setBlobUrl] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+
+  // For server URLs (e.g. /api/media/voice-notes/<id>) the <audio> element
+  // can't carry the JWT, so the request 401s. Fetch via the authenticated api
+  // client and play from an object URL instead. Blob/data URLs are used as-is.
+  useEffect(() => {
+    if (!url) { setBlobUrl(null); return; }
+    if (url.startsWith('blob:') || url.startsWith('data:')) {
+      setBlobUrl(url);
+      return;
+    }
+    // strip the /api prefix so axios baseURL (already /api) doesn't double it
+    const rel = url.replace(/^\/?api\//, '/');
+    let revoke = null;
+    let cancelled = false;
+    setLoadError(false);
+    api.get(rel, { responseType: 'blob' })
+      .then((res) => {
+        if (cancelled) return;
+        const objectUrl = URL.createObjectURL(res.data);
+        revoke = objectUrl;
+        setBlobUrl(objectUrl);
+      })
+      .catch(() => { if (!cancelled) setLoadError(true); });
+    return () => {
+      cancelled = true;
+      if (revoke) URL.revokeObjectURL(revoke);
+    };
+  }, [url]);
 
   const fmtTime = (s) => {
     const m = Math.floor(s / 60);
@@ -16,27 +47,44 @@ export const VoiceNotePlayer = ({ url }) => {
     return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
-  const toggle = () => {
+  const toggle = (e) => {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
     const a = audioRef.current;
-    if (!a) return;
-    if (playing) { a.pause(); } else { a.play(); }
-    setPlaying(!playing);
+    if (!a || !blobUrl) return;
+    if (playing) { a.pause(); setPlaying(false); }
+    else {
+      const p = a.play();
+      if (p && typeof p.catch === 'function') p.catch(() => setPlaying(false));
+      setPlaying(true);
+    }
   };
+
+  if (!url) return null;
 
   return (
     <div className="flex items-center gap-2 bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2 mt-2 max-w-xs">
-      <audio
-        ref={audioRef}
-        src={url}
-        onLoadedMetadata={e => setDuration(e.target.duration || 0)}
-        onTimeUpdate={e => {
-          const a = e.target;
-          setCurrentTime(a.currentTime);
-          setProgress(a.duration ? (a.currentTime / a.duration) * 100 : 0);
-        }}
-        onEnded={() => { setPlaying(false); setProgress(0); setCurrentTime(0); }}
-      />
-      <button onClick={toggle} className="text-indigo-600 hover:text-indigo-800 flex-shrink-0">
+      {blobUrl && (
+        <audio
+          ref={audioRef}
+          src={blobUrl}
+          preload="metadata"
+          onLoadedMetadata={e => setDuration(e.target.duration || 0)}
+          onTimeUpdate={e => {
+            const a = e.target;
+            setCurrentTime(a.currentTime);
+            setProgress(a.duration ? (a.currentTime / a.duration) * 100 : 0);
+          }}
+          onEnded={() => { setPlaying(false); setProgress(0); setCurrentTime(0); }}
+          onError={() => setPlaying(false)}
+        />
+      )}
+      {loadError && (
+        <span className="text-xs text-red-600">Could not load audio</span>
+      )}
+      {!blobUrl && !loadError && (
+        <span className="text-xs text-indigo-500">Loading…</span>
+      )}
+      <button type="button" onClick={toggle} className="text-indigo-600 hover:text-indigo-800 flex-shrink-0">
         {playing ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
       </button>
       {/* Static waveform placeholder bars */}
@@ -58,6 +106,7 @@ export const VoiceNotePlayer = ({ url }) => {
             setProgress(Number(e.target.value));
           }
         }}
+        onClick={e => e.stopPropagation()}
         className="flex-1 h-1 accent-indigo-600 cursor-pointer"
       />
       <span className="text-xs text-indigo-600 font-mono flex-shrink-0">

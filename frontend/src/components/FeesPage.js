@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { RazorpayCheckout } from './RazorpayCheckout';
+import FeesReports from './FeesReports';
 
 const FEE_COMPONENTS = [
   { key: 'registration_fee', label: 'Registration Fee', type: 'one_time', tip: 'One-time fee at time of inquiry/registration' },
@@ -68,6 +69,23 @@ const ACADEMIC_YEARS = [CURRENT_YEAR,
 // ─── Small helpers ────────────────────────────────────────────────────────────
 
 const fmt = (n) => n != null ? `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 0 })}` : '—';
+
+// Date helpers: backend uses YYYY-MM-DD, UI collects/displays DD-MM-YYYY
+const isoToDDMMYYYY = (iso) => {
+  if (!iso) return '';
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : '';
+};
+const ddmmyyyyToIso = (str) => {
+  if (!str) return '';
+  const m = String(str).trim().match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (!m) return '';
+  const [, dd, mm, yyyy] = m;
+  const d = new Date(`${yyyy}-${mm}-${dd}T00:00:00`);
+  if (Number.isNaN(d.getTime()) || d.getDate() !== +dd || d.getMonth() + 1 !== +mm) return '';
+  return `${yyyy}-${mm}-${dd}`;
+};
+const todayDDMMYYYY = () => isoToDDMMYYYY(new Date().toISOString().slice(0, 10));
 
 const StatusBadge = ({ status }) => (
   <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium capitalize ${STATUS_COLORS[status] || 'bg-gray-50 text-gray-600 border border-gray-200'}`}>
@@ -117,7 +135,7 @@ const FeesPage = () => {
   // Payment dialog
   const [showPayDialog, setShowPayDialog] = useState(false);
   const [payLedgerIds, setPayLedgerIds] = useState([]);
-  const [payForm, setPayForm] = useState({ method: 'cash', transaction_id: '', remarks: '', payment_date: new Date().toISOString().slice(0, 10), split_cash: '', split_online: '' });
+  const [payForm, setPayForm] = useState({ method: 'cash', transaction_id: '', remarks: '', payment_date: todayDDMMYYYY(), split_cash: '', split_online: '' });
   const [processingPayment, setProcessingPayment] = useState(false);
 
   // Admission fee payment dialog
@@ -202,7 +220,9 @@ const FeesPage = () => {
   const fetchParentData = useCallback(async () => {
     try {
       const res = await api.get('/students');
-      const list = Array.isArray(res.data) ? res.data : [];
+      // For role=student the backend returns {students: [...], total, page, pages};
+      // for role=parent it returns a flat array. Handle both shapes.
+      const list = res.data?.students ?? (Array.isArray(res.data) ? res.data : []);
       setMyChildren(list);
       // Only set default child once — use functional update to avoid stale closure
       setSelectedStudentId(prev => prev || list[0]?.student_id || '');
@@ -298,6 +318,15 @@ const FeesPage = () => {
 
   const paySelected = async () => {
     if (!payLedgerIds.length) { toast.error('Select at least one entry to pay'); return; }
+    const isoPaymentDate = payForm.payment_date ? ddmmyyyyToIso(payForm.payment_date) : '';
+    if (payForm.payment_date && !isoPaymentDate) {
+      toast.error('Payment date must be in DD-MM-YYYY format');
+      return;
+    }
+    if (isoPaymentDate && isoPaymentDate > new Date().toISOString().slice(0, 10)) {
+      toast.error('Payment date cannot be in the future');
+      return;
+    }
     setProcessingPayment(true);
     try {
       const payload = {
@@ -306,7 +335,7 @@ const FeesPage = () => {
         payment_method: payForm.method,
         transaction_id: payForm.transaction_id || undefined,
         remarks: payForm.remarks || undefined,
-        payment_date: payForm.payment_date || undefined,
+        payment_date: isoPaymentDate || undefined,
       };
       if (payForm.method === 'split') {
         const cash = parseFloat(payForm.split_cash) || 0;
@@ -623,6 +652,9 @@ const FeesPage = () => {
               </TabsTrigger>
               <TabsTrigger value="due" className="rounded-xl text-xs uppercase tracking-wider font-semibold">
                 Due Chart
+              </TabsTrigger>
+              <TabsTrigger value="reports" className="rounded-xl text-xs uppercase tracking-wider font-semibold">
+                Reports
               </TabsTrigger>
             </>
           )}
@@ -945,6 +977,13 @@ const FeesPage = () => {
             </div>
           </div>
         </TabsContent>
+
+        {/* ════════════ REPORTS (Collection / Due) ════════════ */}
+        {isAdmin && (
+          <TabsContent value="reports">
+            <FeesReports />
+          </TabsContent>
+        )}
 
 
         {/* ════════════ MY FEES / STUDENT VIEW ════════════ */}
@@ -1280,13 +1319,22 @@ const FeesPage = () => {
             <div>
               <Label className="text-xs font-bold uppercase tracking-wider">Payment Date</Label>
               <Input
-                type="date"
+                type="text"
+                inputMode="numeric"
+                placeholder="DD-MM-YYYY"
+                pattern="\d{2}-\d{2}-\d{4}"
+                maxLength={10}
                 className="mt-1 h-9 text-sm"
                 value={payForm.payment_date}
-                max={new Date().toISOString().slice(0, 10)}
-                onChange={e => setPayForm(f => ({ ...f, payment_date: e.target.value }))}
+                onChange={e => {
+                  let v = e.target.value.replace(/[^\d-]/g, '').slice(0, 10);
+                  // Auto-insert dashes after DD and MM
+                  if (v.length > 2 && v[2] !== '-') v = v.slice(0, 2) + '-' + v.slice(2);
+                  if (v.length > 5 && v[5] !== '-') v = v.slice(0, 5) + '-' + v.slice(5);
+                  setPayForm(f => ({ ...f, payment_date: v }));
+                }}
               />
-              <p className="text-[10px] text-slate-400 mt-1">For back-dated payments (e.g. fees collected earlier)</p>
+              <p className="text-[10px] text-slate-400 mt-1">Format: DD-MM-YYYY. For back-dated payments (e.g. fees collected earlier)</p>
             </div>
             <div>
               <Label className="text-xs font-bold uppercase tracking-wider">Payment Method</Label>
@@ -1934,7 +1982,7 @@ const LedgerView = ({
               {payments.map(p => (
                 <TableRow key={p.payment_id} className="hover:bg-slate-50">
                   <TableCell className="text-xs font-mono font-semibold text-slate-900">{p.receipt_number}</TableCell>
-                  <TableCell className="text-sm">{p.payment_date}</TableCell>
+                  <TableCell className="text-sm">{isoToDDMMYYYY(p.payment_date) || p.payment_date}</TableCell>
                   <TableCell className="font-bold text-green-700">{fmt(p.amount)}</TableCell>
                   <TableCell className="text-sm capitalize">{p.payment_method}</TableCell>
                   <TableCell className="text-xs text-slate-500">{p.transaction_id || '—'}</TableCell>

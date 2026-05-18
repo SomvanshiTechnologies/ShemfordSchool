@@ -48,7 +48,7 @@ import {
   AlertDialogTitle,
 } from './ui/alert-dialog';
 import { toast } from 'sonner';
-import { Plus, Search, Eye, Edit, UserCog, Filter, AlertTriangle, Link2, Loader2, Copy, Check, X } from 'lucide-react';
+import { Plus, Search, Eye, Edit, UserCog, Filter, AlertTriangle, Link2, Loader2, Copy, Check, X, RefreshCw } from 'lucide-react';
 
 const EmployeesPage = () => {
   const [employees, setEmployees] = useState([]);
@@ -75,6 +75,7 @@ const EmployeesPage = () => {
   const [deactivateTarget, setDeactivateTarget] = useState(null);
   const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState({
+    employee_id: '',
     first_name: '',
     last_name: '',
     email: '',
@@ -185,6 +186,7 @@ const EmployeesPage = () => {
       toast.success('Employee added successfully');
       setShowAddDialog(false);
       setFormData({
+        employee_id: '',
         first_name: '',
         last_name: '',
         email: '',
@@ -227,6 +229,7 @@ const EmployeesPage = () => {
   const handleEditEmployee = (employee) => {
     setSelectedEmployee(employee);
     setEditData({
+      employee_id: employee.employee_id || '',
       first_name: employee.first_name || '',
       last_name: employee.last_name || '',
       phone: employee.phone || '',
@@ -299,7 +302,18 @@ const EmployeesPage = () => {
             <p className="text-xs text-muted-foreground mt-0.5">Manage staff and employee records</p>
           </div>
         </div>
-        <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+        <Dialog open={showAddDialog} onOpenChange={(open) => {
+          setShowAddDialog(open);
+          // Always generate a fresh Employee ID when the dialog opens so the admin
+          // can see and edit it. Format mirrors the backend factory: EMP<year><6 hex>.
+          if (open) {
+            const year = new Date().getFullYear();
+            const rand = Array.from({ length: 6 }, () =>
+              '0123456789ABCDEF'[Math.floor(Math.random() * 16)]
+            ).join('');
+            setFormData((f) => ({ ...f, employee_id: `EMP${year}${rand}` }));
+          }
+        }}>
           <DialogTrigger asChild>
             <Button data-testid="add-employee-btn">
               <Plus className="h-4 w-4 mr-2" />
@@ -313,6 +327,35 @@ const EmployeesPage = () => {
             </DialogHeader>
             <form onSubmit={handleAddEmployee}>
               <div className="grid gap-4 py-4">
+                <div className="space-y-2">
+                  <Label htmlFor="employee_id">Employee ID</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="employee_id"
+                      value={formData.employee_id}
+                      onChange={(e) => setFormData({ ...formData, employee_id: e.target.value })}
+                      placeholder="EMP2026A1B2C3"
+                      className="font-mono font-semibold text-base"
+                      data-testid="emp-id"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const year = new Date().getFullYear();
+                        const rand = Array.from({ length: 6 }, () =>
+                          '0123456789ABCDEF'[Math.floor(Math.random() * 16)]
+                        ).join('');
+                        setFormData((f) => ({ ...f, employee_id: `EMP${year}${rand}` }));
+                      }}
+                      title="Generate a new ID"
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Auto-generated — edit it or hit the refresh icon for a new one. Must be unique.</p>
+                </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="first_name">First Name *</Label>
@@ -652,6 +695,16 @@ const EmployeesPage = () => {
           </DialogHeader>
           <form onSubmit={handleUpdateEmployee}>
             <div className="grid gap-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit_employee_id">Employee ID</Label>
+                <Input
+                  id="edit_employee_id"
+                  value={editData.employee_id ?? ''}
+                  onChange={(e) => setEditData({ ...editData, employee_id: e.target.value })}
+                  data-testid="edit-emp-id"
+                />
+                <p className="text-xs text-muted-foreground">Admin can rename the Employee ID; must remain unique.</p>
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="edit_first_name">First Name *</Label>

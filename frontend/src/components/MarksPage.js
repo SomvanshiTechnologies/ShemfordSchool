@@ -37,8 +37,13 @@ const GRADE_MAP = (pct) => {
 const MarksPage = () => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
+  const isTeacher = user?.role === 'teacher';
+  // Only admins and teachers can enter / save marks. Students & parents view only.
+  const canEditMarks = isAdmin || isTeacher;
 
-  const [activeTab, setActiveTab] = useState(isAdmin ? 'exams' : 'entry');
+  const [activeTab, setActiveTab] = useState(
+    isAdmin ? 'exams' : (canEditMarks ? 'entry' : 'view')
+  );
   const [classes, setClasses] = useState([]);
   const [subjects, setSubjects] = useState([]);
   const [exams, setExams] = useState([]);
@@ -108,6 +113,21 @@ const MarksPage = () => {
       const arr = Array.isArray(res.data) ? res.data : (res.data?.students ?? []);
       setMarksheetStudents(arr);
       setCached('marks:student-list', arr);
+      // Students only have themselves in the list — auto-load their marksheet
+      // straight into the preview so they don't have to type their own ID.
+      if (!canEditMarks && arr.length === 1) {
+        const self = arr[0];
+        setMarksheetStudentId(self.student_id);
+        setMarksheetSearch(`${self.first_name} ${self.last_name} (${self.admission_number})`);
+        try {
+          const mr = await api.get(`/marks/marksheet/${self.student_id}`, {
+            params: { academic_year: currentAcademicYear() },
+          });
+          setMarksheetData(mr.data);
+        } catch (err) {
+          // Silent — keep dialog open so user can retry via Generate button
+        }
+      }
     } catch (e) {}
   };
 
@@ -340,8 +360,13 @@ const MarksPage = () => {
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="mb-6 rounded-xl h-10 bg-slate-100">
           {isAdmin && <TabsTrigger value="exams" className="rounded-xl text-xs uppercase tracking-wider font-semibold" data-testid="exams-tab">Exams</TabsTrigger>}
-          <TabsTrigger value="entry" className="rounded-xl text-xs uppercase tracking-wider font-semibold" data-testid="entry-tab">Marks Entry</TabsTrigger>
-          <TabsTrigger value="view" className="rounded-xl text-xs uppercase tracking-wider font-semibold" data-testid="view-tab">View Marks</TabsTrigger>
+          {canEditMarks && <TabsTrigger value="entry" className="rounded-xl text-xs uppercase tracking-wider font-semibold" data-testid="entry-tab">Marks Entry</TabsTrigger>}
+          {/* Teachers enter marks via Marks Entry — they don't need a separate read-only view. */}
+          {!isTeacher && (
+            <TabsTrigger value="view" className="rounded-xl text-xs uppercase tracking-wider font-semibold" data-testid="view-tab">
+              {isAdmin ? 'View Marks' : 'My Marks'}
+            </TabsTrigger>
+          )}
         </TabsList>
 
         {/* ====== EXAMS TAB (Admin) ====== */}
@@ -449,7 +474,7 @@ const MarksPage = () => {
                     </Select>
                   </div>
                 )}
-                {selectedExam && selectedSection && (
+                {canEditMarks && selectedExam && selectedSection && (
                   <Button
                     onClick={saveMarks}
                     disabled={savingMarks || selectedExam.is_locked}
@@ -730,9 +755,12 @@ const MarksPage = () => {
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-slate-900">CBSE Format Marksheet</DialogTitle>
-            <DialogDescription>Enter student ID to generate marksheet</DialogDescription>
+            <DialogDescription>
+              {canEditMarks ? 'Enter student ID to generate marksheet' : 'Preview your marksheet below and download as PDF.'}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            {canEditMarks ? (
             <div className="flex gap-4 items-end">
               <div className="flex-1 space-y-1.5">
                 <Label>Search Student</Label>
@@ -777,6 +805,7 @@ const MarksPage = () => {
               </div>
               <Button className="bg-slate-900 text-white hover:bg-slate-800 rounded-xl" onClick={generateMarksheet} disabled={!marksheetStudentId} data-testid="fetch-marksheet-btn">Generate</Button>
             </div>
+            ) : null}
 
             {marksheetData && (
               <div className="border border-slate-200 rounded-2xl p-6 bg-white" id="marksheet">

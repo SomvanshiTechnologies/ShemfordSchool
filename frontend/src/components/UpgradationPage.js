@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
-import { ArrowUpCircle, History, Search, CheckCircle2, AlertCircle, Loader2, Eye, CreditCard } from 'lucide-react';
+import { ArrowUpCircle, History, Search, CheckCircle2, AlertCircle, Loader2, Eye, CreditCard, Check, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Badge } from './ui/badge';
 import api from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
 
 const STREAMS = ['Science', 'Arts', 'Commerce'];
 const CLASSES_WITH_STREAMS = ['Class 11', 'Class 12'];
@@ -16,7 +17,11 @@ function fmt(n) {
 }
 
 export default function UpgradationPage() {
+  const { isAdmin } = useAuth();
   const [tab, setTab] = useState('upgrade');
+  const [approvingId, setApprovingId] = useState(null);
+  const [rejectId, setRejectId] = useState(null);
+  const [rejectReason, setRejectReason] = useState('');
   const upgradingRef = React.useRef(false); // prevents double-submit before state re-renders
 
   // ── Upgrade tab state ──────────────────────────────────────────────────────
@@ -120,6 +125,18 @@ export default function UpgradationPage() {
       const startYear = parseInt(s.academic_year.split('-')[0], 10);
       setToAcademicYear(`${startYear + 1}-${startYear + 2}`);
     }
+
+    // Auto-pick the next class — use the active class list (sorted by sort_order)
+    const active = (classes || []).filter(c => c.is_active);
+    const idx = active.findIndex(c => c.name === s.class_name);
+    if (idx >= 0 && idx + 1 < active.length) {
+      const next = active[idx + 1];
+      setToClass(next.name);
+      setToSection('');
+      setToStream('');
+    } else {
+      setToClass('');
+    }
   }
 
   async function doUpgrade() {
@@ -142,15 +159,9 @@ export default function UpgradationPage() {
         academic_year: toAcademicYear,
         notes,
       });
-      toast.success(res.data.message || 'Student upgraded successfully');
-      // If an upgradation fee is due, open the payment dialog immediately
-      if (res.data.upgradation_fee > 0 && !res.data.upgradation_fee_paid) {
-        setResult(res.data);
-        setPayMethod('cash');
-        setPayTxn('');
-        setPayRemarks('');
-        setShowPayDialog(true);
-      }
+      // Request is now in the Pending Approvals queue — student NOT moved yet.
+      // Class change and fee ledger only happen after an admin approves.
+      toast.success(res.data.message || 'Upgrade request submitted. Awaiting admin approval.');
       // Reset form for next upgrade
       setSelected(null);
       setSearch('');
@@ -159,6 +170,8 @@ export default function UpgradationPage() {
       setToStream('');
       setNotes('');
       setFeeBlockMsg(null);
+      // Refresh history so the new record appears
+      loadHistory();
     } catch (e) {
       if (!e._handled) {
         const detail = e.response?.data?.detail || '';
@@ -258,15 +271,45 @@ export default function UpgradationPage() {
     }
   }
 
+  async function approveUpgrade(upgradationId) {
+    if (approvingId) return;
+    setApprovingId(upgradationId);
+    try {
+      const res = await api.post(`/upgradation/${upgradationId}/approve`);
+      toast.success(res.data.message || 'Upgrade approved.');
+      loadHistory();
+    } catch (e) {
+      if (!e._handled) toast.error(e.response?.data?.detail || 'Failed to approve');
+    } finally {
+      setApprovingId(null);
+    }
+  }
+
+  async function rejectUpgrade() {
+    if (!rejectId) return;
+    setApprovingId(rejectId);
+    try {
+      const res = await api.post(`/upgradation/${rejectId}/reject`, { reason: rejectReason });
+      toast.success(res.data.message || 'Upgrade rejected.');
+      setRejectId(null);
+      setRejectReason('');
+      loadHistory();
+    } catch (e) {
+      if (!e._handled) toast.error(e.response?.data?.detail || 'Failed to reject');
+    } finally {
+      setApprovingId(null);
+    }
+  }
+
   async function loadHistory() {
     setHistoryLoading(true);
     try {
       const params = {};
       if (historyYear) params.academic_year = historyYear;
       const res = await api.get('/upgradation/history', { params });
-      const all = res.data || [];
-      // Only show completed upgrades — fee paid or no fee charged
-      setHistory(all.filter(r => r.upgradation_fee === 0 || r.upgradation_fee_paid === true));
+      // Show every upgrade regardless of fee status; the Fee Status column will
+      // reflect the current ledger state (Paid / Pending / Overdue).
+      setHistory(res.data || []);
     } catch (e) {
       if (!e._handled) toast.error('Failed to load history: ' + (e.response?.data?.detail || e.message));
     } finally {
@@ -283,7 +326,7 @@ export default function UpgradationPage() {
     : [];
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
+    <div className="p-6 max-w-7xl mx-auto space-y-6">
       <div className="flex items-center gap-3">
         <ArrowUpCircle className="h-7 w-7 text-orange-500" />
         <div>
@@ -462,9 +505,18 @@ export default function UpgradationPage() {
                   <Select value={toClass} onValueChange={v => { setToClass(v); setToSection(''); setToStream(''); }}>
                     <SelectTrigger><SelectValue placeholder="Select class" /></SelectTrigger>
                     <SelectContent>
-                      {classes.filter(c => c.is_active).map(c => (
-                        <SelectItem key={c.name} value={c.name}>{c.name}</SelectItem>
-                      ))}
+                      {(() => {
+                        const active = classes.filter(c => c.is_active);
+                        const currentIdx = selected
+                          ? active.findIndex(c => c.name === selected.class_name)
+                          : -1;
+                        // Only classes after the student's current class are valid targets.
+                        // If we can't find the student's current class, fall through to showing all.
+                        const eligible = currentIdx >= 0 ? active.slice(currentIdx + 1) : active;
+                        return eligible.map(c => (
+                          <SelectItem key={c.name} value={c.name}>{c.name}</SelectItem>
+                        ));
+                      })()}
                     </SelectContent>
                   </Select>
                 </div>
@@ -496,7 +548,13 @@ export default function UpgradationPage() {
                 )}
                 <div className="space-y-1">
                   <Label>Academic Year</Label>
-                  <Input value={toAcademicYear} onChange={e => setToAcademicYear(e.target.value)} placeholder="e.g. 2025-2026" />
+                  <Input
+                    value={toAcademicYear}
+                    readOnly
+                    disabled
+                    placeholder="Auto-filled from student's current academic year"
+                    className="bg-slate-50 cursor-not-allowed"
+                  />
                   {selected?.academic_year && toAcademicYear && (
                     <p className="text-xs text-slate-500">
                       Upgrading from <span className="font-medium">{selected.academic_year}</span> → <span className="font-medium text-orange-600">{toAcademicYear}</span>
@@ -573,12 +631,13 @@ export default function UpgradationPage() {
                 <thead className="bg-muted text-muted-foreground">
                   <tr>
                     <th className="text-left px-4 py-2.5">Student</th>
-                    <th className="text-left px-4 py-2.5">From</th>
+                    <th className="text-left px-4 py-2.5 min-w-[160px] whitespace-nowrap">From</th>
                     <th className="text-left px-4 py-2.5">To</th>
-                    <th className="text-left px-4 py-2.5">Acad. Year</th>
+                    <th className="text-left px-4 py-2.5 min-w-[140px] whitespace-nowrap">Academic Year</th>
                     <th className="text-right px-4 py-2.5">Upg. Fee</th>
                     <th className="text-center px-4 py-2.5">Fee Status</th>
                     <th className="text-left px-4 py-2.5">Date</th>
+                    <th className="text-center px-4 py-2.5">Status</th>
                     <th className="text-center px-4 py-2.5">Action</th>
                   </tr>
                 </thead>
@@ -589,21 +648,63 @@ export default function UpgradationPage() {
                         <div className="font-medium">{r.student_name || r.student_id}</div>
                         <div className="text-xs text-muted-foreground">{r.admission_number}</div>
                       </td>
-                      <td className="px-4 py-2.5">{r.from_class} – {r.from_section}{r.from_stream ? ` (${r.from_stream})` : ''}</td>
+                      <td className="px-4 py-2.5 whitespace-nowrap">{r.from_class} – {r.from_section}{r.from_stream ? ` (${r.from_stream})` : ''}</td>
                       <td className="px-4 py-2.5">{r.to_class} – {r.to_section}{r.to_stream ? ` (${r.to_stream})` : ''}</td>
-                      <td className="px-4 py-2.5">{r.academic_year}</td>
+                      <td className="px-4 py-2.5 whitespace-nowrap">{r.academic_year}</td>
                       <td className="px-4 py-2.5 text-right">{r.upgradation_fee > 0 ? `₹${fmt(r.upgradation_fee)}` : '—'}</td>
                       <td className="px-4 py-2.5 text-center">
-                        {r.upgradation_fee > 0
-                          ? r.upgradation_fee_paid
+                        {(r.status || 'pending_approval') === 'pending_approval' ? (
+                          <span className="text-xs text-muted-foreground">— awaiting approval —</span>
+                        ) : r.upgradation_fee > 0 ? (
+                          r.upgradation_fee_status === 'paid' || r.upgradation_fee_paid
                             ? <Badge className="bg-green-100 text-green-700">Paid</Badge>
-                            : <Badge variant="destructive">Pending</Badge>
-                          : <span className="text-muted-foreground">—</span>
-                        }
+                            : r.upgradation_fee_status === 'overdue'
+                              ? <Badge variant="destructive">Overdue</Badge>
+                              : <Badge className="bg-amber-100 text-amber-700">Pending</Badge>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-muted-foreground">{r.created_at?.slice(0, 10) || '—'}</td>
                       <td className="px-4 py-2.5 text-center">
+                        {(() => {
+                          // Only show "Approved" when the record explicitly has status="approved".
+                          // Records without a status field (or status="pending_approval") are
+                          // treated as pending until an admin marks them.
+                          const st = r.status || 'pending_approval';
+                          if (st === 'approved') return <Badge className="bg-green-100 text-green-700">Approved</Badge>;
+                          if (st === 'rejected') return <Badge variant="destructive">Rejected</Badge>;
+                          return <Badge className="bg-amber-100 text-amber-700">Pending Approval</Badge>;
+                        })()}
+                      </td>
+                      <td className="px-4 py-2.5 text-center">
                         <div className="flex items-center justify-center gap-1">
+                          {isAdmin && (r.status || 'pending_approval') === 'pending_approval' && (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-green-600 hover:text-green-800 hover:bg-green-50"
+                                onClick={() => approveUpgrade(r.upgradation_id)}
+                                disabled={approvingId === r.upgradation_id}
+                                title="Approve upgrade"
+                              >
+                                {approvingId === r.upgradation_id
+                                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                                  : <Check className="h-4 w-4" />}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-red-600 hover:text-red-800 hover:bg-red-50"
+                                onClick={() => { setRejectId(r.upgradation_id); setRejectReason(''); }}
+                                disabled={approvingId === r.upgradation_id}
+                                title="Reject upgrade"
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </>
+                          )}
                           <Button
                             size="sm"
                             variant="ghost"
@@ -786,6 +887,37 @@ export default function UpgradationPage() {
             </dl>
             <div className="flex justify-end pt-4">
               <Button variant="outline" onClick={() => setViewRow(null)}>Close</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Reject Confirmation Dialog ──────────────────────────────────────── */}
+      {rejectId && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => !approvingId && setRejectId(null)}>
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full mx-4 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-semibold text-lg">Reject Upgrade Request</h3>
+            <p className="text-sm text-muted-foreground">
+              The student will remain in their current class. This action cannot be undone.
+            </p>
+            <div className="space-y-1">
+              <Label>Reason (optional)</Label>
+              <Input
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                placeholder="e.g. Fees still pending"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setRejectId(null)} disabled={!!approvingId}>Cancel</Button>
+              <Button
+                className="bg-red-600 hover:bg-red-700 text-white"
+                onClick={rejectUpgrade}
+                disabled={!!approvingId}
+              >
+                {approvingId === rejectId && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                Confirm Reject
+              </Button>
             </div>
           </div>
         </div>

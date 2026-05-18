@@ -296,7 +296,6 @@ const AdminDashboard = ({ stats, financial, attendanceAlerts, recentActivity }) 
     </div>
 
     <FeeHealthWidget financial={financial} />
-    <RecentActivityWidget logs={recentActivity} />
 
     <div>
       <SectionHeader title="Quick Actions" />
@@ -309,6 +308,8 @@ const AdminDashboard = ({ stats, financial, attendanceAlerts, recentActivity }) 
         <Action title="Manage Users"   desc="Add or update users"       icon={Users}         to="/users" />
       </div>
     </div>
+
+    <RecentActivityWidget logs={recentActivity} />
   </div>
 );
 

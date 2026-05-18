@@ -26,6 +26,7 @@ from typing import Optional, List
 from datetime import datetime, timezone, date
 import io
 import logging
+import re
 import uuid
 from pymongo import UpdateOne
 
@@ -1613,3 +1614,244 @@ async def search_students_for_fees(
         }
         for s in students
     ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reports: Fees Collection & Due Fees (admin / accountant)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _duration_range(duration: Optional[str], start_date: Optional[str], end_date: Optional[str]):
+    """Resolve a (start, end) YYYY-MM-DD inclusive range from a duration keyword."""
+    today = datetime.now().date()
+    if duration == "custom":
+        return (start_date or today.isoformat(), end_date or today.isoformat())
+    if duration == "yesterday":
+        d = today.replace(day=today.day) if today.day > 1 else today
+        from datetime import timedelta
+        y = today - timedelta(days=1)
+        return (y.isoformat(), y.isoformat())
+    from datetime import timedelta
+    if duration == "this_week":
+        start = today - timedelta(days=today.weekday())
+        return (start.isoformat(), today.isoformat())
+    if duration == "last_week":
+        end = today - timedelta(days=today.weekday() + 1)
+        start = end - timedelta(days=6)
+        return (start.isoformat(), end.isoformat())
+    if duration == "this_month":
+        start = today.replace(day=1)
+        return (start.isoformat(), today.isoformat())
+    if duration == "last_month":
+        first_of_this = today.replace(day=1)
+        last_of_prev = first_of_this - timedelta(days=1)
+        first_of_prev = last_of_prev.replace(day=1)
+        return (first_of_prev.isoformat(), last_of_prev.isoformat())
+    if duration == "this_year":
+        # Academic year: April 1 → March 31
+        if today.month >= 4:
+            start = today.replace(month=4, day=1)
+        else:
+            start = today.replace(year=today.year - 1, month=4, day=1)
+        return (start.isoformat(), today.isoformat())
+    # default: today
+    return (today.isoformat(), today.isoformat())
+
+
+@router.get("/fees/reports/collection")
+async def report_fees_collection(
+    request: Request,
+    duration: str = "today",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    class_name: Optional[str] = None,
+    section: Optional[str] = None,
+    fee_type: Optional[str] = None,
+    payment_method: Optional[str] = None,
+    student_id: Optional[str] = None,
+    rollup: str = "monthly",  # monthly | yearly
+):
+    """
+    Fees Collection Report — period rollup (monthly or yearly).
+    Each returned row is one period summarising collections that happened in it.
+    Filters narrow which payments contribute to the rollup.
+    """
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+
+    pay_query: dict = {}
+    if duration != "all_time":
+        range_start, range_end = _duration_range(duration, start_date, end_date)
+        try:
+            from datetime import timedelta as _td
+            end_excl = (datetime.strptime(range_end, "%Y-%m-%d").date() + _td(days=1)).isoformat()
+        except Exception:
+            end_excl = range_end + "T99"
+        pay_query["payment_date"] = {"$gte": range_start, "$lt": end_excl}
+    if payment_method:
+        pay_query["payment_method"] = {"$regex": f"^{re.escape(payment_method)}$", "$options": "i"}
+    if student_id:
+        pay_query["student_id"] = student_id
+    payments = await db.fee_payments.find(pay_query, {"_id": 0}).sort("payment_date", -1).to_list(20000)
+    if not payments:
+        return []
+
+    if not payments:
+        return []
+
+    installment_ids: list = []
+    for p in payments:
+        installment_ids.extend(p.get("installment_ids", []))
+    installment_ids = list({i for i in installment_ids if i})
+
+    entries = (
+        await db.student_ledger.find({"ledger_id": {"$in": installment_ids}}, {"_id": 0}).to_list(50000)
+        if installment_ids else []
+    )
+    ledger_by_id = {e["ledger_id"]: e for e in entries}
+
+    student_ids = list({p["student_id"] for p in payments})
+    students = await db.students.find(
+        {"student_id": {"$in": student_ids}},
+        {"_id": 0, "student_id": 1, "first_name": 1, "last_name": 1, "class_name": 1,
+         "section": 1, "admission_number": 1, "phone": 1, "parent_name": 1, "parent_phone": 1}
+    ).to_list(20000)
+    student_map = {s["student_id"]: s for s in students}
+
+    def norm(v: Optional[str]) -> str:
+        if not v: return ""
+        s = str(v).strip().lower()
+        return s[6:].strip() if s.startswith("class ") else s
+
+    class_filter   = norm(class_name)
+    section_filter = norm(section)
+    fee_filter     = norm(fee_type)
+
+    # Aggregate per-student
+    per_student: dict = {}
+    for p in payments:
+        s = student_map.get(p["student_id"]) or {}
+        if class_filter and norm(s.get("class_name")) != class_filter:
+            continue
+        if section_filter and norm(s.get("section")) != section_filter:
+            continue
+
+        entry_ids = p.get("installment_ids", []) or []
+        linked = [ledger_by_id[i] for i in entry_ids if i in ledger_by_id]
+        if fee_filter:
+            linked = [e for e in linked if norm(e.get("fee_type")) == fee_filter]
+            if not linked:
+                continue
+            contribution = round(sum(e.get("net_amount", 0) for e in linked), 2)
+        else:
+            contribution = round(p.get("amount", 0), 2)
+
+        agg = per_student.setdefault(p["student_id"], {
+            "admission_number": s.get("admission_number", ""),
+            "student_name":     f"{s.get('first_name','')} {s.get('last_name','')}".strip(),
+            "mobile":           s.get("parent_phone") or s.get("phone") or "",
+            "guardian":         s.get("parent_name", "") or "",
+            "class_section":    f"{s.get('class_name','')}{(' (' + s.get('section') + ')') if s.get('section') else ''}",
+            "payments_count":   0,
+            "total_collected":  0.0,
+            "last_payment_date": None,
+        })
+        agg["payments_count"] += 1
+        agg["total_collected"] += contribution
+        pd = str(p.get("payment_date", ""))[:10]
+        if pd and (agg["last_payment_date"] is None or pd > agg["last_payment_date"]):
+            agg["last_payment_date"] = pd
+
+    rows = []
+    for agg in per_student.values():
+        agg["total_collected"] = round(agg["total_collected"], 2)
+        rows.append(agg)
+    rows.sort(key=lambda r: r["total_collected"], reverse=True)
+    return rows
+
+
+@router.get("/fees/reports/due")
+async def report_fees_due(
+    request: Request,
+    class_name: Optional[str] = None,
+    section: Optional[str] = None,
+    fee_type: Optional[str] = None,
+    as_of_date: Optional[str] = None,
+    student_id: Optional[str] = None,
+):
+    """
+    Due Fees Report — one row per unpaid (pending / overdue / partially-paid) ledger entry.
+    """
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+
+    ledger_query: dict = {"status": {"$in": ["pending", "overdue", "partially_paid"]}}
+    if as_of_date:
+        ledger_query["due_date"] = {"$lte": as_of_date}
+    if student_id:
+        ledger_query["student_id"] = student_id
+    # Class / fee_type filters are applied in Python with normalized matching below
+    entries = await db.student_ledger.find(ledger_query, {"_id": 0}).sort("due_date", 1).to_list(10000)
+    if not entries:
+        return []
+
+    student_ids = list({e["student_id"] for e in entries})
+    students = await db.students.find(
+        {"student_id": {"$in": student_ids}, "is_active": True},
+        {"_id": 0, "student_id": 1, "first_name": 1, "last_name": 1, "class_name": 1,
+         "section": 1, "admission_number": 1, "phone": 1, "parent_name": 1, "parent_phone": 1}
+    ).to_list(5000)
+    student_map = {s["student_id"]: s for s in students}
+
+    def norm(v: Optional[str]) -> str:
+        if not v:
+            return ""
+        s = str(v).strip().lower()
+        return s[6:].strip() if s.startswith("class ") else s
+
+    class_filter   = norm(class_name)
+    section_filter = norm(section)
+    fee_filter     = norm(fee_type)
+
+    # Aggregate pending entries by student
+    per_student: dict = {}
+    for e in entries:
+        s = student_map.get(e["student_id"])
+        if not s:
+            continue
+        if class_filter and norm(s.get("class_name")) != class_filter:
+            continue
+        if section_filter and norm(s.get("section")) != section_filter:
+            continue
+        if fee_filter and norm(e.get("fee_type")) != fee_filter:
+            continue
+        net = float(e.get("net_amount", 0))
+        paid = float(e.get("amount_paid", 0))
+        remaining = float(e.get("remaining_balance", net - paid))
+
+        agg = per_student.setdefault(e["student_id"], {
+            "admission_number": s.get("admission_number", ""),
+            "student_name":     f"{s.get('first_name','')} {s.get('last_name','')}".strip(),
+            "mobile":           s.get("parent_phone") or s.get("phone") or "",
+            "guardian":         s.get("parent_name", "") or "",
+            "class_section":    f"{s.get('class_name','')}{(' (' + s.get('section') + ')') if s.get('section') else ''}",
+            "amount":           0.0,
+            "paid":             0.0,
+            "balance":          0.0,
+            "entries_pending":  0,
+            "oldest_due":       None,
+        })
+        agg["amount"]  += net
+        agg["paid"]    += paid
+        agg["balance"] += remaining
+        agg["entries_pending"] += 1
+        d = e.get("due_date") or ""
+        if d and (agg["oldest_due"] is None or d < agg["oldest_due"]):
+            agg["oldest_due"] = d
+
+    rows = []
+    for sid, agg in per_student.items():
+        agg["amount"]  = round(agg["amount"], 2)
+        agg["paid"]    = round(agg["paid"], 2)
+        agg["balance"] = round(agg["balance"], 2)
+        rows.append(agg)
+
+    rows.sort(key=lambda r: r["balance"], reverse=True)
+    return rows

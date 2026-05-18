@@ -50,6 +50,8 @@ async def get_announcements(
         query["$or"] = [
             {"target_type": "all"},
             {"target_type": "student"},
+            {"target_audiences": "student"},
+            {"target_type": "user", "target_value": user["user_id"]},
         ]
         if student_class:
             query["$or"].append({"target_type": "class", "target_value": student_class})
@@ -60,15 +62,35 @@ async def get_announcements(
         child_classes = list(set(c["class_name"] for c in children if c.get("class_name")))
         query["$or"] = [
             {"target_type": "all"},
-            {"target_type": "parent"}
+            {"target_type": "parent"},
+            {"target_audiences": "parent"},
         ]
         for cls in child_classes:
             query["$or"].append({"target_type": "class", "target_value": cls})
     elif user["role"] == UserRole.TEACHER:
-        query["$or"] = [
+        emp = await db.employees.find_one({"user_id": user["user_id"]}, {"_id": 0, "department": 1})
+        user_dept = emp.get("department") if emp else None
+        or_clauses = [
             {"target_type": "all"},
             {"target_type": "teacher"},
+            {"target_audiences": "teacher"},
+            {"target_audiences": "employee"},
+            {"target_type": "user", "target_value": user["user_id"]},
         ]
+        if user_dept:
+            or_clauses.append({"target_type": "department", "target_value": user_dept})
+        query["$or"] = or_clauses
+    elif user["role"] == UserRole.ACCOUNTANT:
+        emp = await db.employees.find_one({"user_id": user["user_id"]}, {"_id": 0, "department": 1})
+        user_dept = emp.get("department") if emp else None
+        or_clauses = [
+            {"target_type": "all"},
+            {"target_audiences": "employee"},
+            {"target_type": "user", "target_value": user["user_id"]},
+        ]
+        if user_dept:
+            or_clauses.append({"target_type": "department", "target_value": user_dept})
+        query["$or"] = or_clauses
 
     if target_type:
         if user["role"] in [UserRole.ADMIN, UserRole.TEACHER, UserRole.ACCOUNTANT]:

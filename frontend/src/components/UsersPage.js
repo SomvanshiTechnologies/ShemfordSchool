@@ -40,7 +40,7 @@ import {
 } from './ui/table';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { toast } from 'sonner';
-import { Search, Users, Shield, Edit, X, Loader2 } from 'lucide-react';
+import { Search, Users, Shield, Edit, X, Loader2, UserCheck, UserX } from 'lucide-react';
 import { getInitials, formatDate } from '../lib/utils';
 
 const UsersPage = () => {
@@ -125,7 +125,7 @@ const UsersPage = () => {
 
   const handleUpdateRole = async () => {
     if (!selectedUser || !newRole) return;
-    
+
     try {
       await api.put(`/users/${selectedUser.user_id}/role`, { role: newRole });
       toast.success('Role updated successfully');
@@ -133,6 +133,25 @@ const UsersPage = () => {
       setPage(1); setUsers([]); fetchUsers(1, false);
     } catch (error) {
       toast.error('Failed to update role');
+    }
+  };
+
+  // Toggle is_active on a user; backend cascades to db.students / db.employees
+  const [togglingId, setTogglingId] = useState(null);
+  const handleToggleActive = async (u) => {
+    if (togglingId) return;
+    setTogglingId(u.user_id);
+    try {
+      await api.put(`/users/${u.user_id}`, { is_active: !u.is_active });
+      toast.success(u.is_active ? 'User deactivated' : 'User activated');
+      // Update the row locally to avoid a full refetch
+      setUsers((rows) => rows.map((r) =>
+        r.user_id === u.user_id ? { ...r, is_active: !u.is_active } : r
+      ));
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to update user status');
+    } finally {
+      setTogglingId(null);
     }
   };
 
@@ -323,11 +342,38 @@ const UsersPage = () => {
                     </TableCell>
                     <TableCell>{formatDate(user.created_at)}</TableCell>
                     <TableCell className="text-right">
-                      {user.user_id !== currentUser?.user_id && (
-                        <Button variant="ghost" size="sm" onClick={() => openEditDialog(user)}>
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                      )}
+                      <div className="flex items-center justify-end gap-1">
+                        {user.user_id !== currentUser?.user_id && (
+                          <Button variant="ghost" size="sm" onClick={() => openEditDialog(user)} title="Edit role">
+                            <Edit className="h-4 w-4" />
+                          </Button>
+                        )}
+                        {user.user_id !== currentUser?.user_id && (
+                          user.is_active ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                              onClick={() => handleToggleActive(user)}
+                              disabled={togglingId === user.user_id}
+                              title="Deactivate user"
+                            >
+                              {togglingId === user.user_id ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserX className="h-4 w-4" />}
+                            </Button>
+                          ) : (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50"
+                              onClick={() => handleToggleActive(user)}
+                              disabled={togglingId === user.user_id}
+                              title="Activate user"
+                            >
+                              {togglingId === user.user_id ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserCheck className="h-4 w-4" />}
+                            </Button>
+                          )
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
