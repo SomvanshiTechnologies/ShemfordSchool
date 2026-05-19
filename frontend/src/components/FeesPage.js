@@ -131,6 +131,8 @@ const FeesPage = () => {
   const [studentLedger, setStudentLedger] = useState(null);
   const [loadingLedger, setLoadingLedger] = useState(false);
   const [myChildren, setMyChildren] = useState([]);
+  const [collectClassFilter, setCollectClassFilter] = useState('all');
+  const [collectSectionFilter, setCollectSectionFilter] = useState('all');
 
   // Payment dialog
   const [showPayDialog, setShowPayDialog] = useState(false);
@@ -644,23 +646,22 @@ const FeesPage = () => {
         <TabsList className="mb-6 rounded-xl h-10 bg-slate-100">
           {isAdmin && (
             <>
-              <TabsTrigger value="config" className="rounded-xl text-xs uppercase tracking-wider font-semibold">
-                Fee Config
-              </TabsTrigger>
               <TabsTrigger value="collect" className="rounded-xl text-xs uppercase tracking-wider font-semibold">
                 Collect
-              </TabsTrigger>
-              <TabsTrigger value="due" className="rounded-xl text-xs uppercase tracking-wider font-semibold">
-                Due Chart
               </TabsTrigger>
               <TabsTrigger value="reports" className="rounded-xl text-xs uppercase tracking-wider font-semibold">
                 Reports
               </TabsTrigger>
+              <TabsTrigger value="config" className="rounded-xl text-xs uppercase tracking-wider font-semibold">
+                Fee Config
+              </TabsTrigger>
             </>
           )}
-          <TabsTrigger value="my-fees" className="rounded-xl text-xs uppercase tracking-wider font-semibold">
-            {isParent || isStudent ? 'My Fees' : 'Student View'}
-          </TabsTrigger>
+          {(isParent || isStudent) && (
+            <TabsTrigger value="my-fees" className="rounded-xl text-xs uppercase tracking-wider font-semibold">
+              My Fees
+            </TabsTrigger>
+          )}
         </TabsList>
 
         {/* ════════════ FEE CONFIG TAB ════════════ */}
@@ -755,20 +756,15 @@ const FeesPage = () => {
               )}
             </div>
 
-            {/* Sibling discount note */}
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800">
-              <strong>Sibling Discount Policy:</strong> 50% off Admission Fee · 15% off Monthly Tuition.
-              Configured per class in each fee entry. Auto-applied when a sibling is enrolled.
-            </div>
           </div>
         </TabsContent>
 
         {/* ════════════ COLLECT TAB ════════════ */}
         <TabsContent value="collect">
           <div className="space-y-4">
-            {/* Student search bar */}
-            <div className="flex gap-4 items-start">
-              <div className="flex-1 max-w-md relative">
+            {/* Student search bar + filters (inline) */}
+            <div className="flex flex-wrap gap-4 items-end">
+              <div className="flex-1 min-w-[260px] max-w-md relative">
                 <Label className="text-xs font-bold uppercase tracking-wider text-slate-900">Search Student</Label>
                 <div className="relative mt-1">
                   <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400 pointer-events-none" strokeWidth={1.5} />
@@ -824,47 +820,95 @@ const FeesPage = () => {
                   </div>
                 )}
               </div>
+
+              <div>
+                <Label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Class</Label>
+                <Select value={collectClassFilter} onValueChange={v => { setCollectClassFilter(v); setCollectSectionFilter('all'); }}>
+                  <SelectTrigger className="h-10 w-[160px] text-sm mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Classes</SelectItem>
+                    {classes.map(c => <SelectItem key={c.name || c} value={c.name || c}>Class {c.name || c}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Section</Label>
+                <Select value={collectSectionFilter} onValueChange={setCollectSectionFilter}>
+                  <SelectTrigger className="h-10 w-[140px] text-sm mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Sections</SelectItem>
+                    {(() => {
+                      if (collectClassFilter === 'all') {
+                        const set = new Set();
+                        classes.forEach(c => (c.sections || []).forEach(s => set.add(s.section_name || s)));
+                        return Array.from(set).filter(Boolean).sort().map(sec => <SelectItem key={sec} value={sec}>{sec}</SelectItem>);
+                      }
+                      const cls = classes.find(c => c.name === collectClassFilter);
+                      return (cls?.sections || []).map(s => s.section_name || s).filter(Boolean).map(sec => <SelectItem key={sec} value={sec}>{sec}</SelectItem>);
+                    })()}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
             {/* Default list — students with pending/overdue fees */}
-            {!selectedStudentId && !loadingLedger && (
+            {!selectedStudentId && !loadingLedger && (() => {
+              const sectionsForFilter = (() => {
+                if (collectClassFilter === 'all') {
+                  // Union of section_names across all classes
+                  const set = new Set();
+                  classes.forEach(c => (c.sections || []).forEach(s => set.add(s.section_name || s)));
+                  return Array.from(set).filter(Boolean).sort();
+                }
+                const cls = classes.find(c => c.name === collectClassFilter);
+                return (cls?.sections || []).map(s => s.section_name || s).filter(Boolean);
+              })();
+              const filteredCollect = dueChart.filter(s => {
+                if (collectClassFilter !== 'all' && s.class_name !== collectClassFilter) return false;
+                if (collectSectionFilter !== 'all' && s.section !== collectSectionFilter) return false;
+                return true;
+              });
+              return (
               <div className="space-y-2">
                 <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                  Students with Pending Fees ({dueChart.length})
+                  Students with Pending Fees ({filteredCollect.length}{filteredCollect.length !== dueChart.length ? ` of ${dueChart.length}` : ''})
                 </p>
-                {dueChart.length === 0 ? (
+                {filteredCollect.length === 0 ? (
                   <div className="flex items-center gap-2 text-sm text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3">
-                    <CheckCircle2 className="h-4 w-4 shrink-0" /> All fees collected — no pending dues.
+                    <CheckCircle2 className="h-4 w-4 shrink-0" /> {dueChart.length === 0 ? 'All fees collected — no pending dues.' : 'No pending students match the selected filters.'}
                   </div>
                 ) : (
                   <div className="border border-slate-200 rounded-xl overflow-hidden">
-                    <div className="grid grid-cols-4 gap-4 px-4 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                      <span>Student</span><span>Admission No.</span><span>Class</span><span className="text-right">Pending</span>
+                    <div className="grid grid-cols-6 gap-4 px-4 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      <span>Admission No.</span><span>Student</span><span>Class</span><span>Section</span><span>Mobile</span><span className="text-right">Pending</span>
                     </div>
-                    {dueChart.slice(0, 50).map(s => (
+                    {filteredCollect.slice(0, 50).map(s => (
                       <button
                         key={s.student_id}
                         onClick={() => selectSearchResult({ student_id: s.student_id, name: s.name, admission_number: s.admission_number, class_name: s.class_name, section: s.section, stream: s.stream })}
-                        className="w-full text-left grid grid-cols-4 gap-4 px-4 py-3 hover:bg-orange-50 border-b border-slate-100 last:border-0 items-center transition-colors"
+                        className="w-full text-left grid grid-cols-6 gap-4 px-4 py-3 hover:bg-orange-50 border-b border-slate-100 last:border-0 items-center transition-colors"
                       >
-                        <p className="text-sm font-semibold text-slate-900 truncate">{s.name}</p>
                         <p className="text-sm text-slate-600 font-mono">{s.admission_number || '—'}</p>
-                        <p className="text-sm text-slate-600">{s.class_name}-{s.section}{s.stream ? ` (${s.stream})` : ''}</p>
+                        <p className="text-sm font-semibold text-slate-900 truncate">{s.name}</p>
+                        <p className="text-sm text-slate-600">{s.class_name || '—'}{s.stream ? ` (${s.stream})` : ''}</p>
+                        <p className="text-sm text-slate-600">{s.section || '—'}</p>
+                        <p className="text-sm text-slate-600 font-mono">{s.mobile || '—'}</p>
                         <div className="text-right">
                           <p className="text-sm font-bold text-red-600">₹{Number(s.total_due || 0).toLocaleString('en-IN')}</p>
                           {s.entries_overdue > 0 && <p className="text-[10px] text-red-400">{s.entries_overdue} overdue</p>}
                         </div>
                       </button>
                     ))}
-                    {dueChart.length > 50 && (
+                    {filteredCollect.length > 50 && (
                       <div className="px-4 py-2 text-xs text-slate-400 text-center bg-slate-50">
-                        Showing 50 of {dueChart.length} — use search to find others
+                        Showing 50 of {filteredCollect.length} — use search to find others
                       </div>
                     )}
                   </div>
                 )}
               </div>
-            )}
+              );
+            })()}
 
             {loadingLedger && (
               <div className="flex justify-center py-10">
@@ -984,7 +1028,6 @@ const FeesPage = () => {
             <FeesReports />
           </TabsContent>
         )}
-
 
         {/* ════════════ MY FEES / STUDENT VIEW ════════════ */}
         <TabsContent value="my-fees">
@@ -1902,7 +1945,6 @@ const LedgerView = ({
                   <TableRow className="bg-white border-b border-slate-100">
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Description</TableHead>
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Gross</TableHead>
-                    <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Discount</TableHead>
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Late Fee</TableHead>
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Net Due</TableHead>
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Due Date</TableHead>
@@ -1918,14 +1960,8 @@ const LedgerView = ({
                     >
                       <TableCell className="text-sm font-medium">
                         {entry.description}
-                        {entry.concession_reason && (
-                          <span className="block text-[10px] text-green-600">{entry.concession_reason}</span>
-                        )}
                       </TableCell>
                       <TableCell className="text-sm">{fmt(entry.gross_amount)}</TableCell>
-                      <TableCell className="text-sm text-green-600">
-                        {entry.concession_amount > 0 ? `-${fmt(entry.concession_amount)}` : '—'}
-                      </TableCell>
                       <TableCell className="text-sm text-red-600">
                         {entry.late_fee_applied > 0 ? `+${fmt(entry.late_fee_applied)}` : '—'}
                       </TableCell>

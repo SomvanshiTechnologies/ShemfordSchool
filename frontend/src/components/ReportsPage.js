@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../lib/api';
+import { previewReportInTab } from '../lib/preview';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -67,19 +68,99 @@ const ReportsPage = () => {
     }
   };
 
-  const downloadReport = async (endpoint, params, filename) => {
+  // Render Excel as an HTML preview from in-memory report data (browsers can't
+  // preview real XLSX). PDF still uses downloadReport because browsers preview
+  // PDFs in-tab.
+  const inr = (n) => (n == null || isNaN(n) ? '—' : `Rs. ${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`);
+
+  const previewFinancialExcel = () => {
+    if (!financialReport) { toast.error('Generate the report first'); return; }
+    const fr = financialReport;
+    const summaryRows = [
+      { k: 'Total Collection', v: inr(fr.total_collection) },
+      { k: 'Total Pending',    v: inr(fr.total_pending) },
+      { k: 'Transactions',     v: fr.transaction_count ?? 0 },
+      { k: 'Collection Rate',  v: (fr.total_collection + fr.total_pending > 0)
+                                    ? `${((fr.total_collection / (fr.total_collection + fr.total_pending)) * 100).toFixed(1)}%`
+                                    : '—' },
+    ];
+    const pmRows = Object.entries(fr.by_payment_method || {}).map(([k, v]) => ({ k, v: inr(v) }));
+    const mRows  = Object.entries(fr.by_month || {}).map(([k, v]) => ({ k, v: inr(v) }));
+    previewReportInTab('Financial Report', [
+      { title: 'Summary',          columns: [{ label: 'Metric', get: r => r.k }, { label: 'Value', get: r => r.v }], rows: summaryRows },
+      { title: 'By Payment Method',columns: [{ label: 'Method', get: r => r.k }, { label: 'Amount', get: r => r.v }], rows: pmRows },
+      { title: 'Monthly Trend',    columns: [{ label: 'Month',  get: r => r.k }, { label: 'Amount', get: r => r.v }], rows: mRows },
+    ]);
+  };
+
+  const previewAcademicExcel = () => {
+    if (!academicReport) { toast.error('Generate the report first'); return; }
+    const ar = academicReport;
+    const studentRows = ar.students || [];
+    const subjectRows = Object.entries(ar.subject_averages || {}).map(([k, v]) => ({ k, v }));
+    previewReportInTab(`Academic Report — ${ar.class_name || ''}`, [
+      { title: 'Subject Averages',
+        columns: [{ label: 'Subject', get: r => r.k }, { label: 'Average', get: r => Number(r.v).toFixed(2) }],
+        rows: subjectRows,
+      },
+      { title: 'Students',
+        columns: [
+          { label: 'Roll',    get: r => r.roll_number },
+          { label: 'Name',    get: r => r.name },
+          { label: 'Total',   get: r => r.total },
+          { label: 'Average', get: r => Number(r.average ?? 0).toFixed(2) },
+          { label: 'Grade',   get: r => r.grade || '—' },
+        ],
+        rows: studentRows,
+      },
+    ]);
+  };
+
+  const previewAttendanceExcel = () => {
+    if (!attendanceReport) { toast.error('Generate the report first'); return; }
+    const ar = attendanceReport;
+    const rows = ar.records || [];
+    previewReportInTab('Attendance Report', [
+      { title: ar.summary ? `Summary — ${ar.summary.present_count ?? 0} present / ${ar.summary.total ?? rows.length} total` : null,
+        columns: [
+          { label: 'Date',    get: r => r.date },
+          { label: 'Class',   get: r => r.class_name + (r.section ? ` ${r.section}` : '') },
+          { label: 'Student', get: r => r.student_name },
+          { label: 'Roll',    get: r => r.roll_number },
+          { label: 'Status',  get: r => r.status },
+        ],
+        rows,
+      },
+    ]);
+  };
+
+  const downloadReport = async (endpoint, params, _filename) => {
+    // Open the tab IMMEDIATELY with a spinner so the user sees instant feedback
+    // and pop-up blockers don't kick in. Once the blob arrives, swap the tab to
+    // the file URL — the browser previews PDFs in-tab and triggers a native
+    // save dialog for XLSX (matching the Fees Reports UX).
+    const splash = `<!doctype html><html><head><meta charset="utf-8"><title>Loading report…</title>
+      <style>body{font-family:Segoe UI,Arial,sans-serif;margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#f8fafc;color:#475569}
+      .box{text-align:center}.spin{display:inline-block;width:28px;height:28px;border:3px solid #e2e8f0;border-top-color:#E88A1A;border-radius:50%;animation:r .8s linear infinite;margin-bottom:10px}
+      @keyframes r{to{transform:rotate(360deg)}}</style></head>
+      <body><div class="box"><div class="spin"></div><div>Preparing report…</div></div></body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) { toast.error('Pop-up blocked — allow pop-ups to view the report'); return; }
+    w.document.write(splash);
+    w.document.close();
     try {
       const res = await api.get(endpoint, { params, responseType: 'blob' });
-      const url = URL.createObjectURL(new Blob([res.data]));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      const mime = params?.format === 'pdf'
+        ? 'application/pdf'
+        : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      const url = URL.createObjectURL(new Blob([res.data], { type: mime }));
+      try { w.location.replace(url); } catch (_) { /* tab closed */ }
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (e) {
-      toast.error('Failed to download report');
+      try {
+        w.document.body.innerHTML = '<div style="font-family:Arial;padding:40px;color:#dc2626;text-align:center">Failed to load report.</div>';
+      } catch (_) { /* tab closed */ }
+      toast.error('Failed to load report');
     }
   };
 
@@ -218,7 +299,7 @@ const ReportsPage = () => {
                     <Button variant="outline" size="sm" onClick={() => downloadReport('/reports/financial/export', { format: 'pdf', ...(startDate && { start_date: startDate }), ...(endDate && { end_date: endDate }) }, 'financial-report.pdf')} data-testid="export-financial-pdf">
                       <Download className="h-4 w-4 mr-1" /> PDF
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => downloadReport('/reports/financial/export', { format: 'excel', ...(startDate && { start_date: startDate }), ...(endDate && { end_date: endDate }) }, 'financial-report.xlsx')} data-testid="export-financial-excel">
+                    <Button variant="outline" size="sm" onClick={previewFinancialExcel} data-testid="export-financial-excel">
                       <FileText className="h-4 w-4 mr-1" /> Excel
                     </Button>
                   </div>
@@ -344,7 +425,7 @@ const ReportsPage = () => {
                     <Button variant="outline" size="sm" onClick={() => downloadReport('/reports/academic/export', { format: 'pdf', class_name: selectedClass, ...(selectedSection && { section: selectedSection }) }, 'academic-report.pdf')} data-testid="export-academic-pdf">
                       <Download className="h-4 w-4 mr-1" /> PDF
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => downloadReport('/reports/academic/export', { format: 'excel', class_name: selectedClass, ...(selectedSection && { section: selectedSection }) }, 'academic-report.xlsx')} data-testid="export-academic-excel">
+                    <Button variant="outline" size="sm" onClick={previewAcademicExcel} data-testid="export-academic-excel">
                       <FileText className="h-4 w-4 mr-1" /> Excel
                     </Button>
                   </div>
@@ -468,7 +549,7 @@ const ReportsPage = () => {
                     <Button variant="outline" size="sm" onClick={() => downloadReport('/reports/attendance/export', { format: 'pdf', ...(attClass && { class_name: attClass }), ...(attDate && { date: attDate }), ...(attStartDate && { start_date: attStartDate }), ...(attEndDate && { end_date: attEndDate }) }, 'attendance-report.pdf')} data-testid="export-attendance-pdf">
                       <Download className="h-4 w-4 mr-1" /> PDF
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => downloadReport('/reports/attendance/export', { format: 'excel', ...(attClass && { class_name: attClass }), ...(attDate && { date: attDate }), ...(attStartDate && { start_date: attStartDate }), ...(attEndDate && { end_date: attEndDate }) }, 'attendance-report.xlsx')} data-testid="export-attendance-excel"
+                    <Button variant="outline" size="sm" onClick={previewAttendanceExcel} data-testid="export-attendance-excel"
                     >
                       <FileText className="h-4 w-4 mr-1" /> Excel
                     </Button>

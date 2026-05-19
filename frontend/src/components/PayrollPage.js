@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import api from '../lib/api';
+import { previewInTab, previewExcelHtml } from '../lib/preview';
 import { useAuth } from '../contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -18,7 +19,7 @@ import {
 import { toast } from 'sonner';
 import {
   Download, FileText, Plus, RefreshCw, CheckCircle, CreditCard,
-  Loader2, ChevronLeft, ChevronRight, DollarSign, Users, TrendingUp, Calendar,
+  Loader2, ChevronLeft, ChevronRight, IndianRupee, Users, TrendingUp, Calendar,
 } from 'lucide-react';
 
 const MONTHS = [
@@ -32,7 +33,10 @@ const STATUS_COLORS = {
   paid:     'bg-green-100 text-green-800 border-green-200',
 };
 
-const fmt = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// "Rs." prefix (not ₹) — Helvetica in reportlab PDFs and Excel HTML downloads
+// render ₹ as tofu boxes. Using a plain ASCII prefix keeps it consistent
+// across the UI, PDF payslips, and Excel exports.
+const fmt = (n) => `Rs. ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const currentYear  = new Date().getFullYear();
 const currentMonth = new Date().getMonth() + 1;
@@ -40,7 +44,7 @@ const currentMonth = new Date().getMonth() + 1;
 // ─────────────────────────────────────────────────────────────────────────────
 // Admin view — generate, approve, pay, export
 // ─────────────────────────────────────────────────────────────────────────────
-const AdminPayrollView = ({ canManage = true }) => {
+export const AdminPayrollView = ({ canManage = true }) => {
   const [records,      setRecords]      = useState([]);
   const [loading,      setLoading]      = useState(false);
   const [loadingMore,  setLoadingMore]  = useState(false);
@@ -81,7 +85,7 @@ const AdminPayrollView = ({ canManage = true }) => {
     }
   }, [monthYear]);
 
-  useEffect(() => { setPage(1); setRecords([]); load(1, false); }, [load]);
+  useEffect(() => { setPage(1); setRecords([]); setTotalRecords(0); setTotalPages(1); load(1, false); }, [load]);
 
   // Infinite scroll
   useEffect(() => {
@@ -154,37 +158,33 @@ const AdminPayrollView = ({ canManage = true }) => {
     }
   };
 
-  const downloadPayslip = async (id, empName) => {
-    try {
-      const res = await api.get(`/payroll/${id}/payslip`, { responseType: 'blob' });
-      const url = URL.createObjectURL(res.data);
-      const a = document.createElement('a'); a.href = url;
-      a.download = `Payslip_${empName}_${monthYear}.pdf`; a.click();
-      URL.revokeObjectURL(url);
-    } catch { toast.error('Failed to download payslip'); }
-  };
+  const downloadPayslip = (id, _empName) => previewInTab(
+    () => api.get(`/payroll/${id}/payslip`, { responseType: 'blob' }),
+    { kind: 'pdf', errorMessage: 'Failed to load payslip' },
+  );
 
-  const exportExcel = async () => {
-    try {
-      const res = await api.get('/payroll/export/excel', { params: { month_year: monthYear }, responseType: 'blob' });
-      const url = URL.createObjectURL(res.data);
-      const a = document.createElement('a'); a.href = url;
-      a.download = `Payroll_${monthYear}.xlsx`; a.click();
-      URL.revokeObjectURL(url);
-      toast.success('Excel exported');
-    } catch { toast.error('Export failed'); }
-  };
+  // Excel: render an HTML preview in a new tab (matches Fees Reports UX).
+  // Browser can't preview real XLSX, so we use HTML and offer Print + Download
+  // Excel buttons inside the preview window.
+  const exportExcel = () => previewExcelHtml(
+    `Payroll ${MONTHS[month - 1]} ${year}`,
+    [
+      { label: 'Employee ID', get: r => r.employee_id },
+      { label: 'Employee',    get: r => r.employee_name || r.employee_id },
+      { label: 'Designation', get: r => r.designation || '' },
+      { label: 'Gross (Rs.)', get: r => fmt(r.gross_salary) },
+      { label: 'Deductions (Rs.)', get: r => fmt(r.total_deductions) },
+      { label: 'Net Salary (Rs.)', get: r => fmt(r.net_salary) },
+      { label: 'LWP Days',    get: r => r.lwp_days ?? 0 },
+      { label: 'Status',      get: r => r.status },
+    ],
+    records,
+  );
 
-  const exportPDF = async () => {
-    try {
-      const res = await api.get('/payroll/export/pdf', { params: { month_year: monthYear }, responseType: 'blob' });
-      const url = URL.createObjectURL(res.data);
-      const a = document.createElement('a'); a.href = url;
-      a.download = `Payroll_${monthYear}.pdf`; a.click();
-      URL.revokeObjectURL(url);
-      toast.success('PDF exported');
-    } catch { toast.error('Export failed'); }
-  };
+  const exportPDF = () => previewInTab(
+    () => api.get('/payroll/export/pdf', { params: { month_year: monthYear }, responseType: 'blob' }),
+    { kind: 'pdf', errorMessage: 'Failed to load PDF export' },
+  );
 
   // Stats
   const totalNet   = records.reduce((s, r) => s + (r.net_salary || 0), 0);
@@ -234,7 +234,7 @@ const AdminPayrollView = ({ canManage = true }) => {
         {[
           { label: 'Total Employees', value: records.length, icon: Users,       color: 'text-blue-600',   bg: 'bg-blue-50' },
           { label: 'Gross Payroll',   value: fmt(totalGross),icon: TrendingUp,   color: 'text-purple-600', bg: 'bg-purple-50' },
-          { label: 'Net Payroll',     value: fmt(totalNet),  icon: DollarSign,   color: 'text-green-600',  bg: 'bg-green-50' },
+          { label: 'Net Payroll',     value: fmt(totalNet),  icon: IndianRupee,   color: 'text-green-600',  bg: 'bg-green-50' },
           { label: 'Paid',            value: `${paidCount} / ${records.length}`, icon: CheckCircle, color: 'text-orange-600', bg: 'bg-orange-50' },
         ].map(({ label, value, icon: Icon, color, bg }) => (
           <Card key={label} className="border-0 shadow-sm">
@@ -260,7 +260,7 @@ const AdminPayrollView = ({ canManage = true }) => {
             </div>
           ) : records.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 text-slate-400">
-              <DollarSign className="h-10 w-10 mb-2 opacity-30" />
+              <IndianRupee className="h-10 w-10 mb-2 opacity-30" />
               <p className="text-sm">No payroll generated for {MONTHS[month-1]} {year}</p>
               {canManage && (
                 <Button size="sm" onClick={() => setShowGenDlg(true)}
@@ -339,7 +339,7 @@ const AdminPayrollView = ({ canManage = true }) => {
               <Loader2 className="h-4 w-4 animate-spin" /> Loading more...
             </div>
           )}
-          {!loading && !loadingMore && page >= totalPages && totalRecords > 0 && (
+          {!loading && !loadingMore && records.length > 0 && page >= totalPages && totalRecords > 0 && (
             <p className="text-center text-xs text-slate-400 py-3">{totalRecords} record{totalRecords !== 1 ? 's' : ''} total</p>
           )}
         </CardContent>
@@ -439,38 +439,26 @@ const EmployeePayrollView = () => {
     load();
   }, [year]);
 
-  const downloadPayslip = async (id, month) => {
-    try {
-      const res = await api.get(`/payroll/${id}/payslip`, { responseType: 'blob' });
-      const url = URL.createObjectURL(res.data);
-      const a = document.createElement('a'); a.href = url;
-      a.download = `Payslip_${MONTHS[month-1]}_${year}.pdf`; a.click();
-      URL.revokeObjectURL(url);
-    } catch { toast.error('Failed to download payslip'); }
+  const downloadPayslip = (id, _month) => previewInTab(
+    () => api.get(`/payroll/${id}/payslip`, { responseType: 'blob' }),
+    { kind: 'pdf', errorMessage: 'Failed to load payslip' },
+  );
+
+  const downloadYearly = () => {
+    if (!empId) return;
+    return previewInTab(
+      () => api.get(`/payroll/employee/${empId}/yearly-statement/${year}`, { responseType: 'blob' }),
+      { kind: 'pdf', errorMessage: 'No yearly statement available yet' },
+    );
   };
 
-  const downloadYearly = async () => {
+  const downloadForm16 = () => {
     if (!empId) return;
-    try {
-      const res = await api.get(`/payroll/employee/${empId}/yearly-statement/${year}`, { responseType: 'blob' });
-      const url = URL.createObjectURL(res.data);
-      const a = document.createElement('a'); a.href = url;
-      a.download = `Yearly_Statement_${year}.pdf`; a.click();
-      URL.revokeObjectURL(url);
-    } catch { toast.error('No yearly statement available yet'); }
-  };
-
-  const downloadForm16 = async () => {
-    if (!empId) return;
-    // Form 16 is for April–March financial year
     const fyYear = currentMonth >= 4 ? currentYear : currentYear - 1;
-    try {
-      const res = await api.get(`/payroll/employee/${empId}/form16/${fyYear}`, { responseType: 'blob' });
-      const url = URL.createObjectURL(res.data);
-      const a = document.createElement('a'); a.href = url;
-      a.download = `Form16_FY${fyYear}-${String(fyYear+1).slice(-2)}.pdf`; a.click();
-      URL.revokeObjectURL(url);
-    } catch { toast.error('Form 16 not available — ensure all months are paid for the financial year'); }
+    return previewInTab(
+      () => api.get(`/payroll/employee/${empId}/form16/${fyYear}`, { responseType: 'blob' }),
+      { kind: 'pdf', errorMessage: 'Form 16 not available — ensure all months are paid for the financial year' },
+    );
   };
 
   const totalNet = records.reduce((s, r) => s + (r.net_salary || 0), 0);
@@ -483,7 +471,7 @@ const EmployeePayrollView = () => {
 
   if (!empId) return (
     <div className="flex flex-col items-center justify-center h-64 text-slate-400">
-      <DollarSign className="h-10 w-10 mb-2 opacity-30" />
+      <IndianRupee className="h-10 w-10 mb-2 opacity-30" />
       <p className="text-sm">No employee record linked to your account.</p>
       <p className="text-xs mt-1">Contact admin to link your employee profile.</p>
     </div>
@@ -522,7 +510,7 @@ const EmployeePayrollView = () => {
         <Card className="border-0 shadow-sm">
           <CardContent className="p-4 flex items-center gap-3">
             <div className="h-10 w-10 rounded-xl bg-green-50 flex items-center justify-center">
-              <DollarSign className="h-5 w-5 text-green-600" strokeWidth={1.5} />
+              <IndianRupee className="h-5 w-5 text-green-600" strokeWidth={1.5} />
             </div>
             <div>
               <p className="text-xs text-slate-500">Total Earned ({year})</p>

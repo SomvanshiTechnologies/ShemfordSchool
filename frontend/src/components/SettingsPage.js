@@ -7,11 +7,42 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Badge } from './ui/badge';
 import { toast } from 'sonner';
-import { Lock, Building2, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { Lock, Building2, CheckCircle, XCircle, Loader2, User as UserIcon } from 'lucide-react';
 
 const SettingsPage = () => {
-  const { user } = useAuth();
+  const { user, setAuthUser } = useAuth();
   const isAdmin = user?.role === 'admin';
+
+  // ── My profile (all users) ───────────────────────────────────────────────
+  const [meForm, setMeForm] = useState({
+    name: user?.name || '',
+    phone: user?.phone || '',
+  });
+  const [meSaving, setMeSaving] = useState(false);
+  useEffect(() => {
+    setMeForm({ name: user?.name || '', phone: user?.phone || '' });
+  }, [user?.user_id, user?.name, user?.phone]);
+
+  const handleProfileUpdate = async (e) => {
+    e.preventDefault();
+    if (!meForm.name?.trim()) {
+      toast.error('Name cannot be empty');
+      return;
+    }
+    setMeSaving(true);
+    try {
+      const res = await api.put('/auth/me', {
+        name: meForm.name.trim(),
+        phone: meForm.phone?.trim() || null,
+      });
+      if (typeof setAuthUser === 'function') setAuthUser(res.data);
+      toast.success('Profile updated');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to update profile');
+    } finally {
+      setMeSaving(false);
+    }
+  };
 
   // ── Change password ──────────────────────────────────────────────────────
   const [pwForm, setPwForm] = useState({ current_password: '', new_password: '', confirm: '' });
@@ -83,6 +114,54 @@ const SettingsPage = () => {
   return (
     <div className="max-w-2xl mx-auto space-y-6 p-6">
       <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Settings</h1>
+
+      {/* ── My Profile (all users) ── */}
+      <Card className="border border-slate-200 shadow-none rounded-xl">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-bold uppercase tracking-wider flex items-center gap-2">
+            <UserIcon className="h-4 w-4" strokeWidth={1.5} /> My Profile
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleProfileUpdate} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold uppercase tracking-wider">Name</Label>
+                <Input
+                  className="h-10 rounded-xl border-slate-200 focus:border-slate-900 focus:ring-0"
+                  value={meForm.name}
+                  onChange={e => setMeForm(f => ({ ...f, name: e.target.value }))}
+                  required
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold uppercase tracking-wider">Phone</Label>
+                <Input
+                  className="h-10 rounded-xl border-slate-200 focus:border-slate-900 focus:ring-0"
+                  value={meForm.phone}
+                  onChange={e => setMeForm(f => ({ ...f, phone: e.target.value }))}
+                  placeholder="—"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold uppercase tracking-wider text-slate-500">Email</Label>
+                <Input className="h-10 rounded-xl bg-slate-50 text-slate-500" value={user?.email || ''} disabled />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold uppercase tracking-wider text-slate-500">Role</Label>
+                <Input className="h-10 rounded-xl bg-slate-50 text-slate-500 capitalize" value={user?.role || ''} disabled />
+              </div>
+            </div>
+            <p className="text-[11px] text-slate-500">Email and role can't be changed here — contact an admin.</p>
+            <div className="flex justify-end">
+              <Button type="submit" className="rounded-xl" disabled={meSaving}>
+                {meSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" strokeWidth={1.5} />}
+                Save Profile
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
 
       {/* ── Change Password ── */}
       <Card className="border border-slate-200 shadow-none rounded-xl">

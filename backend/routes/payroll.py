@@ -491,7 +491,7 @@ async def mark_payroll_paid(payroll_id: str, body: MarkPaidRequest, request: Req
                             "month_year": record["month_year"],
                             "net_salary": record["net_salary"]}, user)
     logger.info(
-        "Payroll PAID: payroll=%s employee=%s month=%s net=₹%.2f ref=%s by=%s",
+        "Payroll PAID: payroll=%s employee=%s month=%s net=Rs.%.2f ref=%s by=%s",
         payroll_id, record["employee_id"], record["month_year"],
         record["net_salary"], body.payment_reference, user["user_id"]
     )
@@ -841,12 +841,12 @@ def _generate_payslip_pdf(record: dict, emp: dict) -> bytes:
     story.append(Paragraph("Earnings & Deductions", styles["SectionTitle"]))
     earn_data = [
         ["EARNINGS",            "",         "DEDUCTIONS",           ""],
-        ["Monthly Salary",      f"₹{record['monthly_salary']:,.2f}",
-         "LWP Deduction",       f"₹{record['lwp_deduction']:,.2f}"],
-        ["Gross Salary",        f"₹{record['gross_salary']:,.2f}",
-         "Other Deductions",    f"₹{record['other_deductions']:,.2f}"],
+        ["Monthly Salary",      f"Rs.{record['monthly_salary']:,.2f}",
+         "LWP Deduction",       f"Rs.{record['lwp_deduction']:,.2f}"],
+        ["Gross Salary",        f"Rs.{record['gross_salary']:,.2f}",
+         "Other Deductions",    f"Rs.{record['other_deductions']:,.2f}"],
         ["",                    "",
-         "Total Deductions",    f"₹{record['total_deductions']:,.2f}"],
+         "Total Deductions",    f"Rs.{record['total_deductions']:,.2f}"],
     ]
     earn_table = Table(earn_data, colWidths=[4.5*cm, 4.5*cm, 4.5*cm, 4.5*cm])
     earn_table.setStyle(TableStyle([
@@ -865,7 +865,7 @@ def _generate_payslip_pdf(record: dict, emp: dict) -> bytes:
     story.append(Spacer(1, 14))
 
     # ── Net Salary ──
-    net_data = [["NET SALARY PAYABLE", f"₹{record['net_salary']:,.2f}"]]
+    net_data = [["NET SALARY PAYABLE", f"Rs.{record['net_salary']:,.2f}"]]
     net_table = Table(net_data, colWidths=[13*cm, 5.5*cm])
     net_table.setStyle(TableStyle([
         ("BACKGROUND",  (0, 0), (-1, -1), _GREEN),
@@ -915,12 +915,12 @@ def _generate_yearly_statement_pdf(records: list, emp: dict, year: int) -> bytes
     for r in records:
         rows.append([
             calendar.month_abbr[r["month"]],
-            f"₹{r['gross_salary']:,.2f}",
+            f"Rs.{r['gross_salary']:,.2f}",
             str(r["lwp_days"]),
-            f"₹{r['lwp_deduction']:,.2f}",
-            f"₹{r['other_deductions']:,.2f}",
-            f"₹{r['total_deductions']:,.2f}",
-            f"₹{r['net_salary']:,.2f}",
+            f"Rs.{r['lwp_deduction']:,.2f}",
+            f"Rs.{r['other_deductions']:,.2f}",
+            f"Rs.{r['total_deductions']:,.2f}",
+            f"Rs.{r['net_salary']:,.2f}",
             r["status"].upper(),
         ])
         total_gross    += r["gross_salary"]
@@ -930,9 +930,9 @@ def _generate_yearly_statement_pdf(records: list, emp: dict, year: int) -> bytes
 
     rows.append([
         "TOTAL",
-        f"₹{total_gross:,.2f}", "", f"₹{total_lwp_ded:,.2f}",
-        f"₹{total_other_ded:,.2f}", f"₹{total_lwp_ded+total_other_ded:,.2f}",
-        f"₹{total_net:,.2f}", "",
+        f"Rs.{total_gross:,.2f}", "", f"Rs.{total_lwp_ded:,.2f}",
+        f"Rs.{total_other_ded:,.2f}", f"Rs.{total_lwp_ded+total_other_ded:,.2f}",
+        f"Rs.{total_net:,.2f}", "",
     ])
 
     col_widths = [2*cm, 3*cm, 2*cm, 2.8*cm, 2.8*cm, 2.8*cm, 3*cm, 2*cm]
@@ -1002,11 +1002,11 @@ def _generate_form16_pdf(records: list, emp: dict, fy_start: int, fy_end: int) -
 
     story.append(Paragraph("Part A — Salary Details", styles["SectionTitle"]))
     salary_data = [
-        ["Description",                        "Amount (₹)"],
-        ["Gross Salary Paid",                  f"₹{total_gross:,.2f}"],
-        ["Total Deductions (LWP + Other)",     f"₹{total_deductions:,.2f}"],
-        ["Net Salary Paid",                    f"₹{total_net:,.2f}"],
-        ["Tax Deducted at Source (TDS)",       "₹0.00  (as applicable)"],
+        ["Description",                        "Amount (Rs.)"],
+        ["Gross Salary Paid",                  f"Rs.{total_gross:,.2f}"],
+        ["Total Deductions (LWP + Other)",     f"Rs.{total_deductions:,.2f}"],
+        ["Net Salary Paid",                    f"Rs.{total_net:,.2f}"],
+        ["Tax Deducted at Source (TDS)",       "Rs.0.00  (as applicable)"],
     ]
     sal_tbl = Table(salary_data, colWidths=[13*cm, 5.5*cm])
     sal_tbl.setStyle(TableStyle([
@@ -1028,9 +1028,9 @@ def _generate_form16_pdf(records: list, emp: dict, fy_start: int, fy_end: int) -
     for r in records:
         month_rows.append([
             f"{calendar.month_abbr[r['month']]} {r['year']}",
-            f"₹{r['gross_salary']:,.2f}",
-            f"₹{r['total_deductions']:,.2f}",
-            f"₹{r['net_salary']:,.2f}",
+            f"Rs.{r['gross_salary']:,.2f}",
+            f"Rs.{r['total_deductions']:,.2f}",
+            f"Rs.{r['net_salary']:,.2f}",
             r["status"].upper(),
         ])
     month_tbl = Table(month_rows, colWidths=[4*cm, 4*cm, 4*cm, 4*cm, 2.5*cm], repeatRows=1)
@@ -1075,7 +1075,7 @@ def _generate_payroll_summary_pdf(records: list, emp_map: dict, month_year: str)
     story.append(Paragraph(f"PAYROLL SUMMARY — {month_year}", styles["SectionTitle"]))
     story.append(Spacer(1, 6))
 
-    headers = ["#", "Name", "Designation", "Gross (₹)", "Deduct. (₹)", "Net (₹)", "Status"]
+    headers = ["#", "Name", "Designation", "Gross (Rs.)", "Deduct. (Rs.)", "Net (Rs.)", "Status"]
     rows = [headers]
     total_gross = total_net = total_ded = 0.0
 
@@ -1152,7 +1152,7 @@ def _generate_excel_export(records: list, emp_map: dict, month_year: str) -> byt
         "#", "Employee ID", "Name", "Designation", "Department",
         "Phone", "Address",
         "Bank Account", "IFSC", "Bank Name",
-        "Gross Salary (₹)", "Deductions (₹)", "Net Salary (₹)", "Status"
+        "Gross Salary (Rs.)", "Deductions (Rs.)", "Net Salary (Rs.)", "Status"
     ]
     ws.append(headers)
     header_row = ws.max_row
@@ -1227,7 +1227,7 @@ def _generate_excel_export(records: list, emp_map: dict, month_year: str) -> byt
 
     # ── Bank transfer sheet (clean, minimal) ──
     ws2 = wb.create_sheet("Bank Transfer")
-    bt_headers = ["#", "Name", "Account Number", "IFSC", "Bank Name", "Amount (₹)", "Remarks"]
+    bt_headers = ["#", "Name", "Account Number", "IFSC", "Bank Name", "Amount (Rs.)", "Remarks"]
     ws2.append(bt_headers)
     for col_num, h in enumerate(bt_headers, 1):
         cell = ws2.cell(row=1, column=col_num)

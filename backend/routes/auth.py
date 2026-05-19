@@ -254,6 +254,34 @@ async def get_current_user_info(request: Request):
     return UserResponse(**user).model_dump()
 
 
+@router.put("/auth/me")
+async def update_current_user_info(request: Request):
+    """Logged-in user updates their own profile fields (name, phone, picture).
+    Email and role are NOT editable here — those require admin action."""
+    user = await get_current_user(request)
+    body = await request.json()
+
+    updates = {}
+    if "name" in body:
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Name cannot be empty.")
+        updates["name"] = name
+    if "phone" in body:
+        updates["phone"] = (body.get("phone") or "").strip() or None
+    if "picture" in body:
+        updates["picture"] = body.get("picture") or None
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No editable fields provided.")
+
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": updates})
+    updated = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if isinstance(updated.get("created_at"), str):
+        updated["created_at"] = datetime.fromisoformat(updated["created_at"])
+    return UserResponse(**updated).model_dump()
+
+
 @router.post("/auth/logout")
 async def logout(request: Request, response: Response):
     """

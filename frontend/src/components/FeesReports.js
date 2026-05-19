@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import api from '../lib/api';
+import { getCached, setCached } from '../lib/pageCache';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -15,18 +16,29 @@ import { toast } from 'sonner';
 
 // ─── Small helpers ───────────────────────────────────────────────────────────
 
-const inr = (n) => (n == null || isNaN(n) ? '—' : `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`);
+// Use "Rs." rather than the ₹ glyph — Excel's HTML-as-xls reader falls back
+// to Windows-1252 and renders the 3-byte UTF-8 ₹ as tofu in downloaded files.
+const inr = (n) => (n == null || isNaN(n) ? '—' : `Rs. ${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`);
 
-// Display dates as DD/MM/YYYY. Backend stores YYYY-MM-DD strings.
+// Display dates as DD-MM-YYYY. Backend stores YYYY-MM-DD strings.
 const fmtDate = (s) => {
   if (!s) return '—';
   const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(s);
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : String(s);
 };
 
 // Match the labels used in the Fees Type filter dropdown so column ↔ filter stay aligned
 const FEE_TYPE_LABELS = { one_time: 'One Time', monthly: 'Monthly', yearly: 'Yearly' };
 const fmtFeeType = (v) => FEE_TYPE_LABELS[v] || v || '—';
+
+// Backend returns a comma-joined list of fee_type slugs (e.g. "monthly, one_time").
+// Re-format each slug through the same label map and re-join for display.
+const fmtFeeTypeList = (v) => {
+  if (!v) return '—';
+  const parts = String(v).split(',').map((p) => p.trim()).filter(Boolean);
+  if (!parts.length) return '—';
+  return parts.map((p) => FEE_TYPE_LABELS[p] || p).join(', ');
+};
 
 const csvCell = (v) => {
   const s = v == null ? '' : String(v);
@@ -41,45 +53,139 @@ const downloadBlob = (content, mime, filename) => {
   document.body.removeChild(a); URL.revokeObjectURL(url);
 };
 
-const exportExcel = (rows, columns, filename, title) => {
-  // HTML-table-as-Excel — Excel/LibreOffice opens this fine
-  const css = 'table{border-collapse:collapse}td,th{border:1px solid #999;padding:4px 8px;font-family:Arial}';
-  const head = `<tr>${columns.map((c) => `<th>${c.label}</th>`).join('')}</tr>`;
-  const body = rows.map((r) => `<tr>${columns.map((c) => `<td>${c.value(r) ?? ''}</td>`).join('')}</tr>`).join('');
-  const html = `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head><body><h3>${title}</h3><table>${head}${body}</table></body></html>`;
-  downloadBlob(html, 'application/vnd.ms-excel', `${filename}.xls`);
+// Render a tabular HTML preview of the report rows in a new browser tab.
+// Browsers can't natively preview XLSX, so we render an Excel-styled HTML page
+// the user can view, copy from, or print/save as PDF themselves.
+const escapeHtml = (v) => {
+  if (v == null) return '';
+  return String(v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 };
 
-const exportPDF = (rows, columns, title) => {
-  // Browser print dialog → user picks "Save as PDF" as destination
-  const head = `<tr>${columns.map((c) => `<th>${c.label}</th>`).join('')}</tr>`;
-  const body = rows.map((r) => `<tr>${columns.map((c) => `<td>${c.value(r) ?? ''}</td>`).join('')}</tr>`).join('');
-  const html = `<!doctype html><html><head><title>${title}</title>
-    <style>@page{size:A4 landscape;margin:12mm}
-    body{font-family:Arial;padding:0;color:#111}h2{margin:0 0 12px}
-    table{border-collapse:collapse;width:100%;font-size:11px}
-    th,td{border:1px solid #999;padding:4px 6px;text-align:left}
-    th{background:#f3f4f6}</style></head>
-    <body><h2>${title}</h2><table>${head}${body}</table>
-    <script>window.onload=()=>{setTimeout(()=>window.print(),200)}</script>
-    </body></html>`;
+const PREVIEW_SPLASH = `<!doctype html><html><head><meta charset="utf-8"><title>Loading report…</title>
+<style>body{font-family:Segoe UI,Arial,sans-serif;margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#f8fafc;color:#475569}
+.box{text-align:center}.spin{display:inline-block;width:28px;height:28px;border:3px solid #e2e8f0;border-top-color:#E88A1A;border-radius:50%;animation:r 0.8s linear infinite;margin-bottom:10px}
+@keyframes r{to{transform:rotate(360deg)}}</style></head>
+<body><div class="box"><div class="spin"></div><div>Preparing report…</div></div></body></html>`;
+
+const openExcelPreview = (rows, columns, title) => {
+  // 1. Open the tab synchronously so the browser doesn't block it as a pop-up
+  //    and the user sees the new tab appear instantly.
   const w = window.open('', '_blank');
-  if (!w) { toast.error('Pop-up blocked — allow pop-ups to download PDF'); return; }
-  w.document.write(html); w.document.close();
+  if (!w) { toast.error('Pop-up blocked — allow pop-ups to view the report'); return; }
+  w.document.write(PREVIEW_SPLASH); w.document.close();
+
+  if (!rows || rows.length === 0) {
+    w.document.body.innerHTML = '<div style="font-family:Arial;padding:40px;color:#64748b;text-align:center">No data to preview — load the report first.</div>';
+    return;
+  }
+  const cols = columns || [];
+
+  // 2. Defer the heavy HTML build/inject to the next tick so the splash actually
+  //    paints (otherwise the synchronous string-build can hold the main thread).
+  setTimeout(() => {
+    const head = `<tr>${cols.map(c => `<th>${escapeHtml(c.label)}</th>`).join('')}</tr>`;
+    const body = rows.map(r =>
+      `<tr>${cols.map(c => {
+        const v = c.render ? c.render(r) : c.value(r);
+        return `<td>${escapeHtml(v ?? '')}</td>`;
+      }).join('')}</tr>`
+    ).join('');
+    const now = new Date().toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+    const safeFile = String(title).toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+      <style>
+        body{font-family:'Segoe UI',Arial,sans-serif;margin:0;padding:0;color:#0f172a;background:#f8fafc}
+        .banner{background:#0F172A;color:#fff;padding:14px 24px;font-size:18px;font-weight:700;text-align:center}
+        .subtitle{background:#E88A1A;color:#fff;padding:8px 24px;font-size:13px;font-weight:600;text-align:center}
+        .toolbar{display:flex;gap:8px;justify-content:flex-end;padding:10px 24px;background:#fff;border-bottom:1px solid #e2e8f0;position:sticky;top:0;z-index:10}
+        .toolbar button{font:600 12px 'Segoe UI',Arial,sans-serif;background:#0F172A;color:#fff;border:0;border-radius:6px;padding:8px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+        .toolbar button.alt{background:#E88A1A}
+        .toolbar button:hover{opacity:.9}
+        .meta{padding:6px 24px;font-size:11px;color:#64748b;text-align:right}
+        .wrap{padding:0 24px 24px;overflow-x:auto}
+        table{border-collapse:collapse;width:100%;background:#fff;font-size:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+        th{background:#0F172A;color:#fff;padding:10px 8px;text-align:left;font-weight:600;border:1px solid #1e293b}
+        td{padding:8px;border:1px solid #e2e8f0;white-space:nowrap}
+        tr:nth-child(even) td{background:#f8fafc}
+        @media print{.toolbar{display:none}.banner,.subtitle,.meta{background:#fff !important;color:#0f172a !important}}
+      </style></head>
+      <body>
+        <div class="banner">Shemford Futuristic School</div>
+        <div class="subtitle">${escapeHtml(title)}</div>
+        <div class="toolbar">
+          <button onclick="window.print()">🖨 Print</button>
+          <button class="alt" id="dl-xls">⬇ Download Excel</button>
+        </div>
+        <script>
+          document.getElementById('dl-xls').addEventListener('click', function () {
+            var tbl = document.querySelector('table').outerHTML;
+            var html = '<html><head><meta charset="utf-8"></head><body>' + tbl + '</body></html>';
+            // Prepend a UTF-8 BOM so Excel decodes non-ASCII correctly (Excel
+            // otherwise falls back to Windows-1252 when reading .xls HTML files).
+            var blob = new Blob(['﻿', html], { type: 'application/vnd.ms-excel' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = '${safeFile}.xls';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function () { URL.revokeObjectURL(url); }, 500);
+          });
+        </script>
+        <div class="meta">Generated: ${escapeHtml(now)} &nbsp;·&nbsp; Total rows: ${rows.length}</div>
+        <div class="wrap"><table>${head}${body}</table></div>
+      </body></html>`;
+    try {
+      w.document.open();
+      w.document.write(html);
+      w.document.close();
+    } catch (_) { /* tab closed during build — ignore */ }
+  }, 0);
 };
 
-const ExportBar = ({ rows, columns, title, filename }) => (
-  <div className="flex items-center gap-1 ml-auto">
-    <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" title="Download Excel"
-      onClick={() => exportExcel(rows, columns, filename, title)}>
-      <FileSpreadsheet className="h-3.5 w-3.5" /><span className="text-xs">Excel</span>
-    </Button>
-    <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" title="Download PDF"
-      onClick={() => exportPDF(rows, columns, title)}>
-      <FileText className="h-3.5 w-3.5" /><span className="text-xs">PDF</span>
-    </Button>
-  </div>
-);
+const ExportBar = ({ apiPath, params, filename, rows, columns, title }) => {
+  const [busy, setBusy] = useState(false);
+  // PDF: open a tab IMMEDIATELY with a splash, fetch the blob, then swap the
+  // tab to the blob URL. The user sees the new tab appear instantly even
+  // though the backend takes a moment to render the PDF.
+  const openPdf = async () => {
+    const w = window.open('', '_blank');
+    if (!w) { toast.error('Pop-up blocked — allow pop-ups to view the report'); return; }
+    w.document.write(PREVIEW_SPLASH); w.document.close();
+    setBusy(true);
+    try {
+      const res = await api.get(`${apiPath}/pdf`, { params, responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      try { w.location.replace(url); } catch (_) { /* tab closed */ }
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (err) {
+      try { w.document.body.innerHTML = `<div style="font-family:Arial;padding:40px;color:#dc2626;text-align:center">Failed to load PDF.</div>`; } catch (_) {}
+      toast.error(err.response?.data?.detail || 'Failed to open PDF');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex items-center gap-1 ml-auto">
+      <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" title="Open Excel preview"
+        disabled={busy} onClick={() => openExcelPreview(rows || [], columns || [], title || 'Report')}>
+        <FileSpreadsheet className="h-3.5 w-3.5" />
+        <span className="text-xs">Excel</span>
+      </Button>
+      <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" title="Open PDF preview"
+        disabled={busy} onClick={openPdf}>
+        {busy
+          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          : <FileText className="h-3.5 w-3.5" />}
+        <span className="text-xs">PDF</span>
+      </Button>
+    </div>
+  );
+};
+
 
 // ─── Shared filter helpers ───────────────────────────────────────────────────
 
@@ -136,41 +242,66 @@ const CollectionReport = ({ classes, sections }) => {
   const [searched, setSearched] = useState(false);
 
   const runFetch = async (f) => {
-    setLoading(true);
-    try {
-      const params = {
-        duration: f.duration,
-        ...(f.duration === 'custom' && { start_date: f.start_date, end_date: f.end_date }),
-        ...(f.class_name && { class_name: f.class_name }),
-        ...(f.section && { section: f.section }),
-        ...(f.fee_type && { fee_type: f.fee_type }),
-        ...(f.payment_method && { payment_method: f.payment_method }),
-      };
-      const res = await api.get('/fees/reports/collection', { params });
-      setRows(Array.isArray(res.data) ? res.data : []);
+    const params = {
+      duration: f.duration,
+      ...(f.duration === 'custom' && { start_date: f.start_date, end_date: f.end_date }),
+      ...(f.class_name && { class_name: f.class_name }),
+      ...(f.section && { section: f.section }),
+      ...(f.fee_type && { fee_type: f.fee_type }),
+      ...(f.payment_method && { payment_method: f.payment_method }),
+    };
+    const cacheKey = 'fees-collection:' + JSON.stringify(params);
+
+    // SWR-style: show cached data instantly, refresh in background
+    const cached = getCached(cacheKey);
+    if (cached) {
+      setRows(cached);
       setSearched(true);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
+
+    try {
+      const res = await api.get('/fees/reports/collection', { params });
+      const data = Array.isArray(res.data) ? res.data : [];
+      setRows(data);
+      setSearched(true);
+      setCached(cacheKey, data);
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to load report');
+      if (!cached) toast.error(err.response?.data?.detail || 'Failed to load report');
     } finally {
       setLoading(false);
     }
   };
 
   const fetchData = useCallback(() => runFetch(filters), [filters]);
+  // Clear Filters → reset to defaults AND show the default (all-time) view
   const clearAndFetch = () => { setFilters(COLLECTION_DEFAULTS); runFetch(COLLECTION_DEFAULTS); };
 
-  // Auto-load with default filters on mount so the report isn't empty by default
-  useEffect(() => { fetchData(); /* eslint-disable-next-line */ }, []);
+  // Auto-load with default filters on mount — instant if cached, otherwise fetches
+  useEffect(() => { runFetch(COLLECTION_DEFAULTS); /* eslint-disable-next-line */ }, []);
+
+  // Build the param object the way the backend expects — used for both fetching
+  // and for the Excel/PDF export URLs.
+  const exportParams = useMemo(() => ({
+    duration: filters.duration,
+    ...(filters.duration === 'custom' && { start_date: filters.start_date, end_date: filters.end_date }),
+    ...(filters.class_name && { class_name: filters.class_name }),
+    ...(filters.section && { section: filters.section }),
+    ...(filters.fee_type && { fee_type: filters.fee_type }),
+    ...(filters.payment_method && { payment_method: filters.payment_method }),
+  }), [filters]);
 
   const columns = useMemo(() => [
     { key: 'admission',       label: 'Admission No',     value: (r) => r.admission_number },
     { key: 'name',            label: 'Student Name',     value: (r) => r.student_name },
     { key: 'mobile',          label: 'Mobile Number',    value: (r) => r.mobile },
-    { key: 'guardian',        label: 'Guardian Name',    value: (r) => r.guardian },
     { key: 'class',           label: 'Class (Section)',  value: (r) => r.class_section },
-    { key: 'payments_count',  label: '# Payments',       value: (r) => r.payments_count },
+    { key: 'fee_types',       label: 'Fees Type',        value: (r) => fmtFeeTypeList(r.fee_types) },
+    { key: 'due_date',        label: 'Due Date',         value: (r) => fmtDate(r.due_date), render: (r) => fmtDate(r.due_date) },
     { key: 'last',            label: 'Last Payment',     value: (r) => fmtDate(r.last_payment_date), render: (r) => fmtDate(r.last_payment_date) },
-    { key: 'total_collected', label: 'Total Paid (₹)',   value: (r) => r.total_collected, render: (r) => inr(r.total_collected) },
+    { key: 'total_collected', label: 'Total Paid (Rs.)',   value: (r) => r.total_collected, render: (r) => inr(r.total_collected) },
   ], []);
 
   const filtered = useMemo(() => {
@@ -275,7 +406,7 @@ const CollectionReport = ({ classes, sections }) => {
                 {totalCount} students · <strong className="text-green-700">{inr(totalPaid)}</strong> collected
               </span>
             )}
-            <ExportBar rows={filtered} columns={columns} title="Fees Collection Report" filename="fees-collection-report" />
+            <ExportBar apiPath="/fees/reports/collection" params={exportParams} filename="fees-collection-report" rows={filtered} columns={columns} title="Fees Collection Report" />
           </div>
 
           <div className="overflow-x-auto">
@@ -289,12 +420,12 @@ const CollectionReport = ({ classes, sections }) => {
                 {loading ? (
                   <TableRow><TableCell colSpan={columns.length} className="text-center py-8"><Loader2 className="h-5 w-5 animate-spin inline" /></TableCell></TableRow>
                 ) : !searched ? (
-                  <TableRow><TableCell colSpan={columns.length} className="text-center text-muted-foreground py-8">Loading…</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={columns.length} className="text-center text-muted-foreground py-8">Select filters and click <span className="font-semibold">Search</span> to load the report.</TableCell></TableRow>
                 ) : filtered.length === 0 ? (
                   <TableRow><TableCell colSpan={columns.length} className="text-center py-8">
                     <div className="text-pink-500">No data available in table</div>
                     <div className="text-xs text-muted-foreground mt-2">
-                      No paid fee entries match the selected filters. Try widening the duration or clearing Class / Section / Fees Type / Payment Method.
+                      No data available.
                     </div>
                   </TableCell></TableRow>
                 ) : filtered.map((r, i) => (
@@ -323,18 +454,31 @@ const DueReport = ({ classes, sections }) => {
   const [searched, setSearched] = useState(false);
 
   const runFetch = async (f) => {
-    setLoading(true);
-    try {
-      const params = {};
-      if (f.class_name) params.class_name = f.class_name;
-      if (f.section) params.section = f.section;
-      if (f.fee_type) params.fee_type = f.fee_type;
-      if (f.as_of_date) params.as_of_date = f.as_of_date;
-      const res = await api.get('/fees/reports/due', { params });
-      setRows(Array.isArray(res.data) ? res.data : []);
+    const params = {};
+    if (f.class_name) params.class_name = f.class_name;
+    if (f.section) params.section = f.section;
+    if (f.fee_type) params.fee_type = f.fee_type;
+    if (f.as_of_date) params.as_of_date = f.as_of_date;
+    const cacheKey = 'fees-due:' + JSON.stringify(params);
+
+    // SWR-style: show cached data instantly, refresh in background
+    const cached = getCached(cacheKey);
+    if (cached) {
+      setRows(cached);
       setSearched(true);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
+
+    try {
+      const res = await api.get('/fees/reports/due', { params });
+      const data = Array.isArray(res.data) ? res.data : [];
+      setRows(data);
+      setSearched(true);
+      setCached(cacheKey, data);
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to load report');
+      if (!cached) toast.error(err.response?.data?.detail || 'Failed to load report');
     } finally {
       setLoading(false);
     }
@@ -342,19 +486,28 @@ const DueReport = ({ classes, sections }) => {
   const fetchData = useCallback(() => runFetch(filters), [filters]);
   const clearAndFetch = () => { setFilters(DUE_DEFAULTS); runFetch(DUE_DEFAULTS); };
 
-  useEffect(() => { fetchData(); /* eslint-disable-next-line */ }, []);
+  // Auto-load with default filters on mount
+  useEffect(() => { runFetch(DUE_DEFAULTS); /* eslint-disable-next-line */ }, []);
+
+  const exportParams = useMemo(() => {
+    const p = {};
+    if (filters.class_name) p.class_name = filters.class_name;
+    if (filters.section) p.section = filters.section;
+    if (filters.fee_type) p.fee_type = filters.fee_type;
+    if (filters.as_of_date) p.as_of_date = filters.as_of_date;
+    return p;
+  }, [filters]);
 
   const columns = useMemo(() => [
     { key: 'admission', label: 'Admission No',    value: (r) => r.admission_number },
     { key: 'name',      label: 'Student Name',    value: (r) => r.student_name },
     { key: 'mobile',    label: 'Mobile Number',   value: (r) => r.mobile },
-    { key: 'guardian',  label: 'Guardian Name',   value: (r) => r.guardian },
     { key: 'class',     label: 'Class (Section)', value: (r) => r.class_section },
-    { key: 'pending',   label: '# Pending',       value: (r) => r.entries_pending },
+    { key: 'fee_types', label: 'Fees Type',       value: (r) => fmtFeeTypeList(r.fee_types) },
     { key: 'oldest',    label: 'Oldest Due',      value: (r) => fmtDate(r.oldest_due), render: (r) => fmtDate(r.oldest_due) },
-    { key: 'amount',    label: 'Amount (₹)',      value: (r) => r.amount,  render: (r) => inr(r.amount) },
-    { key: 'paid',      label: 'Paid (₹)',        value: (r) => r.paid,    render: (r) => inr(r.paid) },
-    { key: 'balance',   label: 'Balance (₹)',     value: (r) => r.balance, render: (r) => inr(r.balance) },
+    { key: 'amount',    label: 'Amount (Rs.)',      value: (r) => r.amount,  render: (r) => inr(r.amount) },
+    { key: 'paid',      label: 'Paid (Rs.)',        value: (r) => r.paid,    render: (r) => inr(r.paid) },
+    { key: 'balance',   label: 'Balance (Rs.)',     value: (r) => r.balance, render: (r) => inr(r.balance) },
   ], []);
 
   const filtered = useMemo(() => {
@@ -427,7 +580,7 @@ const DueReport = ({ classes, sections }) => {
             {searched && filtered.length > 0 && (
               <span className="text-xs text-muted-foreground">Total balance: <strong className="text-red-600">{inr(totalBalance)}</strong></span>
             )}
-            <ExportBar rows={filtered} columns={columns} title="Due Fees Report" filename="due-fees-report" />
+            <ExportBar apiPath="/fees/reports/due" params={exportParams} filename="due-fees-report" rows={filtered} columns={columns} title="Due Fees Report" />
           </div>
 
           <div className="overflow-x-auto">
@@ -441,7 +594,7 @@ const DueReport = ({ classes, sections }) => {
                 {loading ? (
                   <TableRow><TableCell colSpan={columns.length} className="text-center py-8"><Loader2 className="h-5 w-5 animate-spin inline" /></TableCell></TableRow>
                 ) : !searched ? (
-                  <TableRow><TableCell colSpan={columns.length} className="text-center text-muted-foreground py-8">Loading…</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={columns.length} className="text-center text-muted-foreground py-8">Select filters and click <span className="font-semibold">Search</span> to load the report.</TableCell></TableRow>
                 ) : filtered.length === 0 ? (
                   <TableRow><TableCell colSpan={columns.length} className="text-center text-pink-500 py-8">No data available in table</TableCell></TableRow>
                 ) : filtered.map((r, i) => (

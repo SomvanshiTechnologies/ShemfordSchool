@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../lib/api';
+import { previewInTab } from '../lib/preview';
 import { getCached, setCached } from '../lib/pageCache';
 import { currentAcademicYear } from '../lib/academicYear';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -926,16 +927,12 @@ const MarksPage = () => {
                   <Button variant="outline" className="rounded-xl text-xs" onClick={() => window.print()} data-testid="print-marksheet-btn">
                     <Download className="h-4 w-4 mr-2" strokeWidth={1.5} /> Print
                   </Button>
-                  <Button className="bg-slate-900 text-white hover:bg-slate-800 rounded-xl text-xs" onClick={async () => {
-                    try {
-                      const pdfParams = (marksheetYear && marksheetYear !== 'all') ? { academic_year: marksheetYear } : {};
-                      const res = await api.get(`/marks/marksheet/${marksheetStudentId}/pdf`, { params: pdfParams, responseType: 'blob' });
-                      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
-                      const a = document.createElement('a');
-                      a.href = url; a.download = `marksheet-${marksheetStudentId}.pdf`;
-                      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-                      URL.revokeObjectURL(url);
-                    } catch { toast.error('Failed to download marksheet'); }
+                  <Button className="bg-slate-900 text-white hover:bg-slate-800 rounded-xl text-xs" onClick={() => {
+                    const pdfParams = (marksheetYear && marksheetYear !== 'all') ? { academic_year: marksheetYear } : {};
+                    return previewInTab(
+                      () => api.get(`/marks/marksheet/${marksheetStudentId}/pdf`, { params: pdfParams, responseType: 'blob' }),
+                      { kind: 'pdf', errorMessage: 'Failed to load marksheet' },
+                    );
                   }} data-testid="download-marksheet-pdf">
                     <Download className="h-4 w-4 mr-2" strokeWidth={1.5} /> PDF
                   </Button>

@@ -460,7 +460,7 @@ async def list_fee_component_configs(
 @router.post("/fees/components")
 async def create_fee_component_config(request: Request):
     """Create or replace fee component config for a class+stream+year."""
-    user = await require_roles(UserRole.ADMIN)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     body = await request.json()
 
     academic_year = body.get("academic_year", current_academic_year())
@@ -514,7 +514,7 @@ async def create_fee_component_config(request: Request):
 
 @router.put("/fees/components/{config_id}")
 async def update_fee_component_config(config_id: str, request: Request):
-    user = await require_roles(UserRole.ADMIN)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     body = await request.json()
 
     cfg = await db.fee_component_configs.find_one({"config_id": config_id}, {"_id": 0})
@@ -545,7 +545,7 @@ async def apply_annual_increase(request: Request):
     Apply a percentage increase to all fee amounts for a given academic year,
     creating new configs for the next session.
     """
-    user = await require_roles(UserRole.ADMIN)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     body = await request.json()
 
     from_year = body.get("from_year", current_academic_year())
@@ -608,7 +608,7 @@ async def ensure_default_fee_configs(request: Request):
     If missing, creates them from default seed data.
     Useful when upgrading or fixing missing fee configs.
     """
-    user = await require_roles(UserRole.ADMIN)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     academic_year = current_academic_year()
     
     # Default fee configuration values (from seed_fee_structure_2025_26.py)
@@ -1223,6 +1223,7 @@ async def get_due_chart(request: Request, class_name: Optional[str] = None, sear
     students = await db.students.find(student_query, {
         "_id": 0, "student_id": 1, "first_name": 1, "last_name": 1,
         "class_name": 1, "section": 1, "stream": 1, "admission_number": 1, "fee_status": 1,
+        "phone": 1,
     }).to_list(5000)
 
     student_map = {s["student_id"]: s for s in students}
@@ -1238,6 +1239,7 @@ async def get_due_chart(request: Request, class_name: Optional[str] = None, sear
             "class_name":       s["class_name"],
             "section":          s["section"],
             "stream":           s.get("stream"),
+            "mobile":           s.get("phone", ""),
             "total_due":        round(row["total_due"], 2),
             "entries_pending":  row["entries_pending"],
             "entries_overdue":  row["entries_overdue"],
@@ -1297,7 +1299,7 @@ async def refresh_all_overdue(request: Request):
 
 @router.post("/fees/concession")
 async def apply_concession(request: Request):
-    user = await require_roles(UserRole.ADMIN)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     body = await request.json()
 
     student_id = body.get("student_id")
@@ -1466,7 +1468,7 @@ async def download_receipt_pdf(payment_id: str, request: Request):
     elements.append(info_table)
     elements.append(Spacer(1, 12))
 
-    fee_data = [["Description", "Fee Type", "Gross (₹)", "Discount (₹)", "Late Fee (₹)", "Net (₹)"]]
+    fee_data = [["Description", "Fee Type", "Gross (Rs.)", "Discount (Rs.)", "Late Fee (Rs.)", "Net (Rs.)"]]
     for e in entries:
         fee_data.append([
             e.get("description", ""),
@@ -1689,15 +1691,28 @@ async def report_fees_collection(
     fee_type: Optional[str] = None,
     payment_method: Optional[str] = None,
     student_id: Optional[str] = None,
-    rollup: str = "monthly",  # monthly | yearly
+    rollup: str = "monthly",
 ):
-    """
-    Fees Collection Report — period rollup (monthly or yearly).
-    Each returned row is one period summarising collections that happened in it.
-    Filters narrow which payments contribute to the rollup.
-    """
+    """Fees Collection Report — JSON for the dashboard."""
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    return await _collect_report_rows(
+        duration=duration, start_date=start_date, end_date=end_date,
+        class_name=class_name, section=section, fee_type=fee_type,
+        payment_method=payment_method, student_id=student_id,
+    )
 
+
+async def _collect_report_rows(
+    duration: str = "today",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    class_name: Optional[str] = None,
+    section: Optional[str] = None,
+    fee_type: Optional[str] = None,
+    payment_method: Optional[str] = None,
+    student_id: Optional[str] = None,
+) -> list:
+    """Internal: shared query body used by JSON, PDF, and Excel report endpoints."""
     pay_query: dict = {}
     if duration != "all_time":
         range_start, range_end = _duration_range(duration, start_date, end_date)
@@ -1771,10 +1786,20 @@ async def report_fees_collection(
             "mobile":           s.get("parent_phone") or s.get("phone") or "",
             "guardian":         s.get("parent_name", "") or "",
             "class_section":    f"{s.get('class_name','')}{(' (' + s.get('section') + ')') if s.get('section') else ''}",
+            "fee_types":        set(),
             "payments_count":   0,
             "total_collected":  0.0,
             "last_payment_date": None,
+            "due_date":         None,
         })
+        for e in linked:
+            ft = e.get("fee_type")
+            if ft:
+                agg["fee_types"].add(str(ft))
+            # Latest due_date among the ledger entries this student has paid against
+            d = e.get("due_date")
+            if d and (agg["due_date"] is None or d > agg["due_date"]):
+                agg["due_date"] = d
         agg["payments_count"] += 1
         agg["total_collected"] += contribution
         pd = str(p.get("payment_date", ""))[:10]
@@ -1784,6 +1809,7 @@ async def report_fees_collection(
     rows = []
     for agg in per_student.values():
         agg["total_collected"] = round(agg["total_collected"], 2)
+        agg["fee_types"] = ", ".join(sorted(agg["fee_types"]))
         rows.append(agg)
     rows.sort(key=lambda r: r["total_collected"], reverse=True)
     return rows
@@ -1798,11 +1824,22 @@ async def report_fees_due(
     as_of_date: Optional[str] = None,
     student_id: Optional[str] = None,
 ):
-    """
-    Due Fees Report — one row per unpaid (pending / overdue / partially-paid) ledger entry.
-    """
+    """Due Fees Report — JSON for the dashboard."""
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    return await _due_report_rows(
+        class_name=class_name, section=section, fee_type=fee_type,
+        as_of_date=as_of_date, student_id=student_id,
+    )
 
+
+async def _due_report_rows(
+    class_name: Optional[str] = None,
+    section: Optional[str] = None,
+    fee_type: Optional[str] = None,
+    as_of_date: Optional[str] = None,
+    student_id: Optional[str] = None,
+) -> list:
+    """Internal: shared query body for JSON, PDF, and Excel due-report endpoints."""
     ledger_query: dict = {"status": {"$in": ["pending", "overdue", "partially_paid"]}}
     if as_of_date:
         ledger_query["due_date"] = {"$lte": as_of_date}
@@ -1853,12 +1890,16 @@ async def report_fees_due(
             "mobile":           s.get("parent_phone") or s.get("phone") or "",
             "guardian":         s.get("parent_name", "") or "",
             "class_section":    f"{s.get('class_name','')}{(' (' + s.get('section') + ')') if s.get('section') else ''}",
+            "fee_types":        set(),
             "amount":           0.0,
             "paid":             0.0,
             "balance":          0.0,
             "entries_pending":  0,
             "oldest_due":       None,
         })
+        ft = e.get("fee_type")
+        if ft:
+            agg["fee_types"].add(str(ft))
         agg["amount"]  += net
         agg["paid"]    += paid
         agg["balance"] += remaining
@@ -1867,12 +1908,368 @@ async def report_fees_due(
         if d and (agg["oldest_due"] is None or d < agg["oldest_due"]):
             agg["oldest_due"] = d
 
+    # Overwrite "paid" with the student's actual total payments. The per-entry
+    # `amount_paid` is only non-zero for partially-paid rows (most entries are
+    # either fully paid (excluded) or fully unpaid), which made the column
+    # show 0 for everyone. Aggregate from fee_payments so it reflects what the
+    # student has actually paid in.
+    if per_student:
+        appearing_ids = list(per_student.keys())
+        pay_agg = await db.fee_payments.aggregate([
+            {"$match": {"student_id": {"$in": appearing_ids}}},
+            {"$group": {"_id": "$student_id", "total_paid": {"$sum": "$amount"}}},
+        ]).to_list(len(appearing_ids))
+        paid_by_student = {r["_id"]: float(r.get("total_paid", 0)) for r in pay_agg}
+        for sid, agg in per_student.items():
+            agg["paid"] = paid_by_student.get(sid, 0.0)
+
     rows = []
     for sid, agg in per_student.items():
         agg["amount"]  = round(agg["amount"], 2)
         agg["paid"]    = round(agg["paid"], 2)
         agg["balance"] = round(agg["balance"], 2)
+        agg["fee_types"] = ", ".join(sorted(agg["fee_types"]))
         rows.append(agg)
 
     rows.sort(key=lambda r: r["balance"], reverse=True)
     return rows
+
+
+# ── Report exports: PDF + Excel ──────────────────────────────────────────────
+
+_FEE_TYPE_LABELS = {"one_time": "One Time", "monthly": "Monthly", "yearly": "Yearly"}
+
+
+def _fmt_fee_types(v) -> str:
+    if not v:
+        return "—"
+    parts = [p.strip() for p in str(v).split(",") if p.strip()]
+    return ", ".join(_FEE_TYPE_LABELS.get(p, p) for p in parts) if parts else "—"
+
+
+def _fmt_inr(v) -> str:
+    # Reportlab's default Helvetica has no ₹ glyph → PDF viewers show a tofu box.
+    # `Rs.` is the universally-rendered fallback used across Indian admin software.
+    try:
+        return f"Rs. {float(v):,.2f}"
+    except Exception:
+        return str(v) if v not in (None, "") else "—"
+
+
+def _fmt_str(v) -> str:
+    return str(v) if v not in (None, "") else "—"
+
+
+def _fmt_date(v) -> str:
+    """Convert backend's YYYY-MM-DD into DD-MM-YYYY for display."""
+    if not v:
+        return "—"
+    s = str(v)
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+        return f"{s[8:10]}-{s[5:7]}-{s[0:4]}"
+    return s
+
+
+# Columns used in PDF + Excel exports. Each: (header, row-key, formatter, align)
+# align: 'L' = left (default), 'R' = right (numbers/amounts), 'C' = center.
+COLLECTION_EXPORT_COLUMNS = [
+    ("Admission No",     "admission_number",  _fmt_str,        "L"),
+    ("Student Name",     "student_name",      _fmt_str,        "L"),
+    ("Mobile",           "mobile",            _fmt_str,        "L"),
+    ("Class (Section)",  "class_section",     _fmt_str,        "L"),
+    ("Fees Type",        "fee_types",         _fmt_fee_types,  "L"),
+    ("Due Date",         "due_date",          _fmt_date,       "C"),
+    ("Last Payment",     "last_payment_date", _fmt_date,       "C"),
+    ("Total Paid (Rs.)", "total_collected",   _fmt_inr,        "R"),
+]
+
+DUE_EXPORT_COLUMNS = [
+    ("Admission No",     "admission_number",  _fmt_str,        "L"),
+    ("Student Name",     "student_name",      _fmt_str,        "L"),
+    ("Mobile",           "mobile",            _fmt_str,        "L"),
+    ("Class (Section)",  "class_section",     _fmt_str,        "L"),
+    ("Fees Type",        "fee_types",         _fmt_fee_types,  "L"),
+    ("Oldest Due",       "oldest_due",        _fmt_date,       "C"),
+    ("Amount (Rs.)",     "amount",            _fmt_inr,        "R"),
+    ("Paid (Rs.)",       "paid",              _fmt_inr,        "R"),
+    ("Balance (Rs.)",    "balance",           _fmt_inr,        "R"),
+]
+
+
+# Theme — matches the orange accent used elsewhere in the UI
+SCHOOL_NAME = "Shemford Futuristic School"
+ACCENT_HEX  = "#E88A1A"
+HEADER_BG   = "#0F172A"  # dark slate to mirror the sidebar header
+HEADER_FG   = "#FFFFFF"
+ZEBRA_HEX   = "#F8FAFC"
+
+
+def _build_excel(title: str, columns: list, rows: list) -> io.BytesIO:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = title[:31] or "Report"
+
+    headers = [c[0] for c in columns]
+    aligns  = [c[3] if len(c) > 3 else "L" for c in columns]
+    ncols   = len(columns)
+
+    # Row 1: School name banner
+    ws.cell(row=1, column=1, value=SCHOOL_NAME)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
+    ws["A1"].font      = Font(bold=True, color="FFFFFF", size=14)
+    ws["A1"].fill      = PatternFill("solid", fgColor=HEADER_BG.lstrip("#"))
+    ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 26
+
+    # Row 2: Report title
+    ws.cell(row=2, column=1, value=title)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncols)
+    ws["A2"].font      = Font(bold=True, color="FFFFFF", size=11)
+    ws["A2"].fill      = PatternFill("solid", fgColor=ACCENT_HEX.lstrip("#"))
+    ws["A2"].alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[2].height = 20
+
+    # Row 3: Generated on
+    ws.cell(row=3, column=1, value=f"Generated: {datetime.now().strftime('%d %b %Y, %I:%M %p')}     Total rows: {len(rows)}")
+    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=ncols)
+    ws["A3"].font      = Font(italic=True, color="475569", size=9)
+    ws["A3"].alignment = Alignment(horizontal="right")
+
+    # Row 4: Column headers
+    head_fill = PatternFill("solid", fgColor="E2E8F0")
+    head_font = Font(bold=True, color="0F172A", size=10)
+    thin = Side(border_style="thin", color="CBD5E1")
+    header_row_idx = 4
+    for i, h in enumerate(headers, start=1):
+        cell = ws.cell(row=header_row_idx, column=i, value=h)
+        cell.font = head_font
+        cell.fill = head_fill
+        cell.alignment = Alignment(horizontal={"L": "left", "R": "right", "C": "center"}[aligns[i - 1]], vertical="center")
+        cell.border = Border(top=thin, bottom=thin, left=thin, right=thin)
+    ws.row_dimensions[header_row_idx].height = 22
+
+    # Data rows
+    body_font = Font(size=10, color="0F172A")
+    zebra_fill = PatternFill("solid", fgColor=ZEBRA_HEX.lstrip("#"))
+    for ridx, r in enumerate(rows, start=header_row_idx + 1):
+        for i, (_, key, fmt, *_rest) in enumerate(columns, start=1):
+            cell = ws.cell(row=ridx, column=i, value=fmt(r.get(key)))
+            cell.font = body_font
+            cell.alignment = Alignment(horizontal={"L": "left", "R": "right", "C": "center"}[aligns[i - 1]], vertical="center")
+            cell.border = Border(top=thin, bottom=thin, left=thin, right=thin)
+            if ridx % 2 == 0:
+                cell.fill = zebra_fill
+
+    # Column widths — measured from data, capped
+    for i in range(1, ncols + 1):
+        col_letter = ws.cell(row=header_row_idx, column=i).column_letter
+        max_len = len(str(headers[i - 1]))
+        for ridx in range(header_row_idx + 1, header_row_idx + 1 + len(rows)):
+            v = ws.cell(row=ridx, column=i).value
+            if v is not None:
+                max_len = max(max_len, len(str(v)))
+        ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 38)
+
+    # Freeze the header so column titles stay visible while scrolling
+    ws.freeze_panes = ws.cell(row=header_row_idx + 1, column=1)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+PDF_ROW_CAP = 500
+
+
+def _build_pdf(title: str, columns: list, rows: list) -> io.BytesIO:
+    from reportlab.lib.pagesizes import landscape
+
+    total_rows = len(rows)
+    truncated = total_rows > PDF_ROW_CAP
+    rows = rows[:PDF_ROW_CAP] if truncated else rows
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(A4),
+        leftMargin=0.35 * inch, rightMargin=0.35 * inch,
+        topMargin=0.4 * inch, bottomMargin=0.4 * inch,
+        title=title,
+    )
+    styles = getSampleStyleSheet()
+
+    school_style = ParagraphStyle(
+        "School", parent=styles["Heading1"],
+        alignment=TA_CENTER, fontSize=18, textColor=colors.HexColor(HEADER_BG),
+        spaceAfter=2, leading=20,
+    )
+    title_style = ParagraphStyle(
+        "Title", parent=styles["Heading2"],
+        alignment=TA_CENTER, fontSize=12, textColor=colors.HexColor(ACCENT_HEX),
+        spaceAfter=4, leading=14,
+    )
+    meta_style = ParagraphStyle(
+        "Meta", parent=styles["Normal"],
+        alignment=TA_LEFT, fontSize=8, textColor=colors.HexColor("#64748b"),
+        spaceAfter=8,
+    )
+    foot_style = ParagraphStyle(
+        "Foot", parent=styles["Normal"],
+        alignment=TA_CENTER, fontSize=7, textColor=colors.HexColor("#94a3b8"),
+    )
+
+    meta_text = (
+        f"Generated: {datetime.now().strftime('%d %b %Y, %I:%M %p')}  ·  "
+        f"Showing {len(rows)} of {total_rows} rows" if truncated else
+        f"Generated: {datetime.now().strftime('%d %b %Y, %I:%M %p')}  ·  Total rows: {total_rows}"
+    )
+
+    elements = [
+        Paragraph(SCHOOL_NAME, school_style),
+        Paragraph(title, title_style),
+        Paragraph(meta_text, meta_style),
+    ]
+
+    # Build the data grid
+    data = [[c[0] for c in columns]]
+    for r in rows:
+        data.append([fmt(r.get(key)) for (_, key, fmt, *_rest) in columns])
+
+    # Column-level alignment for the table
+    align_map = {"L": "LEFT", "R": "RIGHT", "C": "CENTER"}
+    style_cmds = [
+        ("BACKGROUND",   (0, 0), (-1, 0), colors.HexColor(HEADER_BG)),
+        ("TEXTCOLOR",    (0, 0), (-1, 0), colors.HexColor(HEADER_FG)),
+        ("FONTNAME",     (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE",     (0, 0), (-1, 0), 8.5),
+        ("FONTSIZE",     (0, 1), (-1, -1), 7.5),
+        ("GRID",         (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+        ("VALIGN",       (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING",  (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING",   (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING",(0, 0), (-1, -1), 4),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor(ZEBRA_HEX)]),
+    ]
+    for col_idx, c in enumerate(columns):
+        align = c[3] if len(c) > 3 else "L"
+        style_cmds.append(("ALIGN", (col_idx, 0), (col_idx, -1), align_map[align]))
+
+    tbl = Table(data, repeatRows=1)
+    tbl.setStyle(TableStyle(style_cmds))
+    elements.append(tbl)
+
+    elements.append(Spacer(1, 10))
+    elements.append(Paragraph(
+        "Computer-generated report. For queries, contact the school accounts office.",
+        foot_style,
+    ))
+
+    doc.build(elements)
+    buf.seek(0)
+    return buf
+
+
+def _today_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+@router.get("/fees/reports/collection/excel")
+async def export_collection_excel(
+    request: Request,
+    duration: str = "today",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    class_name: Optional[str] = None,
+    section: Optional[str] = None,
+    fee_type: Optional[str] = None,
+    payment_method: Optional[str] = None,
+    student_id: Optional[str] = None,
+):
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    rows = await _collect_report_rows(
+        duration=duration, start_date=start_date, end_date=end_date,
+        class_name=class_name, section=section, fee_type=fee_type,
+        payment_method=payment_method, student_id=student_id,
+    )
+    buf = _build_excel("Fees Collection Report", COLLECTION_EXPORT_COLUMNS, rows)
+    filename = f"fees-collection-{_today_str()}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.get("/fees/reports/collection/pdf")
+async def export_collection_pdf(
+    request: Request,
+    duration: str = "today",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    class_name: Optional[str] = None,
+    section: Optional[str] = None,
+    fee_type: Optional[str] = None,
+    payment_method: Optional[str] = None,
+    student_id: Optional[str] = None,
+):
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    rows = await _collect_report_rows(
+        duration=duration, start_date=start_date, end_date=end_date,
+        class_name=class_name, section=section, fee_type=fee_type,
+        payment_method=payment_method, student_id=student_id,
+    )
+    buf = _build_pdf("Fees Collection Report", COLLECTION_EXPORT_COLUMNS, rows)
+    filename = f"fees-collection-{_today_str()}.pdf"
+    return StreamingResponse(
+        buf, media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.get("/fees/reports/due/excel")
+async def export_due_excel(
+    request: Request,
+    class_name: Optional[str] = None,
+    section: Optional[str] = None,
+    fee_type: Optional[str] = None,
+    as_of_date: Optional[str] = None,
+    student_id: Optional[str] = None,
+):
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    rows = await _due_report_rows(
+        class_name=class_name, section=section, fee_type=fee_type,
+        as_of_date=as_of_date, student_id=student_id,
+    )
+    buf = _build_excel("Due Fees Report", DUE_EXPORT_COLUMNS, rows)
+    filename = f"fees-due-{_today_str()}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.get("/fees/reports/due/pdf")
+async def export_due_pdf(
+    request: Request,
+    class_name: Optional[str] = None,
+    section: Optional[str] = None,
+    fee_type: Optional[str] = None,
+    as_of_date: Optional[str] = None,
+    student_id: Optional[str] = None,
+):
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    rows = await _due_report_rows(
+        class_name=class_name, section=section, fee_type=fee_type,
+        as_of_date=as_of_date, student_id=student_id,
+    )
+    buf = _build_pdf("Due Fees Report", DUE_EXPORT_COLUMNS, rows)
+    filename = f"fees-due-{_today_str()}.pdf"
+    return StreamingResponse(
+        buf, media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
