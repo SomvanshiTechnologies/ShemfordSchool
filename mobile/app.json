@@ -28,7 +28,14 @@
       "usesCleartextTraffic": true
     },
     "plugins": [
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Allow Shemford School to access your microphone to record voice notes in Messages."
+        }
+      ],
+      "expo-sharing"
     ]
   }
 }

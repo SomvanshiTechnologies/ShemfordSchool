@@ -28,8 +28,8 @@ const MoreScreen = ({ navigation }) => {
     ...((isStudent) ? [] : [
       { icon: 'chatbubble-outline',   tint: 'blue',    title: 'Messages', desc: 'Parent communication',  screen: 'Messages' },
     ]),
-    { icon: 'book-outline',           tint: 'cyan',    title: 'Syllabus', desc: 'Study materials',       screen: null },
-    { icon: 'alert-circle-outline',   tint: 'red',     title: 'Issues',   desc: 'Report a concern',      screen: null },
+    { icon: 'book-outline',           tint: 'cyan',    title: 'Syllabus', desc: 'Study materials',       screen: 'Syllabus' },
+    { icon: 'alert-circle-outline',   tint: 'red',     title: 'Issues',   desc: 'Report a concern',      screen: 'Issues' },
   ];
 
   const handleLogout = () => {

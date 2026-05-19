@@ -47,9 +47,14 @@ export function useVoiceRecorder() {
   const startRecording = useCallback(async () => {
     setMicError(null);
     try {
-      const { granted } = await Audio.requestPermissionsAsync();
+      const { granted, canAskAgain, status } = await Audio.requestPermissionsAsync();
       if (!granted) {
-        setMicError('Microphone permission denied. Enable it in Settings.');
+        setMicError(
+          canAskAgain
+            ? 'Microphone permission denied. Tap mic again to allow.'
+            : 'Microphone blocked. Enable it for this app in Settings.'
+        );
+        console.warn('[voice] permission not granted', { status, canAskAgain });
         return false;
       }
       await Audio.setAudioModeAsync({
@@ -68,7 +73,10 @@ export function useVoiceRecorder() {
       }, 250);
       return true;
     } catch (err) {
-      setMicError('Could not start recording. Check microphone access.');
+      const detail = err?.message || String(err);
+      // Surface the real cause so users (and devs) can act on it.
+      setMicError(`Could not start recording: ${detail}`);
+      console.warn('[voice] startRecording failed', err);
       return false;
     }
   }, []);
@@ -249,27 +257,42 @@ export const HoldToRecordButton = ({ onStart, onStop, disabled }) => {
   const scale = useRef(new Animated.Value(1)).current;
   const [held, setHeld] = useState(false);
 
-  const pressIn = useCallback(async () => {
-    if (disabled) return;
-    const started = await onStart();
-    if (started === false) return;
-    setHeld(true);
-    Animated.spring(scale, { toValue: 1.25, useNativeDriver: true }).start();
-  }, [disabled, onStart, scale]);
+  // Refs holding the latest callbacks and state, so the PanResponder (created
+  // once) never reads stale closures of onStart/onStop/held/disabled.
+  const heldRef = useRef(false);
+  const disabledRef = useRef(disabled);
+  const onStartRef = useRef(onStart);
+  const onStopRef = useRef(onStop);
 
-  const pressOut = useCallback(async () => {
-    if (!held) return;
-    Animated.spring(scale, { toValue: 1, useNativeDriver: true }).start();
-    setHeld(false);
-    await onStop();
-  }, [held, onStop, scale]);
+  useEffect(() => { disabledRef.current = disabled; }, [disabled]);
+  useEffect(() => { onStartRef.current = onStart; }, [onStart]);
+  useEffect(() => { onStopRef.current = onStop; }, [onStop]);
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
-      onPanResponderGrant: pressIn,
-      onPanResponderRelease: pressOut,
-      onPanResponderTerminate: pressOut,
+      onPanResponderGrant: async () => {
+        if (disabledRef.current) return;
+        const started = await onStartRef.current?.();
+        if (started === false) return;
+        heldRef.current = true;
+        setHeld(true);
+        Animated.spring(scale, { toValue: 1.25, useNativeDriver: true }).start();
+      },
+      onPanResponderRelease: async () => {
+        if (!heldRef.current) return;
+        heldRef.current = false;
+        Animated.spring(scale, { toValue: 1, useNativeDriver: true }).start();
+        setHeld(false);
+        await onStopRef.current?.();
+      },
+      onPanResponderTerminate: async () => {
+        if (!heldRef.current) return;
+        heldRef.current = false;
+        Animated.spring(scale, { toValue: 1, useNativeDriver: true }).start();
+        setHeld(false);
+        await onStopRef.current?.();
+      },
     }),
   ).current;
 

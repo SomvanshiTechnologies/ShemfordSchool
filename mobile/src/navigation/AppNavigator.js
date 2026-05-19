@@ -7,6 +7,8 @@ import { RoleTabs } from './TabNavigator';
 import ReportsScreen from '../screens/ReportsScreen';
 import NoticesScreen from '../screens/NoticesScreen';
 import MessagesScreen from '../screens/MessagesScreen';
+import IssuesScreen from '../screens/IssuesScreen';
+import SyllabusScreen from '../screens/SyllabusScreen';
 import { ScreenLoader } from '../components/LoadingSkeleton';
 import { View } from 'react-native';
 import { COLORS } from '../theme/colors';
@@ -45,6 +47,8 @@ const AppNavigator = () => {
                 (admin, teacher), navigation bubbles up to these stack screens instead. */}
             <Stack.Screen name="Notices"  component={NoticesScreen}  options={detailHeader('Notices')} />
             <Stack.Screen name="Messages" component={MessagesScreen} options={detailHeader('Messages')} />
+            <Stack.Screen name="Issues"   component={IssuesScreen}   options={detailHeader('Issues')} />
+            <Stack.Screen name="Syllabus" component={SyllabusScreen} options={detailHeader('Syllabus')} />
           </>
         ) : (
           <Stack.Screen name="Login" component={LoginScreen} />
