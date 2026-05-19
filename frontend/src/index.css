@@ -167,7 +167,7 @@ html, body { overflow-x: hidden; max-width: 100vw; }
 /* ── Print ── */
 @media print {
     .no-print { display: none !important; }
-    body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    * { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 }
 
 /* ── Animations ── */

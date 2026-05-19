@@ -62,8 +62,8 @@ const AnnouncementsPage = () => {
 
   const handleEditSave = async () => {
     if (!editTarget) return;
-    if (!editForm.title.trim() || !editForm.content.trim()) {
-      toast.error('Title and content are required');
+    if (!editForm.title.trim()) {
+      toast.error('Title is required');
       return;
     }
     setEditing(true);
@@ -440,13 +440,12 @@ const AnnouncementsPage = () => {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Content *</Label>
+                    <Label>Content</Label>
                     <Textarea
                       value={formData.content}
                       onChange={(e) => setFormData({...formData, content: e.target.value})}
                       placeholder="Write your announcement..."
                       rows={4}
-                      required
                       data-testid="announcement-content"
                     />
                   </div>

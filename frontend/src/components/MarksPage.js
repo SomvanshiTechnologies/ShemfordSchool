@@ -72,6 +72,9 @@ const MarksPage = () => {
   const [marksheetData, setMarksheetData] = useState(null);
   const [marksheetStudents, setMarksheetStudents] = useState([]);
   const [marksheetSearch, setMarksheetSearch] = useState('');
+  const [marksheetSearchResults, setMarksheetSearchResults] = useState([]);
+  const [marksheetSearchLoading, setMarksheetSearchLoading] = useState(false);
+  const [marksheetYear, setMarksheetYear] = useState('all');
 
   useEffect(() => {
     // SWR: show cached data immediately, then refresh in background
@@ -93,6 +96,22 @@ const MarksPage = () => {
     }).catch(() => {});
   }, []);
 
+  // Debounced server-side search for the marksheet student picker
+  useEffect(() => {
+    if (!showMarksheetDialog || !canEditMarks) return;
+    if (marksheetSearch.length < 2) { setMarksheetSearchResults([]); return; }
+    const timer = setTimeout(async () => {
+      try {
+        setMarksheetSearchLoading(true);
+        const res = await api.get('/students', { params: { search: marksheetSearch, limit: 30 } });
+        const arr = Array.isArray(res.data) ? res.data : (res.data?.students ?? []);
+        setMarksheetSearchResults(arr);
+      } catch { setMarksheetSearchResults([]); }
+      finally { setMarksheetSearchLoading(false); }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [marksheetSearch, showMarksheetDialog, canEditMarks]);
+
   const refreshExams = async () => {
     try {
       const res = await api.get('/exams');
@@ -105,30 +124,27 @@ const MarksPage = () => {
     setMarksheetData(null);
     setMarksheetStudentId('');
     setMarksheetSearch('');
-    // Use cache if available — gives instant list
-    const cached = getCached('marks:student-list');
-    if (cached) setMarksheetStudents(cached);
-    try {
-      const res = await api.get('/students');
-      const arr = Array.isArray(res.data) ? res.data : (res.data?.students ?? []);
-      setMarksheetStudents(arr);
-      setCached('marks:student-list', arr);
-      // Students only have themselves in the list — auto-load their marksheet
-      // straight into the preview so they don't have to type their own ID.
-      if (!canEditMarks && arr.length === 1) {
-        const self = arr[0];
-        setMarksheetStudentId(self.student_id);
-        setMarksheetSearch(`${self.first_name} ${self.last_name} (${self.admission_number})`);
-        try {
-          const mr = await api.get(`/marks/marksheet/${self.student_id}`, {
-            params: { academic_year: currentAcademicYear() },
-          });
-          setMarksheetData(mr.data);
-        } catch (err) {
-          // Silent — keep dialog open so user can retry via Generate button
+    setMarksheetSearchResults([]);
+    setMarksheetYear('all');
+    // Students/parents: auto-load the student's own marksheet
+    if (!canEditMarks) {
+      try {
+        const res = await api.get('/students');
+        const arr = Array.isArray(res.data) ? res.data : (res.data?.students ?? []);
+        setMarksheetStudents(arr);
+        if (arr.length === 1) {
+          const self = arr[0];
+          setMarksheetStudentId(self.student_id);
+          setMarksheetSearch(`${self.first_name} ${self.last_name} (${self.admission_number})`);
+          try {
+            const mr = await api.get(`/marks/marksheet/${self.student_id}`, {
+              params: { academic_year: currentAcademicYear() },
+            });
+            setMarksheetData(mr.data);
+          } catch (err) {}
         }
-      }
-    } catch (e) {}
+      } catch (e) {}
+    }
   };
 
   // ====== EXAM CRUD ======
@@ -315,12 +331,16 @@ const MarksPage = () => {
   // ====== MARKSHEET ======
   const generateMarksheet = async () => {
     if (!marksheetStudentId) {
-      toast.error('Enter a student ID');
+      toast.error('Select a student first');
       return;
     }
     try {
-      const res = await api.get(`/marks/marksheet/${marksheetStudentId}`, { params: { academic_year: currentAcademicYear() } });
+      const params = (marksheetYear && marksheetYear !== 'all') ? { academic_year: marksheetYear } : {};
+      const res = await api.get(`/marks/marksheet/${marksheetStudentId}`, { params });
       setMarksheetData(res.data);
+      if (res.data.summary?.total_max === 0) {
+        toast.warning('No marks found for this student. Try a different academic year or check that marks have been entered.');
+      }
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to generate marksheet');
     }
@@ -766,42 +786,50 @@ const MarksPage = () => {
                 <Label>Search Student</Label>
                 <Input
                   value={marksheetSearch}
-                  onChange={e => setMarksheetSearch(e.target.value)}
-                  placeholder="Type name or admission number..."
+                  onChange={e => { setMarksheetSearch(e.target.value); setMarksheetStudentId(''); }}
+                  placeholder="Type name, admission number or class..."
                   data-testid="marksheet-student-search"
                 />
-                {marksheetSearch.length >= 2 && (
+                {marksheetSearch.length >= 2 && !marksheetStudentId && (
                   <div className="border border-slate-200 rounded-xl bg-white shadow-sm max-h-48 overflow-y-auto">
-                    {marksheetStudents
-                      .filter(s => {
-                        const q = marksheetSearch.toLowerCase();
-                        return (
-                          `${s.first_name} ${s.last_name}`.toLowerCase().includes(q) ||
-                          (s.admission_number || '').toLowerCase().includes(q)
-                        );
-                      })
-                      .slice(0, 10)
-                      .map(s => (
-                        <div
-                          key={s.student_id}
-                          className="px-3 py-2 cursor-pointer hover:bg-slate-50 flex justify-between items-center"
-                          onClick={() => {
-                            setMarksheetStudentId(s.student_id);
-                            setMarksheetSearch(`${s.first_name} ${s.last_name} (${s.admission_number})`);
-                          }}
-                        >
-                          <span className="text-sm font-medium text-slate-900">{s.first_name} {s.last_name}</span>
-                          <span className="text-xs text-slate-500">{s.class_name} · {s.admission_number}</span>
-                        </div>
-                      ))}
-                    {marksheetStudents.filter(s => {
-                      const q = marksheetSearch.toLowerCase();
-                      return `${s.first_name} ${s.last_name}`.toLowerCase().includes(q) || (s.admission_number || '').toLowerCase().includes(q);
-                    }).length === 0 && (
+                    {marksheetSearchLoading && (
+                      <p className="px-3 py-2 text-sm text-slate-400">Searching...</p>
+                    )}
+                    {!marksheetSearchLoading && marksheetSearchResults.map(s => (
+                      <div
+                        key={s.student_id}
+                        className="px-3 py-2 cursor-pointer hover:bg-slate-50 flex justify-between items-center"
+                        onClick={() => {
+                          setMarksheetStudentId(s.student_id);
+                          setMarksheetSearch(`${s.first_name} ${s.last_name} (${s.admission_number})`);
+                          setMarksheetSearchResults([]);
+                        }}
+                      >
+                        <span className="text-sm font-medium text-slate-900">{s.first_name} {s.last_name}</span>
+                        <span className="text-xs text-slate-500">{s.class_name} - {s.section} · {s.admission_number}</span>
+                      </div>
+                    ))}
+                    {!marksheetSearchLoading && marksheetSearchResults.length === 0 && (
                       <p className="px-3 py-2 text-sm text-slate-500">No students found</p>
                     )}
                   </div>
                 )}
+              </div>
+              <div className="space-y-1.5">
+                <Label>Academic Year</Label>
+                <Select value={marksheetYear} onValueChange={setMarksheetYear}>
+                  <SelectTrigger className="w-36">
+                    <SelectValue placeholder="All years" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All years</SelectItem>
+                    {(() => {
+                      const cur = currentAcademicYear();
+                      const [y] = cur.split('-').map(Number);
+                      return [cur, `${y - 1}-${y}`, `${y - 2}-${y - 1}`];
+                    })().map(yr => <SelectItem key={yr} value={yr}>{yr}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
               <Button className="bg-slate-900 text-white hover:bg-slate-800 rounded-xl" onClick={generateMarksheet} disabled={!marksheetStudentId} data-testid="fetch-marksheet-btn">Generate</Button>
             </div>
@@ -813,7 +841,7 @@ const MarksPage = () => {
                   <h2 className="text-2xl font-bold text-slate-900">SHEMFORD FUTURISTIC SCHOOL</h2>
                   <p className="text-sm text-slate-500">Katwa, West Bengal | CBSE Affiliated</p>
                   <h3 className="text-lg font-semibold mt-2 text-slate-900">Progress Report</h3>
-                  <p className="text-xs text-slate-500">Academic Year: {marksheetData.academic_year}</p>
+                  <p className="text-xs text-slate-500">Academic Year: {marksheetData.academic_year || 'All'}</p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4 mb-6 p-4 bg-slate-50 rounded-xl">
@@ -835,51 +863,62 @@ const MarksPage = () => {
                   </div>
                 </div>
 
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-slate-50">
-                      <TableHead className="text-xs text-muted-foreground font-medium">Subject</TableHead>
-                      <TableHead className="text-xs text-muted-foreground font-medium text-center">Obtained</TableHead>
-                      <TableHead className="text-xs text-muted-foreground font-medium text-center">Max</TableHead>
-                      <TableHead className="text-xs text-muted-foreground font-medium text-center">Grade</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {Object.entries(marksheetData.subjects || {}).map(([subject, marks]) => {
-                      const totalObtained = marks.reduce((sum, m) => sum + m.marks_obtained, 0);
-                      const totalMax = marks.reduce((sum, m) => sum + m.max_marks, 0);
-                      const pct = totalMax > 0 ? (totalObtained / totalMax) * 100 : 0;
-                      const gradeInfo = GRADE_MAP(pct);
-                      return (
-                        <TableRow key={subject}>
-                          <TableCell className="font-medium text-slate-900">{subject}</TableCell>
-                          <TableCell className="text-center">{totalObtained}</TableCell>
-                          <TableCell className="text-center">{totalMax}</TableCell>
-                          <TableCell className="text-center">
-                            <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold ${gradeInfo.cls}`}>{gradeInfo.grade}</span>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
+                <div className="overflow-x-auto">
+                  <Table className="w-full table-fixed">
+                    <TableHeader>
+                      <TableRow className="bg-slate-100">
+                        <TableHead className="w-[40%] text-xs text-slate-900 font-semibold">Subject</TableHead>
+                        <TableHead className="w-[15%] text-xs text-slate-900 font-semibold text-center whitespace-nowrap">Obtained</TableHead>
+                        <TableHead className="w-[15%] text-xs text-slate-900 font-semibold text-center whitespace-nowrap">Max</TableHead>
+                        <TableHead className="w-[15%] text-xs text-slate-900 font-semibold text-center whitespace-nowrap">%</TableHead>
+                        <TableHead className="w-[15%] text-xs text-slate-900 font-semibold text-center">Grade</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {Object.entries(marksheetData.subjects || {}).map(([subject, marks]) => {
+                        const totalObtained = marks.reduce((sum, m) => sum + m.marks_obtained, 0);
+                        const totalMax = marks.reduce((sum, m) => sum + m.max_marks, 0);
+                        const pct = totalMax > 0 ? (totalObtained / totalMax) * 100 : 0;
+                        const gradeInfo = GRADE_MAP(pct);
+                        const fmt = v => Number.isInteger(v) ? v : parseFloat(v.toFixed(2));
+                        return (
+                          <TableRow key={subject}>
+                            <TableCell className="font-medium text-slate-900 truncate max-w-0">{subject}</TableCell>
+                            <TableCell className="text-center text-sm tabular-nums">{fmt(totalObtained)}</TableCell>
+                            <TableCell className="text-center text-sm tabular-nums">{fmt(totalMax)}</TableCell>
+                            <TableCell className="text-center text-sm tabular-nums whitespace-nowrap">{pct.toFixed(2)}%</TableCell>
+                            <TableCell className="text-center">
+                              <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold ${gradeInfo.cls}`}>{gradeInfo.grade}</span>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
 
-                <div className="mt-6 grid grid-cols-4 gap-4">
-                  <div className="bg-slate-900 p-4 rounded-2xl text-center">
-                    <p className="stat-label-dark">Total</p>
-                    <p className="text-xl font-bold text-white">{marksheetData.summary?.total_obtained}/{marksheetData.summary?.total_max}</p>
+                <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="bg-slate-900 p-3 rounded-xl text-center">
+                    <p className="stat-label-dark text-xs">Total</p>
+                    <p className="text-base font-bold text-white tabular-nums leading-tight">
+                      {marksheetData.summary?.total_obtained}/{marksheetData.summary?.total_max}
+                    </p>
                   </div>
-                  <div className="bg-slate-50 p-4 rounded-2xl text-center">
-                    <p className="stat-label">Percentage</p>
-                    <p className="text-xl font-bold text-slate-900">{marksheetData.summary?.percentage}%</p>
+                  <div className="bg-slate-50 p-3 rounded-xl text-center">
+                    <p className="stat-label text-xs">Percentage</p>
+                    <p className="text-base font-bold text-slate-900 tabular-nums leading-tight">
+                      {parseFloat(marksheetData.summary?.percentage ?? 0).toFixed(2)}%
+                    </p>
                   </div>
-                  <div className="bg-slate-50 p-4 rounded-2xl text-center">
-                    <p className="stat-label">Grade</p>
-                    <p className="text-xl font-bold text-slate-900">{marksheetData.summary?.grade}</p>
+                  <div className="bg-slate-50 p-3 rounded-xl text-center">
+                    <p className="stat-label text-xs">Grade</p>
+                    <p className="text-base font-bold text-slate-900 leading-tight">{marksheetData.summary?.grade}</p>
                   </div>
-                  <div className="bg-slate-50 p-4 rounded-2xl text-center">
-                    <p className="stat-label">Result</p>
-                    <p className="text-xl font-bold text-slate-900">{marksheetData.summary?.result}</p>
+                  <div className="bg-slate-50 p-3 rounded-xl text-center">
+                    <p className="stat-label text-xs">Result</p>
+                    <p className={`text-base font-bold leading-tight ${marksheetData.summary?.result === 'PASS' ? 'text-emerald-600' : 'text-red-600'}`}>
+                      {marksheetData.summary?.result}
+                    </p>
                   </div>
                 </div>
 
@@ -889,7 +928,8 @@ const MarksPage = () => {
                   </Button>
                   <Button className="bg-slate-900 text-white hover:bg-slate-800 rounded-xl text-xs" onClick={async () => {
                     try {
-                      const res = await api.get(`/marks/marksheet/${marksheetStudentId}/pdf`, { params: { academic_year: currentAcademicYear() }, responseType: 'blob' });
+                      const pdfParams = (marksheetYear && marksheetYear !== 'all') ? { academic_year: marksheetYear } : {};
+                      const res = await api.get(`/marks/marksheet/${marksheetStudentId}/pdf`, { params: pdfParams, responseType: 'blob' });
                       const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
                       const a = document.createElement('a');
                       a.href = url; a.download = `marksheet-${marksheetStudentId}.pdf`;

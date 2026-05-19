@@ -304,7 +304,7 @@ async def get_marks(
 
 
 @router.get("/marks/marksheet/{student_id}")
-async def get_marksheet(student_id: str, request: Request, exam_id: Optional[str] = None, academic_year: str = "2025-2026"):
+async def get_marksheet(student_id: str, request: Request, exam_id: Optional[str] = None, academic_year: Optional[str] = None):
     """Get structured marksheet for a student."""
     user = await get_current_user(request)
 
@@ -325,7 +325,9 @@ async def get_marksheet(student_id: str, request: Request, exam_id: Optional[str
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    query = {"student_id": student_id, "academic_year": academic_year}
+    query: dict = {"student_id": student_id}
+    if academic_year:
+        query["academic_year"] = academic_year
     if exam_id:
         query["exam_id"] = exam_id
 
@@ -359,7 +361,7 @@ async def get_marksheet(student_id: str, request: Request, exam_id: Optional[str
 
 
 @router.get("/marks/marksheet/{student_id}/pdf")
-async def download_marksheet_pdf(student_id: str, request: Request, exam_id: Optional[str] = None, academic_year: str = "2025-2026"):
+async def download_marksheet_pdf(student_id: str, request: Request, exam_id: Optional[str] = None, academic_year: Optional[str] = None):
     """Download PDF marksheet."""
     await get_current_user(request)
 
@@ -367,93 +369,161 @@ async def download_marksheet_pdf(student_id: str, request: Request, exam_id: Opt
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    query = {"student_id": student_id, "academic_year": academic_year}
+    query: dict = {"student_id": student_id}
+    if academic_year:
+        query["academic_year"] = academic_year
     if exam_id:
         query["exam_id"] = exam_id
 
-    marks = await db.mark_records.find(query, {"_id": 0}).to_list(100)
+    marks = await db.mark_records.find(query, {"_id": 0}).to_list(500)
+
+    def fmt_num(v: float) -> str:
+        """Show integer marks without decimals, fractional marks to 2 dp."""
+        return str(int(v)) if v == int(v) else f"{v:.2f}"
 
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=0.5*inch, bottomMargin=0.5*inch)
+    PAGE_W = A4[0] - inch          # usable width (0.5in margin each side)
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        topMargin=0.5*inch, bottomMargin=0.5*inch,
+        leftMargin=0.5*inch, rightMargin=0.5*inch,
+    )
     elements = []
     styles = getSampleStyleSheet()
 
-    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=18, alignment=TA_CENTER, textColor=colors.HexColor('#E88A1A'))
-    subtitle_style = ParagraphStyle('Sub', parent=styles['Normal'], fontSize=12, alignment=TA_CENTER, textColor=colors.grey)
-    header_style = ParagraphStyle('Head', parent=styles['Heading2'], fontSize=14, alignment=TA_CENTER, spaceAfter=20)
+    title_style    = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=18,
+                                    alignment=TA_CENTER, textColor=colors.HexColor('#E88A1A'),
+                                    spaceAfter=4)
+    subtitle_style = ParagraphStyle('Sub',   parent=styles['Normal'],   fontSize=10,
+                                    alignment=TA_CENTER, textColor=colors.HexColor('#64748B'),
+                                    spaceAfter=2)
+    heading_style  = ParagraphStyle('Head',  parent=styles['Heading2'], fontSize=13,
+                                    alignment=TA_CENTER, textColor=colors.HexColor('#1E293B'),
+                                    spaceAfter=2)
 
     elements.append(Paragraph("SHEMFORD FUTURISTIC SCHOOL", title_style))
     elements.append(Paragraph("Katwa, West Bengal | CBSE Affiliated", subtitle_style))
-    elements.append(Spacer(1, 20))
-    elements.append(Paragraph("PROGRESS REPORT", header_style))
-    elements.append(Paragraph(f"Academic Year: {academic_year}", subtitle_style))
-    elements.append(Spacer(1, 20))
+    elements.append(Spacer(1, 6))
+    elements.append(Paragraph("PROGRESS REPORT", heading_style))
+    elements.append(Paragraph(f"Academic Year: {academic_year or 'All'}", subtitle_style))
+    elements.append(Spacer(1, 14))
 
+    # ── Student info table ────────────────────────────────────────────────────
     info_data = [
-        ["Student Name", f"{student['first_name']} {student['last_name']}", "Admission No.", student['admission_number']],
-        ["Class", f"{student['class_name']} - {student['section']}", "Roll No.", student.get('roll_number', '-')]
+        ["Student Name", f"{student['first_name']} {student['last_name']}",
+         "Admission No.", student['admission_number']],
+        ["Class", f"{student['class_name']} - {student['section']}",
+         "Roll No.", student.get('roll_number', '-')],
     ]
-    info_table = Table(info_data, colWidths=[1.5*inch, 2*inch, 1.5*inch, 2*inch])
+    cw = PAGE_W / 7
+    info_table = Table(info_data, colWidths=[1.8*cw, 2.2*cw, 1.5*cw, 1.5*cw])
     info_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f5f5f5')),
-        ('BACKGROUND', (2, 0), (2, -1), colors.HexColor('#f5f5f5')),
-        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'), ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('GRID', (0, 0), (-1, -1), 1, colors.lightgrey), ('PADDING', (0, 0), (-1, -1), 8),
+        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#F1F5F9')),
+        ('BACKGROUND', (2, 0), (2, -1), colors.HexColor('#F1F5F9')),
+        ('FONTNAME',   (0, 0), (-1, -1), 'Helvetica-Bold'),
+        ('FONTNAME',   (1, 0), (1, -1),  'Helvetica'),
+        ('FONTNAME',   (3, 0), (3, -1),  'Helvetica'),
+        ('FONTSIZE',   (0, 0), (-1, -1), 10),
+        ('GRID',       (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+        ('PADDING',    (0, 0), (-1, -1), 7),
+        ('VALIGN',     (0, 0), (-1, -1), 'MIDDLE'),
     ]))
     elements.append(info_table)
-    elements.append(Spacer(1, 20))
+    elements.append(Spacer(1, 16))
 
-    marks_data = [["Subject", "Marks Obtained", "Max Marks", "Percentage", "Grade"]]
-    total_obtained = 0
-    total_max = 0
+    # ── Marks table ───────────────────────────────────────────────────────────
+    marks_data = [["Subject", "Marks\nObtained", "Max\nMarks", "Percentage", "Grade"]]
+    total_obtained = 0.0
+    total_max      = 0.0
 
-    subject_totals = {}
+    subject_totals: dict = {}
     for m in marks:
-        subj = m["subject"]
-        if subj not in subject_totals:
-            subject_totals[subj] = {"obtained": 0, "max": 0}
-        subject_totals[subj]["obtained"] += m["marks_obtained"]
-        subject_totals[subj]["max"] += m["max_marks"]
+        s = m["subject"]
+        if s not in subject_totals:
+            subject_totals[s] = {"obtained": 0.0, "max": 0.0}
+        subject_totals[s]["obtained"] += float(m["marks_obtained"])
+        subject_totals[s]["max"]      += float(m["max_marks"])
 
     for subject, totals in subject_totals.items():
         obt = totals["obtained"]
-        mx = totals["max"]
-        pct = (obt / mx * 100) if mx > 0 else 0
-        grade = calculate_grade(pct)
-        marks_data.append([subject, str(obt), str(mx), f"{pct:.1f}%", grade])
+        mx  = totals["max"]
+        pct = (obt / mx * 100) if mx > 0 else 0.0
+        marks_data.append([subject, fmt_num(obt), fmt_num(mx), f"{pct:.2f}%", calculate_grade(pct)])
         total_obtained += obt
-        total_max += mx
+        total_max      += mx
 
     if total_max > 0:
-        overall_pct = (total_obtained / total_max) * 100
+        overall_pct   = (total_obtained / total_max) * 100
         overall_grade = calculate_grade(overall_pct)
-        marks_data.append(["TOTAL", str(total_obtained), str(total_max), f"{overall_pct:.1f}%", overall_grade])
+        marks_data.append(["TOTAL", fmt_num(total_obtained), fmt_num(total_max),
+                            f"{overall_pct:.2f}%", overall_grade])
 
-    marks_table = Table(marks_data, colWidths=[2*inch, 1.2*inch, 1.2*inch, 1.2*inch, 1*inch])
+    # Column widths: Subject gets most space, numbers share the rest
+    sub_w = PAGE_W * 0.38
+    num_w = (PAGE_W - sub_w) / 4
+    marks_table = Table(marks_data, colWidths=[sub_w, num_w, num_w, num_w, num_w])
+    n_rows = len(marks_data)
     marks_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#E88A1A')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 0), (-1, -1), 10), ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
-        ('GRID', (0, 0), (-1, -1), 1, colors.lightgrey), ('PADDING', (0, 0), (-1, -1), 8),
-        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#f5f5f5')),
-        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        # Header row
+        ('BACKGROUND',  (0, 0),        (-1, 0),        colors.HexColor('#1E293B')),
+        ('TEXTCOLOR',   (0, 0),        (-1, 0),        colors.white),
+        ('FONTNAME',    (0, 0),        (-1, 0),        'Helvetica-Bold'),
+        ('FONTSIZE',    (0, 0),        (-1, 0),        9),
+        ('ALIGN',       (0, 0),        (-1, 0),        'CENTER'),
+        ('VALIGN',      (0, 0),        (-1, 0),        'MIDDLE'),
+        # Data rows
+        ('FONTNAME',    (0, 1),        (-1, -1),       'Helvetica'),
+        ('FONTSIZE',    (0, 1),        (-1, -1),       10),
+        ('ALIGN',       (1, 1),        (-1, -1),       'CENTER'),
+        ('VALIGN',      (0, 1),        (-1, -1),       'MIDDLE'),
+        # Alternating row shading
+        *[('BACKGROUND', (0, r), (-1, r), colors.HexColor('#F8FAFC'))
+          for r in range(2, n_rows - 1, 2)],
+        # Total row
+        ('BACKGROUND',  (0, -1),       (-1, -1),       colors.HexColor('#F1F5F9')),
+        ('FONTNAME',    (0, -1),       (-1, -1),       'Helvetica-Bold'),
+        # Grid
+        ('GRID',        (0, 0),        (-1, -1),       0.5, colors.HexColor('#CBD5E1')),
+        ('PADDING',     (0, 0),        (-1, -1),       7),
     ]))
     elements.append(marks_table)
-    elements.append(Spacer(1, 30))
+    elements.append(Spacer(1, 20))
 
-    result = "PASS" if total_max > 0 and (total_obtained / total_max * 100) >= 33 else "FAIL"
-    result_style = ParagraphStyle('Res', parent=styles['Heading2'], fontSize=16, alignment=TA_CENTER,
-                                   textColor=colors.HexColor('#1A1A1A'))
-    elements.append(Paragraph(f"Result: {result}", result_style))
-    elements.append(Spacer(1, 40))
+    # ── Summary row ───────────────────────────────────────────────────────────
+    result      = "PASS" if total_max > 0 and (total_obtained / total_max * 100) >= 33 else "FAIL"
+    result_color = colors.HexColor('#16A34A') if result == "PASS" else colors.HexColor('#DC2626')
+    overall_pct  = (total_obtained / total_max * 100) if total_max > 0 else 0.0
+    overall_grade = calculate_grade(overall_pct)
 
-    sig_data = [["Class Teacher", "Principal", "Parent/Guardian"]]
-    sig_table = Table(sig_data, colWidths=[2.2*inch, 2.2*inch, 2.2*inch])
+    summary_data = [
+        ["Total Marks", "Percentage", "Grade", "Result"],
+        [f"{fmt_num(total_obtained)} / {fmt_num(total_max)}",
+         f"{overall_pct:.2f}%", overall_grade, result],
+    ]
+    summary_table = Table(summary_data, colWidths=[PAGE_W / 4] * 4)
+    summary_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0),  colors.HexColor('#F1F5F9')),
+        ('FONTNAME',   (0, 0), (-1, 0),  'Helvetica-Bold'),
+        ('FONTSIZE',   (0, 0), (-1, -1), 10),
+        ('ALIGN',      (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN',     (0, 0), (-1, -1), 'MIDDLE'),
+        ('FONTNAME',   (0, 1), (-1, 1),  'Helvetica-Bold'),
+        ('TEXTCOLOR',  (3, 1), (3, 1),   result_color),
+        ('GRID',       (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+        ('PADDING',    (0, 0), (-1, -1), 8),
+    ]))
+    elements.append(summary_table)
+    elements.append(Spacer(1, 36))
+
+    # ── Signature line ────────────────────────────────────────────────────────
+    sig_data  = [["Class Teacher", "Principal", "Parent / Guardian"]]
+    sig_table = Table(sig_data, colWidths=[PAGE_W / 3] * 3)
     sig_table.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 0), (-1, -1), 10), ('TOPPADDING', (0, 0), (-1, -1), 40),
+        ('ALIGN',       (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME',    (0, 0), (-1, -1), 'Helvetica'),
+        ('FONTSIZE',    (0, 0), (-1, -1), 10),
+        ('TOPPADDING',  (0, 0), (-1, -1), 36),
+        ('LINEABOVE',   (0, 0), (-1, 0),  0.5, colors.HexColor('#94A3B8')),
     ]))
     elements.append(sig_table)
 

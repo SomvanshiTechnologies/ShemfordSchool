@@ -492,7 +492,7 @@ class Announcement(BaseModel):
     model_config = ConfigDict(extra="ignore")
     announcement_id: str = Field(default_factory=lambda: f"ann_{uuid.uuid4().hex[:12]}")
     title: str
-    content: str
+    content: Optional[str] = None
     target_type: str
     target_value: Optional[str] = None
     target_audiences: Optional[List[str]] = None  # subset of ["student","parent","teacher"]

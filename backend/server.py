@@ -174,7 +174,7 @@ def _validate_env():
         "JWT_SECRET":       "HS256 signing secret for access tokens",
     }
     # Ezetap POS is required only when the feature is enabled
-    if os.environ.get("EZETAP_ENABLED", "true").lower() != "false":
+    if os.environ.get("EZETAP_ENABLED", "false").lower() == "true":
         required.update({
             "EZETAP_USERNAME": "Ezetap API username (not the web-portal login)",
             "EZETAP_APP_KEY":  "Ezetap App Key from merchant dashboard",
