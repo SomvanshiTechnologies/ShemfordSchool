@@ -5,6 +5,9 @@ import { cn } from '../lib/utils';
 import { Button } from './ui/button';
 import { ScrollArea } from './ui/scroll-area';
 import api from '../lib/api';
+import { useMobile } from '../hooks/useMobile';
+import MobileLayout from '../mobile/MobileLayout';
+import '../mobile/mobile.css';
 import {
   LayoutDashboard, Users, GraduationCap, UserCog, Calendar,
   CreditCard, FileText, Bell, BookOpen, TicketCheck, MessageSquare,
@@ -163,6 +166,7 @@ const Layout = ({ children }) => {
   const [appLocked, setAppLocked]     = useState(false);
   const { user }   = useAuth();
   const location   = useLocation();
+  const isMobile   = useMobile();
 
   useEffect(() => {
     const checkAppLock = async () => {
@@ -181,6 +185,32 @@ const Layout = ({ children }) => {
 
   const currentPage = ALL_MENU_ITEMS.find(item => item.path === location.pathname);
   const PageIcon    = currentPage?.icon;
+
+  // On mobile viewports, hide the desktop sidebar and use the mobile bottom-
+  // tab navigation instead. This keeps the same page content (Payroll, Users,
+  // Settings, etc.) but lets the user navigate back via the bottom tabs.
+  if (isMobile) {
+    return (
+      <MobileLayout>
+        {isLockedOut ? (
+          <div className="flex flex-col items-center justify-center h-64 text-center" data-testid="locked-content">
+            <div className="h-20 w-20 rounded-3xl bg-orange-50 flex items-center justify-center mb-5">
+              <AlertTriangle className="h-10 w-10 text-[#E88A1A]" strokeWidth={1.5} />
+            </div>
+            <h2 className="text-xl font-bold text-slate-900 mb-2">Access Restricted</h2>
+            <p className="text-sm text-slate-500 mb-6 max-w-xs">
+              Clear overdue fees to restore full access to the portal.
+            </p>
+            <Link to="/my-fees">
+              <Button className="bg-[#E88A1A] hover:bg-[#C97516] text-white rounded-xl px-6 shadow-lg shadow-orange-200/50">
+                View Fees
+              </Button>
+            </Link>
+          </div>
+        ) : children}
+      </MobileLayout>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">

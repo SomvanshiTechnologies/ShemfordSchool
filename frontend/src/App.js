@@ -46,6 +46,20 @@ import ScreenshotBlocker from "./components/ScreenshotBlocker";
 import "./mobile/mobile.css";
 import "./App.css";
 
+// Desktop pages that the mobile More page links to directly. These don't yet
+// have mobile-native equivalents, so the auto-redirect must let them through —
+// otherwise tapping Payroll/Issues/Settings/Users/etc. on a touch device loops
+// back to /m and looks like the link is broken.
+const MOBILE_ALLOWED_DESKTOP_ROUTES = [
+  '/payroll',
+  '/issues',
+  '/settings',
+  '/users',
+  '/employees',
+  '/class-structure',
+  '/upgradation', // legacy — /m/upgradation is the native version
+];
+
 // Auto-redirect mobile users to /m routes
 function MobileRedirect({ children }) {
   const isMobile = useMobile();
@@ -55,7 +69,14 @@ function MobileRedirect({ children }) {
 
   React.useEffect(() => {
     const isTouchDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    if (isMobile && isTouchDevice && user && !location.pathname.startsWith('/m') && location.pathname !== '/login' && !location.hash?.includes('session_id=')) {
+    const isAllowedDesktopRoute = MOBILE_ALLOWED_DESKTOP_ROUTES.some(p => location.pathname === p || location.pathname.startsWith(p + '/'));
+    if (
+      isMobile && isTouchDevice && user
+      && !location.pathname.startsWith('/m')
+      && location.pathname !== '/login'
+      && !isAllowedDesktopRoute
+      && !location.hash?.includes('session_id=')
+    ) {
       navigate('/m', { replace: true });
     }
   }, [isMobile, user, location.pathname, location.hash, navigate]);

@@ -114,6 +114,7 @@ const MarkAttendanceView = () => {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
 
   // Report
+  const [reportSubTab, setReportSubTab] = useState('class');
   const [reportClass, setReportClass] = useState('');
   const [reportDate, setReportDate] = useState('');
   const [reportData, setReportData] = useState(null);
@@ -535,7 +536,16 @@ const MarkAttendanceView = () => {
 
         {/* ====== REPORT TAB ====== */}
         <TabsContent value="report">
+          {isAdmin && (
+            <Tabs value={reportSubTab} onValueChange={setReportSubTab} className="mb-4">
+              <TabsList className="rounded-xl h-10 bg-slate-100">
+                <TabsTrigger value="class" className="rounded-xl text-xs uppercase tracking-wider font-semibold" data-testid="report-sub-class">Students</TabsTrigger>
+                <TabsTrigger value="employee" className="rounded-xl text-xs uppercase tracking-wider font-semibold" data-testid="report-sub-employee">Employees</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          )}
 
+          {(!isAdmin || reportSubTab === 'class') && <>
           {/* ── Class Attendance Report ── */}
           <div className="flex items-center gap-3 mb-4">
             <div className="h-8 w-8 rounded-xl bg-orange-50 flex items-center justify-center shrink-0">
@@ -606,11 +616,9 @@ const MarkAttendanceView = () => {
             </div>
           )}
 
-          {/* ── Divider ── */}
-          {isAdmin && <div className="border-t border-slate-200 my-8" />}
+          </>}
 
-          {/* ── Employee Attendance Report ── */}
-          {isAdmin && (<>
+          {isAdmin && reportSubTab === 'employee' && (<>
             <div className="flex items-center gap-3 mb-4">
               <div className="h-8 w-8 rounded-xl bg-slate-100 flex items-center justify-center shrink-0">
                 <Users className="h-4 w-4 text-slate-600" strokeWidth={1.5} />

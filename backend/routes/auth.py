@@ -499,14 +499,21 @@ async def get_users(
     request: Request,
     response: Response,
     role: Optional[str] = None,
+    search: Optional[str] = None,
     page: int = 1,
     limit: int = 30,
 ):
     await require_roles(UserRole.ADMIN)(request)
     import asyncio as _asyncio
+    import re as _re
     query = {}
     if role:
         query["role"] = role
+    if search and search.strip():
+        # Case-insensitive name/email match — admin needs to find a user from
+        # 1000+ accounts without scrolling through paged results.
+        rx = _re.compile(_re.escape(search.strip()), _re.IGNORECASE)
+        query["$or"] = [{"name": rx}, {"email": rx}]
     total, users = await _asyncio.gather(
         db.users.count_documents(query),
         db.users.find(query, {"_id": 0, "password_hash": 0})

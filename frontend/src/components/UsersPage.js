@@ -64,8 +64,16 @@ const UsersPage = () => {
     name: '', email: '', password: '', role: 'teacher', phone: ''
   });
 
+  // Debounced server-side search term — separate from the input value so we
+  // can throttle DB hits without losing keystrokes.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchTerm.trim()), 350);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
+
   const fetchUsers = useCallback(async (pg = 1, append = false) => {
-    const cacheKey = `users:${filterRole}:${pg}`;
+    const cacheKey = `users:${filterRole}:${debouncedSearch}:${pg}`;
     const cached = getCached(cacheKey);
 
     if (!append) {
@@ -83,12 +91,20 @@ const UsersPage = () => {
     try {
       const params = { page: pg, limit: PAGE_SIZE };
       if (filterRole) params.role = filterRole;
+      if (debouncedSearch) params.search = debouncedSearch;
       const res = await api.get('/users', { params });
       const arr = Array.isArray(res.data) ? res.data : (res.data?.users ?? []);
-      const total = parseInt(res.headers?.['x-total-count'] ?? arr.length);
-      const pages = parseInt(res.headers?.['x-total-pages'] ?? 1);
+      const total = parseInt(res.headers?.['x-total-count'] ?? arr.length) || 0;
+      const pages = parseInt(res.headers?.['x-total-pages'] ?? 1) || 1;
       setCached(cacheKey, { users: arr, total, pages });
-      setUsers(prev => append ? [...prev, ...arr] : arr);
+      // Dedupe by user_id when appending — backend pages may overlap during
+      // rapid scroll, and React requires unique keys.
+      setUsers(prev => {
+        const next = append ? [...prev, ...arr] : arr;
+        const seen = new Map();
+        for (const u of next) if (u?.user_id) seen.set(u.user_id, u);
+        return Array.from(seen.values());
+      });
       setTotalUsers(total);
       setTotalPages(pages);
     } catch (error) {
@@ -98,7 +114,7 @@ const UsersPage = () => {
       setRefreshing(false);
       setLoadingMore(false);
     }
-  }, [filterRole]);
+  }, [filterRole, debouncedSearch]);
 
   useEffect(() => {
     setPage(1);
@@ -106,22 +122,27 @@ const UsersPage = () => {
     fetchUsers(1, false);
   }, [fetchUsers]);
 
-  // Infinite scroll
+  // Infinite scroll — only fire when there's a next page to fetch AND we have
+  // at least one row already loaded (prevents the observer from runaway-firing
+  // while the empty-state placeholder is in view, which previously bumped page
+  // up to 71+ and triggered rate-limit 429s).
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el) return;
     const observer = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting && !loadingMore && !loading) {
-        setPage(prev => {
-          const next = prev + 1;
-          if (next <= totalPages) { fetchUsers(next, true); return next; }
-          return prev;
-        });
-      }
+      if (!entry.isIntersecting) return;
+      if (loadingMore || loading) return;
+      if (users.length === 0) return;
+      if (page >= totalPages) return;
+      setPage(prev => {
+        const next = prev + 1;
+        if (next <= totalPages) { fetchUsers(next, true); return next; }
+        return prev;
+      });
     }, { rootMargin: '200px' });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [loadingMore, loading, totalPages, fetchUsers]);
+  }, [loadingMore, loading, totalPages, page, users.length, fetchUsers]);
 
   const handleUpdateRole = async () => {
     if (!selectedUser || !newRole) return;
@@ -185,11 +206,10 @@ const UsersPage = () => {
     return <Badge variant="outline" className={`capitalize font-medium text-xs ${colors[role] || 'bg-gray-50 text-gray-600'}`}>{role}</Badge>;
   };
 
-  const filteredUsers = users.filter(user => {
-    const name = user.name?.toLowerCase() || '';
-    const email = user.email?.toLowerCase() || '';
-    return name.includes(searchTerm.toLowerCase()) || email.includes(searchTerm.toLowerCase());
-  });
+  // Server-side search is the source of truth (see fetchUsers above). The list
+  // shown here is exactly what the backend returned for the current search +
+  // filter, so no further client-side filtering is needed.
+  const filteredUsers = users;
 
   const roles = ['admin', 'teacher', 'student', 'parent', 'accountant'];
 
@@ -311,10 +331,11 @@ const UsersPage = () => {
               <TableHeader>
                 <TableRow>
                   <TableHead>User</TableHead>
-                  <TableHead>Email</TableHead>
+                  {/* Email/Status/Joined hidden on mobile to keep the table within the viewport */}
+                  <TableHead className="hidden md:table-cell">Email</TableHead>
                   <TableHead>Role</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Joined</TableHead>
+                  <TableHead className="hidden md:table-cell">Status</TableHead>
+                  <TableHead className="hidden md:table-cell">Joined</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -333,14 +354,14 @@ const UsersPage = () => {
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell>{user.email}</TableCell>
+                    <TableCell className="hidden md:table-cell">{user.email}</TableCell>
                     <TableCell>{getRoleBadge(user.role)}</TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${user.is_active ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
                         {user.is_active ? 'Active' : 'Inactive'}
                       </span>
                     </TableCell>
-                    <TableCell>{formatDate(user.created_at)}</TableCell>
+                    <TableCell className="hidden md:table-cell">{formatDate(user.created_at)}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
                         {user.user_id !== currentUser?.user_id && (

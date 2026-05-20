@@ -2,7 +2,11 @@
    MOBILE PWA STYLES
    ======================== */
 
-/* Shell */
+/* Shell.
+   IMPORTANT: do NOT set overflow-x: hidden on .m-app — CSS spec says when one
+   axis is non-visible the other is auto-clipped, which turns .m-app into a
+   y-scroll container at min-height: 100dvh and traps document scrolling.
+   Horizontal clipping is handled on .m-content + body instead. */
 .m-app {
   display: flex;
   flex-direction: column;
@@ -10,14 +14,27 @@
   background: #F8F8F8;
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior-y: contain;
+  max-width: 100vw;
 }
 
+/* Page content flows naturally; document (body) is the scroll container. */
 .m-content {
-  flex: 1;
   padding: 16px 16px 88px;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
+  overflow-x: hidden;
+  max-width: 100%;
 }
+
+/* Mobile screens should never produce horizontal scroll */
+.m-content > * {
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* Make tables and inputs respect container width */
+.m-content table { width: 100%; max-width: 100%; }
+.m-content input,
+.m-content select,
+.m-content textarea { max-width: 100%; box-sizing: border-box; }
 
 /* Bottom Nav */
 .m-bottom-nav {
@@ -86,8 +103,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 12px 0 16px;
+  min-width: 0;
 }
+
+.m-header > div { min-width: 0; }
+.m-header h1 { overflow-wrap: anywhere; }
 
 .m-header h1 {
   font-size: 24px;
@@ -236,10 +258,14 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 14px 16px;
   border-bottom: 1px solid #F5F5F5;
   transition: background 0.1s;
+  min-width: 0;
 }
+
+.m-list-item > div { min-width: 0; }
 
 .m-list-item:last-child {
   border-bottom: none;
@@ -491,4 +517,10 @@
   font-weight: 600;
   color: #1A1A1A;
   text-align: center;
+  line-height: 1.2;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  hyphens: auto;
 }
+
+.m-menu-item { min-width: 0; }

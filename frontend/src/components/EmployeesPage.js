@@ -602,33 +602,34 @@ const EmployeesPage = () => {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Employee ID</TableHead>
+                  {/* Mobile shows only Name + Actions; full columns appear at md+. */}
+                  <TableHead className="hidden md:table-cell">Employee ID</TableHead>
                   <TableHead>Name</TableHead>
-                  <TableHead>Department</TableHead>
-                  <TableHead>Designation</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>User Account</TableHead>
+                  <TableHead className="hidden md:table-cell">Department</TableHead>
+                  <TableHead className="hidden md:table-cell">Designation</TableHead>
+                  <TableHead className="hidden md:table-cell">Status</TableHead>
+                  <TableHead className="hidden md:table-cell">User Account</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredEmployees.map((emp) => (
                   <TableRow key={emp.employee_id} data-testid={`employee-row-${emp.employee_id}`}>
-                    <TableCell className="font-medium">{emp.employee_id}</TableCell>
+                    <TableCell className="font-medium hidden md:table-cell">{emp.employee_id}</TableCell>
                     <TableCell>
                       <div>
                         <p className="font-medium">{emp.first_name} {emp.last_name}</p>
                         <p className="text-sm text-muted-foreground">{emp.email}</p>
                       </div>
                     </TableCell>
-                    <TableCell>{emp.department}</TableCell>
-                    <TableCell>{emp.designation}</TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">{emp.department}</TableCell>
+                    <TableCell className="hidden md:table-cell">{emp.designation}</TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${emp.is_active ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-gray-100 text-gray-500'}`}>
                         {emp.is_active ? 'Active' : 'Inactive'}
                       </span>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       {emp.user_id ? (
                         <Badge variant="outline" className="gap-1 text-slate-900 border-slate-900">
                           <Link2 className="h-3 w-3" /> Linked

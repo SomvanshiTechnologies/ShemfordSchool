@@ -1,25 +1,52 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { Users, CreditCard, Calendar, GraduationCap, BarChart3, Bell, MessageSquare, BookOpen, ClipboardList, Settings, LogOut, User, Building, Monitor, History } from 'lucide-react';
+import {
+  Users, Calendar, GraduationCap, BarChart3, Bell, MessageSquare,
+  ClipboardList, Settings, LogOut, User, Building, Monitor, History,
+  ArrowUpCircle, ShieldCheck, Wallet,
+} from 'lucide-react';
 
 const MobileMore = () => {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
-  const isAdmin = user?.role === 'admin';
+  const role = user?.role;
+  const isAdmin = role === 'admin';
+  const isAccountant = role === 'accountant';
+  const isTeacher = role === 'teacher';
 
+  // Mobile-native routes (have a MobileXxx screen)
+  // Desktop routes are used for pages that don't yet have a mobile equivalent.
   const menuItems = [
-    ...(isAdmin ? [
+    // ── Records ────────────────────────────────────────────
+    ...(isAdmin || isTeacher || isAccountant ? [
       { icon: Users, label: 'Students', path: '/m/students', color: '#E88A1A' },
+    ] : []),
+    ...(isAdmin ? [
       { icon: Building, label: 'Classes', path: '/class-structure', color: '#1A1A1A' },
       { icon: User, label: 'Employees', path: '/employees', color: '#1A1A1A' },
+      { icon: ShieldCheck, label: 'Users', path: '/users', color: '#1A1A1A' },
+    ] : []),
+    // ── Operations ─────────────────────────────────────────
+    ...(isAdmin ? [
+      { icon: ArrowUpCircle, label: 'Upgradation', path: '/m/upgradation', color: '#E88A1A' },
+    ] : []),
+    ...(isAdmin || isAccountant || isTeacher ? [
+      { icon: Wallet, label: 'Payroll', path: '/payroll', color: '#1A1A1A' },
+    ] : []),
+    // ── Communication ──────────────────────────────────────
+    { icon: Bell, label: 'Announcements', path: '/m/notices', color: '#E88A1A' },
+    { icon: MessageSquare, label: 'Messages', path: '/m/messages', color: '#1A1A1A' },
+    // ── Insights ───────────────────────────────────────────
+    ...(isAdmin || isAccountant ? [
       { icon: BarChart3, label: 'Reports', path: '/m/reports', color: '#E88A1A' },
+    ] : []),
+    ...(isAdmin ? [
       { icon: History, label: 'Audit Trails', path: '/m/audit-trail', color: '#E88A1A' },
     ] : []),
-    { icon: Bell, label: 'Notices', path: '/m/notices', color: '#E88A1A' },
-    { icon: MessageSquare, label: 'Messages', path: '/m/messages', color: '#1A1A1A' },
-    { icon: BookOpen, label: 'Syllabus', path: '/syllabus', color: '#1A1A1A' },
+    // ── Misc ───────────────────────────────────────────────
     { icon: ClipboardList, label: 'Issues', path: '/issues', color: '#888' },
+    { icon: Settings, label: 'Settings', path: '/settings', color: '#1A1A1A' },
   ];
 
   const handleLogout = async () => {
@@ -36,9 +63,9 @@ const MobileMore = () => {
         <div className="m-avatar" style={{background:'#E88A1A',color:'#FFF',width:48,height:48,fontSize:18}}>
           {user?.name?.charAt(0) || 'U'}
         </div>
-        <div>
-          <p style={{fontWeight:700,fontSize:16,color:'#1A1A1A'}}>{user?.name || user?.email}</p>
-          <span className="m-badge m-badge-dark" style={{marginTop:4}}>{user?.role}</span>
+        <div style={{minWidth:0}}>
+          <p style={{fontWeight:700,fontSize:16,color:'#1A1A1A',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{user?.name || user?.email}</p>
+          <span className="m-badge m-badge-dark" style={{marginTop:4,textTransform:'uppercase'}}>{user?.role}</span>
         </div>
       </div>
 
