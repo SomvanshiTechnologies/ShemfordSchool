@@ -5,7 +5,7 @@ import {
   Users, Calendar, GraduationCap, BarChart3, Bell, MessageSquare,
   ClipboardList, Settings, LogOut, User, Building, Monitor, History,
   ArrowUpCircle, ShieldCheck, Wallet, BookOpen, FileText, CreditCard,
-  LayoutDashboard, IdCard,
+  LayoutDashboard,
 } from 'lucide-react';
 
 // Paths already accessible from the bottom tab bar OR the role's Home page
@@ -81,11 +81,9 @@ const MobileMore = () => {
     ...(isStudent ? [
       { icon: Calendar, label: 'My Attendance', path: '/m/attendance', color: '#1A1A1A' },
       { icon: GraduationCap, label: 'My Marks', path: '/m/marks', color: '#E88A1A' },
-      { icon: IdCard, label: 'ID Card', path: '/m/id-card', color: '#E88A1A' },
     ] : []),
     ...(isParent ? [
       { icon: Calendar, label: "Children's Attendance", path: '/m/attendance', color: '#1A1A1A' },
-      { icon: IdCard, label: "Child's ID Card", path: '/m/id-card', color: '#E88A1A' },
     ] : []),
     ...(isAdmin || isAccountant ? [
       { icon: CreditCard, label: 'Fees', path: '/m/fees', color: '#E88A1A' },
