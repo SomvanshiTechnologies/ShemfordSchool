@@ -61,9 +61,13 @@ function subjectColor(subject) {
 }
 
 const SyllabusPage = () => {
-  const { isAdmin, isTeacher, isParent } = useAuth();
+  const { isAdmin, isTeacher, isParent, isStudent } = useAuth();
   const [syllabusList, setSyllabusList] = useState([]);
   const [classes, setClasses] = useState([]);
+  // For parents/students: the set of classes they actually have access to.
+  // Used to (a) restrict the class dropdown and (b) auto-pick the default
+  // when there's only one class, so the parent doesn't have to choose.
+  const [accessibleClasses, setAccessibleClasses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterClass, setFilterClass] = useState('');
@@ -105,14 +109,27 @@ const SyllabusPage = () => {
 
       let syllabus = syllabusRes.data;
 
-      // Parents: restrict to their children's classes only
-      if (isParent) {
+      // Parents/students: derive the classes they have access to.
+      // Parent → all their children's classes. Student → their own class.
+      // Use this to filter both the syllabus rows AND the class dropdown
+      // options, and to auto-pick the default when there's only one class.
+      if (isParent || isStudent) {
         try {
           const childrenRes = await api.get('/students');
-          const childClasses = [...new Set(childrenRes.data.map(c => c.class_name))];
+          const list = childrenRes.data?.students ?? (Array.isArray(childrenRes.data) ? childrenRes.data : []);
+          const childClasses = [...new Set(list.map(c => c.class_name).filter(Boolean))];
+          setAccessibleClasses(childClasses);
           syllabus = syllabus.filter(s => childClasses.includes(s.class_name));
+
+          // Auto-select if there's only one class and nothing is selected yet.
+          // Done with setTimeout so we don't loop the fetch effect; the user
+          // can change the dropdown manually after the first paint.
+          if (childClasses.length === 1 && !filterClass) {
+            setTimeout(() => setFilterClass(childClasses[0]), 0);
+          }
         } catch {
           syllabus = [];
+          setAccessibleClasses([]);
         }
       }
 
@@ -309,10 +326,16 @@ const SyllabusPage = () => {
                 <SelectValue placeholder="All Classes" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Classes</SelectItem>
-                {classes.sort((a,b) => sortClasses(a.name, b.name)).map((cls) => (
-                  <SelectItem key={cls.name} value={cls.name}>{displayClassName(cls.name)}</SelectItem>
-                ))}
+                <SelectItem value="all">{(isParent || isStudent) && accessibleClasses.length > 0 ? 'All My Classes' : 'All Classes'}</SelectItem>
+                {/* Parents/students see only their own/children's classes */}
+                {(() => {
+                  const visible = (isParent || isStudent) && accessibleClasses.length > 0
+                    ? classes.filter(c => accessibleClasses.includes(c.name))
+                    : classes;
+                  return visible.sort((a,b) => sortClasses(a.name, b.name)).map((cls) => (
+                    <SelectItem key={cls.name} value={cls.name}>{displayClassName(cls.name)}</SelectItem>
+                  ));
+                })()}
               </SelectContent>
             </Select>
             <Select value={filterSubject || 'all'} onValueChange={(v) => setFilterSubject(v === 'all' ? '' : v)}>

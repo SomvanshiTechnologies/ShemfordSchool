@@ -32,7 +32,7 @@ const ALL_MENU_ITEMS = [
   { name: 'Payroll',                icon: Wallet,           path: '/payroll',             roles: ['admin', 'accountant', 'teacher'] },
   { name: 'Employees',              icon: UserCog,          path: '/employees',           roles: ['admin'] },
   { name: 'Users',                  icon: Users,            path: '/users',               roles: ['admin'] },
-  { name: 'Announcements',          icon: Bell,             path: '/announcements',       roles: ['admin', 'teacher'] },
+  { name: 'Announcements',          icon: Bell,             path: '/announcements',       roles: ['admin', 'teacher', 'student', 'parent'] },
   { name: 'Reports',                icon: BarChart3,        path: '/reports',             roles: ['admin', 'accountant'] },
   { name: 'Upgradation',            icon: ArrowUpCircle,    path: '/upgradation',         roles: ['admin'] },
   { name: 'Audit Trails',           icon: History,          path: '/audit-trail',         roles: ['admin'] },

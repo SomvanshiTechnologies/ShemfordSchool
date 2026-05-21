@@ -57,6 +57,7 @@ const MOBILE_ALLOWED_DESKTOP_ROUTES = [
   '/users',
   '/employees',
   '/class-structure',
+  '/syllabus',
   '/upgradation', // legacy — /m/upgradation is the native version
 ];
 

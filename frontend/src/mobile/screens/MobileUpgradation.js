@@ -127,7 +127,9 @@ const UpgradeTab = ({ classes }) => {
   const upgradingRef = useRef(false);
   const searchTimer = useRef(null);
 
-  // Debounced search
+  // Debounced search.
+  // /students search matches parents too — narrow to student name/admission
+  // so the upgrade picker doesn't surface Ankit when you search "pooja".
   useEffect(() => {
     if (selected) return;
     clearTimeout(searchTimer.current);
@@ -136,7 +138,13 @@ const UpgradeTab = ({ classes }) => {
       setSearching(true);
       try {
         const r = await api.get('/students', { params: { search: search.trim(), limit: 20 } });
-        setResults(r.data?.students ?? (Array.isArray(r.data) ? r.data : []));
+        const arr = r.data?.students ?? (Array.isArray(r.data) ? r.data : []);
+        const needle = search.trim().toLowerCase();
+        setResults(arr.filter(stu => {
+          const fullName = `${stu.first_name || ''} ${stu.last_name || ''}`.toLowerCase();
+          const admission = (stu.admission_number || '').toLowerCase();
+          return fullName.includes(needle) || admission.includes(needle);
+        }));
       } catch { setResults([]); }
       finally { setSearching(false); }
     }, 350);

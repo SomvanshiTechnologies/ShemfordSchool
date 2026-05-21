@@ -214,17 +214,20 @@ export const AdminPayrollView = ({ canManage = true }) => {
           <Button variant="outline" size="sm" onClick={load} className="rounded-xl">
             <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Refresh
           </Button>
-          <Button variant="outline" size="sm" onClick={exportExcel} disabled={!records.length} className="rounded-xl">
-            <Download className="h-3.5 w-3.5 mr-1.5" /> Excel
-          </Button>
-          <Button variant="outline" size="sm" onClick={exportPDF} disabled={!records.length} className="rounded-xl">
-            <FileText className="h-3.5 w-3.5 mr-1.5" /> PDF
-          </Button>
+          {/* Excel/PDF export hits an admin/accountant-only endpoint — hide for teachers */}
           {canManage && (
-            <Button size="sm" onClick={() => setShowGenDlg(true)}
-              className="bg-[#E88A1A] hover:bg-[#C97516] text-white rounded-xl">
-              <Plus className="h-3.5 w-3.5 mr-1.5" /> Generate Payroll
-            </Button>
+            <>
+              <Button variant="outline" size="sm" onClick={exportExcel} disabled={!records.length} className="rounded-xl">
+                <Download className="h-3.5 w-3.5 mr-1.5" /> Excel
+              </Button>
+              <Button variant="outline" size="sm" onClick={exportPDF} disabled={!records.length} className="rounded-xl">
+                <FileText className="h-3.5 w-3.5 mr-1.5" /> PDF
+              </Button>
+              <Button size="sm" onClick={() => setShowGenDlg(true)}
+                className="bg-[#E88A1A] hover:bg-[#C97516] text-white rounded-xl">
+                <Plus className="h-3.5 w-3.5 mr-1.5" /> Generate Payroll
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -274,11 +277,12 @@ export const AdminPayrollView = ({ canManage = true }) => {
               <TableHeader>
                 <TableRow className="bg-slate-50">
                   <TableHead>Employee</TableHead>
-                  <TableHead>Designation</TableHead>
-                  <TableHead className="text-right">Gross</TableHead>
-                  <TableHead className="text-right">Deductions</TableHead>
+                  {/* Mobile keeps Employee + Net Salary + Status + Actions; the rest collapse */}
+                  <TableHead className="hidden md:table-cell">Designation</TableHead>
+                  <TableHead className="hidden md:table-cell text-right">Gross</TableHead>
+                  <TableHead className="hidden md:table-cell text-right">Deductions</TableHead>
                   <TableHead className="text-right">Net Salary</TableHead>
-                  <TableHead>LWP Days</TableHead>
+                  <TableHead className="hidden md:table-cell">LWP Days</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -294,11 +298,11 @@ export const AdminPayrollView = ({ canManage = true }) => {
                         <p className="text-xs text-slate-400">{r.employee_id}</p>
                       </div>
                     </TableCell>
-                    <TableCell className="text-sm text-slate-600">{r.designation || '—'}</TableCell>
-                    <TableCell className="text-right text-sm">{fmt(r.gross_salary)}</TableCell>
-                    <TableCell className="text-right text-sm text-red-600">-{fmt(r.total_deductions)}</TableCell>
+                    <TableCell className="hidden md:table-cell text-sm text-slate-600">{r.designation || '—'}</TableCell>
+                    <TableCell className="hidden md:table-cell text-right text-sm">{fmt(r.gross_salary)}</TableCell>
+                    <TableCell className="hidden md:table-cell text-right text-sm text-red-600">-{fmt(r.total_deductions)}</TableCell>
                     <TableCell className="text-right text-sm font-semibold text-green-700">{fmt(r.net_salary)}</TableCell>
-                    <TableCell className="text-sm">{r.lwp_days ?? 0}</TableCell>
+                    <TableCell className="hidden md:table-cell text-sm">{r.lwp_days ?? 0}</TableCell>
                     <TableCell>
                       <Badge className={`text-xs border ${STATUS_COLORS[r.status] || 'bg-slate-100 text-slate-600'} rounded-lg`}>
                         {r.status}

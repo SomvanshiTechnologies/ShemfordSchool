@@ -7,6 +7,7 @@ import {
   CheckCircle, XCircle, Clock, Lock, Unlock, Loader2, Calendar,
   Users, Plus, Trash2, Download, X, FileText, Save,
 } from 'lucide-react';
+import { previewReportInTab } from '../../lib/preview';
 
 // ─── Shared bits ───────────────────────────────────────────────────────────
 
@@ -577,23 +578,54 @@ const ReportTab = ({ classes, isAdmin }) => {
     finally { setEmpReportLoading(false); }
   };
 
-  const downloadStudentCSV = () => {
+  // Preview in a new tab with Print + Excel-download buttons (same UX as
+  // Fees Reports / Payroll). Replaces the prior direct-CSV-download which
+  // surprised users with a file download instead of an on-screen view.
+  const previewStudentReport = () => {
     if (!reportData) return;
-    const header = ['Student ID', 'Class', 'Section', 'Date', 'Status'];
-    const rows = reportData.records?.map(r => [r.entity_id, r.class_name, r.section, r.date, r.status]) || [];
-    downloadCSV([header, ...rows], `class-attendance-report-${reportDate || 'all'}.csv`);
+    const rows = reportData.records || [];
+    previewReportInTab(
+      `Class Attendance Report${reportDate ? ` — ${reportDate}` : ''}`,
+      [{
+        title: reportData.total_records
+          ? `Summary — ${reportData.present || 0} present / ${reportData.absent || 0} absent / ${reportData.total_records} total (${reportData.percentage || 0}%)`
+          : null,
+        columns: [
+          { label: 'Student ID', get: r => r.entity_id },
+          { label: 'Class',      get: r => r.class_name },
+          { label: 'Section',    get: r => r.section },
+          { label: 'Date',       get: r => r.date },
+          { label: 'Status',     get: r => r.status },
+        ],
+        rows,
+      }],
+    );
   };
 
-  const downloadEmpCSV = () => {
+  const previewEmpReport = () => {
     if (!empReportData) return;
-    const header = ['Emp. ID', 'Name', 'Total', 'Present', 'Absent', 'Leave', '%'];
     const rows = Object.entries(empReportData.summary).map(([empId, s]) => {
       const emp = employees.find(e => e.employee_id === empId);
       const name = emp ? `${emp.first_name} ${emp.last_name}` : empId;
       const pct = s.total > 0 ? Math.round((s.present / s.total) * 100) : 0;
-      return [empId, name, s.total, s.present || 0, s.absent || 0, s.leave || 0, `${pct}%`];
+      return { empId, name, total: s.total, present: s.present || 0, absent: s.absent || 0, leave: s.leave || 0, pct };
     });
-    downloadCSV([header, ...rows], `employee-attendance-report-${empMonth}.csv`);
+    previewReportInTab(
+      `Employee Attendance Report — ${empMonth}`,
+      [{
+        title: `Month: ${empMonth} · ${rows.length} employee${rows.length === 1 ? '' : 's'}`,
+        columns: [
+          { label: 'Emp. ID', get: r => r.empId },
+          { label: 'Name',    get: r => r.name },
+          { label: 'Total',   get: r => r.total },
+          { label: 'Present', get: r => r.present },
+          { label: 'Absent',  get: r => r.absent },
+          { label: 'Leave',   get: r => r.leave },
+          { label: '%',       get: r => `${r.pct}%` },
+        ],
+        rows,
+      }],
+    );
   };
 
   const subTabs = isAdmin
@@ -629,8 +661,8 @@ const ReportTab = ({ classes, isAdmin }) => {
           {reportLoading ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />} Generate
         </button>
         {reportData && (
-          <button onClick={downloadStudentCSV} className="m-btn m-btn-outline m-btn-sm" style={{flex:1}}>
-            <Download size={14} /> CSV
+          <button onClick={previewStudentReport} className="m-btn m-btn-outline m-btn-sm" style={{flex:1}}>
+            <FileText size={14} /> Preview
           </button>
         )}
       </div>
@@ -661,7 +693,7 @@ const ReportTab = ({ classes, isAdmin }) => {
           ))}
           {reportData.records.length > 100 && (
             <div style={{padding:'8px 12px',fontSize:11,color:'#888',textAlign:'center',background:'#F8F8F8'}}>
-              Showing 100 of {reportData.records.length} — download CSV for the full report
+              Showing 100 of {reportData.records.length} — open Preview for the full report
             </div>
           )}
         </div>
@@ -684,8 +716,8 @@ const ReportTab = ({ classes, isAdmin }) => {
             {empReportLoading ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />} Generate
           </button>
           {empReportData && (
-            <button onClick={downloadEmpCSV} className="m-btn m-btn-outline m-btn-sm" style={{flex:1}}>
-              <Download size={14} /> CSV
+            <button onClick={previewEmpReport} className="m-btn m-btn-outline m-btn-sm" style={{flex:1}}>
+              <FileText size={14} /> Preview
             </button>
           )}
         </div>

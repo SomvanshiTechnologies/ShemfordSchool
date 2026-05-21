@@ -4,7 +4,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import {
   Users, Calendar, GraduationCap, BarChart3, Bell, MessageSquare,
   ClipboardList, Settings, LogOut, User, Building, Monitor, History,
-  ArrowUpCircle, ShieldCheck, Wallet,
+  ArrowUpCircle, ShieldCheck, Wallet, BookOpen, FileText, CreditCard,
+  LayoutDashboard,
 } from 'lucide-react';
 
 const MobileMore = () => {
@@ -14,18 +15,46 @@ const MobileMore = () => {
   const isAdmin = role === 'admin';
   const isAccountant = role === 'accountant';
   const isTeacher = role === 'teacher';
+  const isStudent = role === 'student';
+  const isParent = role === 'parent';
 
-  // Mobile-native routes (have a MobileXxx screen)
-  // Desktop routes are used for pages that don't yet have a mobile equivalent.
+  // Role-gating mirrors the desktop sidebar (ALL_MENU_ITEMS in Layout.js).
+  // Mobile-native routes (have a MobileXxx screen) point at /m/*; the rest
+  // open the desktop page wrapped in MobileLayout's bottom-tab nav.
   const menuItems = [
+    // ── Dashboard (everyone — same as desktop's first sidebar item) ────────
+    { icon: LayoutDashboard, label: 'Dashboard', path: '/m', color: '#E88A1A' },
     // ── Records ────────────────────────────────────────────
     ...(isAdmin || isTeacher || isAccountant ? [
       { icon: Users, label: 'Students', path: '/m/students', color: '#E88A1A' },
     ] : []),
-    ...(isAdmin ? [
+    ...(isAdmin || isTeacher ? [
       { icon: Building, label: 'Classes', path: '/class-structure', color: '#1A1A1A' },
+    ] : []),
+    ...(isAdmin ? [
       { icon: User, label: 'Employees', path: '/employees', color: '#1A1A1A' },
       { icon: ShieldCheck, label: 'Users', path: '/users', color: '#1A1A1A' },
+    ] : []),
+    // ── Academic ───────────────────────────────────────────
+    ...(isAdmin || isTeacher ? [
+      { icon: Calendar, label: 'Attendance', path: '/m/attendance', color: '#1A1A1A' },
+      { icon: GraduationCap, label: 'Marks', path: '/m/marks', color: '#E88A1A' },
+    ] : []),
+    ...(isStudent ? [
+      { icon: Calendar, label: 'My Attendance', path: '/m/attendance', color: '#1A1A1A' },
+      { icon: GraduationCap, label: 'My Marks', path: '/m/marks', color: '#E88A1A' },
+    ] : []),
+    ...(isParent ? [
+      { icon: Calendar, label: "Children's Attendance", path: '/m/attendance', color: '#1A1A1A' },
+    ] : []),
+    ...(isAdmin || isAccountant ? [
+      { icon: CreditCard, label: 'Fees', path: '/m/fees', color: '#E88A1A' },
+    ] : []),
+    ...(isStudent || isParent ? [
+      { icon: CreditCard, label: 'My Fees', path: '/m/fees', color: '#E88A1A' },
+    ] : []),
+    ...(isTeacher || isStudent || isParent ? [
+      { icon: BookOpen, label: 'Syllabus', path: '/syllabus', color: '#1A1A1A' },
     ] : []),
     // ── Operations ─────────────────────────────────────────
     ...(isAdmin ? [
@@ -35,7 +64,11 @@ const MobileMore = () => {
       { icon: Wallet, label: 'Payroll', path: '/payroll', color: '#1A1A1A' },
     ] : []),
     // ── Communication ──────────────────────────────────────
-    { icon: Bell, label: 'Announcements', path: '/m/notices', color: '#E88A1A' },
+    // Announcements: admin/teacher author, students/parents consume.
+    // Accountants don't get the tile (matches desktop ALL_MENU_ITEMS).
+    ...(isAdmin || isTeacher || isStudent || isParent ? [
+      { icon: Bell, label: 'Announcements', path: '/m/notices', color: '#E88A1A' },
+    ] : []),
     { icon: MessageSquare, label: 'Messages', path: '/m/messages', color: '#1A1A1A' },
     // ── Insights ───────────────────────────────────────────
     ...(isAdmin || isAccountant ? [

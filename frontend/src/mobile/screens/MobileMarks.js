@@ -683,7 +683,11 @@ const MarksheetSheet = ({ canEditMarks, onClose }) => {
     })();
   }, [canEditMarks]);
 
-  // Debounced server-side search
+  // Debounced server-side search.
+  // The /students search matches against parent names too, which makes the
+  // marksheet picker confusing — searching "pooja" returns students whose
+  // *mother* is named Pooja. Narrow client-side to student-name +
+  // admission-number matches only.
   useEffect(() => {
     if (!canEditMarks) return;
     if (search.length < 2 || studentId) { setResults([]); return; }
@@ -692,7 +696,13 @@ const MarksheetSheet = ({ canEditMarks, onClose }) => {
       try {
         const r = await api.get('/students', { params: { search, limit: 30 } });
         const arr = Array.isArray(r.data) ? r.data : (r.data?.students ?? []);
-        setResults(arr);
+        const needle = search.trim().toLowerCase();
+        const narrowed = arr.filter(stu => {
+          const fullName = `${stu.first_name || ''} ${stu.last_name || ''}`.toLowerCase();
+          const admission = (stu.admission_number || '').toLowerCase();
+          return fullName.includes(needle) || admission.includes(needle);
+        });
+        setResults(narrowed);
       } catch { setResults([]); }
       finally { setSearching(false); }
     }, 300);

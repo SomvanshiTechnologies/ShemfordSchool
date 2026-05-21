@@ -228,30 +228,93 @@ export default MobileMessages;
 // ─── Message detail ────────────────────────────────────────────────────────
 
 const MessageDetailSheet = ({ message, tab, onClose }) => {
+  const isInbox = tab === 'inbox';
+  const counterparty = isInbox
+    ? (message.sender_name || message.sender_id || 'Unknown')
+    : (message.recipient_label || message.recipient_type || 'Recipient');
+
   return (
-    <Sheet
-      title={message.subject || '(No subject)'}
-      sub={(tab === 'inbox' ? 'From: ' : 'To: ') + (message.sender_name || message.recipient_label || message.recipient_type || 'User')}
-      onClose={onClose}
+    <div
+      onClick={onClose}
+      style={{
+        position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:240,
+        // Center the dialog instead of docking it at the bottom
+        display:'flex', alignItems:'center', justifyContent:'center',
+        padding:16,
+      }}
+      data-testid="m-msg-detail"
     >
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,padding:'8px 10px',background:'#F8F8F8',borderRadius:10,marginBottom:12,flexWrap:'wrap'}}>
-        <span style={{fontSize:11,color:'#666'}}>{formatFullDate(message.created_at)}</span>
-        {message.is_read && (
-          <span style={{display:'inline-flex',alignItems:'center',gap:4,padding:'2px 8px',borderRadius:6,fontSize:10,fontWeight:700,background:'#dcfce7',color:'#15803d'}}>
-            <Check size={10} /> Read
-          </span>
-        )}
-      </div>
-      <p style={{fontSize:14,color:'#1A1A1A',lineHeight:1.6,whiteSpace:'pre-wrap',wordBreak:'break-word'}}>
-        {message.content}
-      </p>
-      {message.voice_note_id && (
-        <div style={{marginTop:14,padding:10,background:'#F8F8F8',borderRadius:10}}>
-          <p style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:'#888',marginBottom:6}}>Voice Note</p>
-          <audio controls src={`/api/media/voice-notes/${message.voice_note_id}`} style={{width:'100%'}} />
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background:'#FFF', width:'100%', maxWidth:520,
+          borderRadius:18,
+          maxHeight: 'calc(100dvh - 32px)',
+          display:'flex', flexDirection:'column',
+          boxShadow:'0 20px 50px rgba(0,0,0,0.25)',
+          overflow:'hidden',
+        }}
+      >
+        {/* Hero header */}
+        <div style={{padding:'14px 18px 16px',borderBottom:'1px solid #F0F0F0'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8,marginBottom:10}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,minWidth:0,flex:1}}>
+              <div style={{
+                width:40,height:40,borderRadius:12,
+                background:'#F5F5F5',display:'flex',alignItems:'center',justifyContent:'center',
+                color:'#1A1A1A',fontSize:14,fontWeight:800,flexShrink:0,
+              }}>
+                {initials(counterparty)}
+              </div>
+              <div style={{minWidth:0,flex:1}}>
+                <p style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:'#888'}}>
+                  {isInbox ? 'From' : 'To'}
+                </p>
+                <p style={{fontSize:14,fontWeight:700,color:'#1A1A1A',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                  {counterparty}
+                </p>
+              </div>
+            </div>
+            <button onClick={onClose} aria-label="Close" style={{background:'none',border:'none',padding:6,cursor:'pointer',color:'#888',flexShrink:0}}>
+              <X size={20} />
+            </button>
+          </div>
+
+          <h2 style={{fontSize:18,fontWeight:800,color:'#1A1A1A',lineHeight:1.3,wordBreak:'break-word'}}>
+            {message.subject || '(No subject)'}
+          </h2>
+
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,marginTop:8,flexWrap:'wrap'}}>
+            <span style={{fontSize:11,color:'#888'}}>{formatFullDate(message.created_at)}</span>
+            {message.is_read && (
+              <span style={{display:'inline-flex',alignItems:'center',gap:4,padding:'3px 8px',borderRadius:6,fontSize:10,fontWeight:700,background:'#dcfce7',color:'#15803d'}}>
+                <Check size={10} /> Read
+              </span>
+            )}
+          </div>
         </div>
-      )}
-    </Sheet>
+
+        {/* Body */}
+        <div style={{padding:18,flex:1,overflowY:'auto'}}>
+          {message.content ? (
+            <p style={{fontSize:14,color:'#1A1A1A',lineHeight:1.6,whiteSpace:'pre-wrap',wordBreak:'break-word'}}>
+              {message.content}
+            </p>
+          ) : (
+            <p style={{fontSize:13,color:'#888',fontStyle:'italic'}}>(No message body)</p>
+          )}
+
+          {message.voice_note_id && (
+            <div style={{marginTop:18,padding:12,background:'#F8F8F8',borderRadius:12,border:'1px solid rgba(0,0,0,0.04)'}}>
+              <p style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:'#888',marginBottom:8}}>
+                Voice Note
+              </p>
+              <audio controls src={`/api/media/voice-notes/${message.voice_note_id}`} style={{width:'100%'}} />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 };
 

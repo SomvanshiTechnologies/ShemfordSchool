@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../lib/api';
 import { getCached, setCached, invalidatePrefix } from '../../lib/pageCache';
+import { previewReportInTab } from '../../lib/preview';
 import { toast } from 'sonner';
 import {
   CreditCard, Search, X, Loader2, AlertTriangle, CheckCircle2, Clock,
@@ -1340,8 +1341,38 @@ const ParentStudentFees = ({ isParent }) => {
         </div>
       )}
 
-      {loadingLedger && !ledger && (
+      {/* No linked child — most common cause is parent_id missing on the
+          students record. Tell the user instead of leaving the page blank. */}
+      {!loading && children.length === 0 && (
+        <div className="m-empty" style={{padding:24}}>
+          <CreditCard className="m-empty-icon" />
+          <p style={{fontWeight:600,color:'#1A1A1A'}}>No fee records yet</p>
+          <p style={{fontSize:12,color:'#888',marginTop:6,maxWidth:300,marginLeft:'auto',marginRight:'auto',lineHeight:1.5}}>
+            {isParent
+              ? "We couldn't find a student linked to this parent account. Ask the school admin to link your child's record."
+              : "Your fee ledger hasn't been set up yet. Ask the school admin if this is unexpected."}
+          </p>
+        </div>
+      )}
+
+      {loadingLedger && !ledger && children.length > 0 && (
         <div>{[1,2,3].map(i => <div key={i} className="m-skeleton" style={{height:80,borderRadius:14,marginBottom:8}} />)}</div>
+      )}
+
+      {/* Have a linked child but no ledger entries returned from /fees/ledger.
+          Distinct from "no children linked" so the user knows the next step. */}
+      {!loadingLedger && children.length > 0 && ledger && !(
+        (ledger.ledger?.one_time?.length || 0) +
+        (ledger.ledger?.yearly?.length || 0) +
+        (ledger.ledger?.monthly?.length || 0)
+      ) && (
+        <div className="m-empty" style={{padding:24}}>
+          <CreditCard className="m-empty-icon" />
+          <p style={{fontWeight:600,color:'#1A1A1A'}}>No fee entries configured</p>
+          <p style={{fontSize:12,color:'#888',marginTop:6,maxWidth:300,marginLeft:'auto',marginRight:'auto',lineHeight:1.5}}>
+            Fee structure for {selected?.class_name}{selected?.section ? `-${selected.section}` : ''} hasn't been generated yet for the current academic year.
+          </p>
+        </div>
       )}
 
       {ledger && (
