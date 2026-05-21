@@ -60,6 +60,123 @@ async def send_message(request: Request):
     return msg_dict
 
 
+@router.get("/messages/contacts")
+async def list_messageable_contacts(request: Request, q: Optional[str] = None):
+    """
+    Return the list of users the caller is allowed to message, scoped by role:
+
+      - admin / accountant : full active-user directory
+      - teacher            : assigned-class students + all staff
+      - student            : classmates (same class+section) + all teachers
+                             + all accountants + all admins
+      - parent             : children's class teachers + all teachers
+                             + accountants + admins
+
+    Always callable (no 403 for students/parents — messaging is self-service).
+    q is an optional substring filter on name + email + admission_number.
+    """
+    user = await get_current_user(request)
+    role = user["role"]
+    me   = user["user_id"]
+
+    contacts: list[dict] = []
+    seen_ids: set[str] = set()
+
+    def add(item: dict) -> None:
+        uid = item.get("user_id")
+        if not uid or uid == me or uid in seen_ids:
+            return
+        seen_ids.add(uid)
+        contacts.append(item)
+
+    async def add_users_with_roles(roles: list[str], scope: str) -> None:
+        async for u in db.users.find(
+            {"role": {"$in": roles}, "is_active": True},
+            {"_id": 0, "password_hash": 0},
+        ):
+            add({
+                "user_id": u["user_id"], "name": u.get("name"),
+                "email":   u.get("email", ""), "role": u.get("role"),
+                "scope":   scope,
+            })
+
+    if role in (UserRole.ADMIN, UserRole.ACCOUNTANT):
+        await add_users_with_roles(
+            [UserRole.ADMIN, UserRole.TEACHER, UserRole.ACCOUNTANT,
+             UserRole.STUDENT, UserRole.PARENT],
+            "directory",
+        )
+
+    elif role == UserRole.TEACHER:
+        await add_users_with_roles(
+            [UserRole.ADMIN, UserRole.ACCOUNTANT, UserRole.TEACHER],
+            "staff",
+        )
+        from auth_utils import get_teacher_assigned_classes
+        assigned = await get_teacher_assigned_classes(me)
+        if assigned:
+            pairs = {(a["class_name"], a["section"]) for a in assigned}
+            async for s in db.students.find({"is_active": {"$ne": False}}, {"_id": 0}):
+                if (s.get("class_name"), s.get("section")) in pairs:
+                    uid = s.get("user_id") or s.get("student_id")
+                    if uid and uid not in seen_ids and uid != me:
+                        seen_ids.add(uid)
+                        contacts.append({
+                            "user_id":          uid,
+                            "name":             f"{s.get('first_name','')} {s.get('last_name','')}".strip(),
+                            "email":            s.get("email", ""),
+                            "role":             "student",
+                            "class_name":       s.get("class_name"),
+                            "section":          s.get("section"),
+                            "admission_number": s.get("admission_number"),
+                            "scope":            "my_class",
+                        })
+
+    elif role == UserRole.STUDENT:
+        # Classmates first (same class + section), then all teachers,
+        # then accountant (for fee queries), then admins (school office).
+        student = await db.students.find_one(
+            {"user_id": me}, {"_id": 0, "class_name": 1, "section": 1},
+        )
+        if student and student.get("class_name"):
+            cq: dict = {"is_active": True, "class_name": student["class_name"]}
+            if student.get("section"):
+                cq["section"] = student["section"]
+            async for s in db.students.find(cq, {"_id": 0}):
+                uid = s.get("user_id") or s.get("student_id")
+                if uid and uid not in seen_ids and uid != me:
+                    seen_ids.add(uid)
+                    contacts.append({
+                        "user_id":          uid,
+                        "name":             f"{s.get('first_name','')} {s.get('last_name','')}".strip(),
+                        "email":            s.get("email", ""),
+                        "role":             "student",
+                        "class_name":       s.get("class_name"),
+                        "section":          s.get("section"),
+                        "admission_number": s.get("admission_number"),
+                        "scope":            "classmate",
+                    })
+        await add_users_with_roles([UserRole.TEACHER],    "teacher")
+        await add_users_with_roles([UserRole.ACCOUNTANT], "accounts")
+        await add_users_with_roles([UserRole.ADMIN],      "school_office")
+
+    elif role == UserRole.PARENT:
+        await add_users_with_roles([UserRole.TEACHER],    "teacher")
+        await add_users_with_roles([UserRole.ACCOUNTANT], "accounts")
+        await add_users_with_roles([UserRole.ADMIN],      "school_office")
+
+    if q:
+        n = q.lower().strip()
+        contacts = [
+            c for c in contacts
+            if n in (c.get("name") or "").lower()
+            or n in (c.get("email") or "").lower()
+            or n in (c.get("admission_number") or "").lower()
+        ]
+
+    return contacts[:120]
+
+
 @router.get("/messages")
 async def get_messages(request: Request, sent: bool = False):
     user = await get_current_user(request)

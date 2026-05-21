@@ -382,9 +382,11 @@ const AnnouncementsPage = () => {
     { key: 'classwork', label: 'Classwork' },
     { key: 'employees', label: 'Employees' },
   ];
-  // Students/parents don't see the Employees tab — it's staff-only content
+  // Employees-category announcements are admin-only — internal staff comms
+  // for the broader school team. Teachers + accountants (and obviously
+  // students/parents) don't see or post into the Employees tab.
   const isStaff = isAdmin || isTeacher || user?.role === 'accountant';
-  const CATEGORIES = isStaff ? ALL_CATEGORIES : ALL_CATEGORIES.filter(c => c.key !== 'employees');
+  const CATEGORIES = isAdmin ? ALL_CATEGORIES : ALL_CATEGORIES.filter(c => c.key !== 'employees');
 
   const filteredAnnouncements = announcements.filter(a => {
     const cat = a.announcement_type || 'general';

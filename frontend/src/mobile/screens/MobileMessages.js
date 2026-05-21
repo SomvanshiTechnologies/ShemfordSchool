@@ -360,20 +360,26 @@ const ComposeSheet = ({ canBroadcast, onClose, onSent }) => {
     })();
   }, []);
 
-  // Debounced user search
+  // Resolve recipients via the role-scoped /messages/contacts endpoint.
+  // It works for every authenticated user (students/parents included), unlike
+  // /users/search which is staff-only.  The endpoint also handles the q filter
+  // server-side, so we just hand the search string through.
   useEffect(() => {
     if (recipientType !== 'user') return;
-    if (userSearch.length < 2) { setUserResults([]); return; }
     if (recipientId && recipientLabel === userSearch) return;
     const t = setTimeout(async () => {
       setSearching(true);
       try {
-        const r = await api.get('/users/search', { params: { q: userSearch } });
+        // Empty q returns the contact directory (teachers, admins, classmates
+        // depending on role) so the picker isn't blank before the user types.
+        const r = await api.get('/messages/contacts', {
+          params: userSearch.trim() ? { q: userSearch.trim() } : {},
+        });
         const arr = Array.isArray(r.data) ? r.data : [];
         setUserResults(arr.filter(u => u.user_id !== user?.user_id));
       } catch { setUserResults([]); }
       finally { setSearching(false); }
-    }, 300);
+    }, 200);
     return () => clearTimeout(t);
   }, [userSearch, recipientType, recipientId, recipientLabel, user?.user_id]);
 

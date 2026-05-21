@@ -1,7 +1,7 @@
 """
 Demo-account seeding so the parent + student app screens are never blank.
 
-Does THREE things for student@shemford.edu / parent@shemford.edu:
+Does FIVE things for student@shemford.edu / parent@shemford.edu:
 
   1. Links the parent user to the student record (sets parent_id on the
      students doc). Without this the parent's app shows "No children linked".
@@ -10,8 +10,17 @@ Does THREE things for student@shemford.edu / parent@shemford.edu:
      My Attendance / Children's Attendance screens have data on whichever
      month the user happens to open today.
 
-  3. Seeds a small current-academic-year fee ledger if none exists, so the
-     My Fees screen shows pending + paid + overdue entries.
+  3. Seeds marks per published exam.
+
+  4. Seeds a current-AY fee ledger if none exists. Pulls amounts from the
+     class's existing fee_component_configs row when present; otherwise
+     clones the structure from any other class's config (no hardcoded
+     prices — values always come from the DB).
+
+  5. Seeds syllabus entries for the student's class — a few chapters per
+     subject so the Syllabus screen has something to show. Subjects are
+     derived from existing exams or class_structure; falls back to a
+     basic core-subject list only when neither has anything for the class.
 
 Idempotent: every write uses upsert / $setOnInsert. Safe to re-run.
 
@@ -166,6 +175,14 @@ async def main():
             cfg = await db.fee_component_configs.find_one(
                 {"class_name": cls}, {"_id": 0},
             )
+        # Still nothing? Clone the structure from ANY other class's config so
+        # we use real, admin-set amounts rather than baking values into code.
+        if not cfg:
+            any_cfg = await db.fee_component_configs.find_one({}, {"_id": 0})
+            if any_cfg:
+                cfg = {**any_cfg, "class_name": cls, "academic_year": ay}
+                print(f"  (no fee config for {cls}; cloned from "
+                      f"{any_cfg.get('class_name')} / {any_cfg.get('academic_year')})")
         if cfg:
             today_str = today.isoformat()
             year_prefix = ay.split("-")[0]
@@ -256,11 +273,130 @@ async def main():
                 await db.student_ledger.insert_many(entries)
                 fee_inserted = len(entries)
 
+    # ── 5. Classmates — seed a few peer students in the same class+section ─
+    # Without classmates the student's "Messages → New" picker has no peers
+    # to message.  Only seed when fewer than DEMO_CLASSMATE_COUNT exist.
+    DEMO_CLASSMATE_COUNT = 6
+    classmate_query = {
+        "is_active": {"$ne": False},
+        "class_name": cls,
+    }
+    if sec:
+        classmate_query["section"] = sec
+    existing_classmates = await db.students.count_documents(classmate_query) - 1  # minus self
+    classmates_to_create = max(0, DEMO_CLASSMATE_COUNT - existing_classmates)
+
+    demo_names = [
+        ("Aarav",  "Sharma"),  ("Diya",   "Patel"),  ("Ishaan", "Kumar"),
+        ("Aanya",  "Gupta"),   ("Vihaan", "Singh"),  ("Saanvi", "Reddy"),
+        ("Reyansh","Verma"),   ("Aadhya", "Iyer"),
+    ]
+
+    try:
+        from auth_utils import hash_password
+    except ImportError:
+        hash_password = None
+
+    classmates_created = 0
+    if classmates_to_create > 0 and hash_password is not None:
+        # Build classmate records — each gets a user account too so the
+        # messages-contacts endpoint can return them with a real user_id.
+        for i in range(classmates_to_create):
+            first, last = demo_names[i % len(demo_names)]
+            # Suffix uniqueness for repeat names
+            suffix = uuid.uuid4().hex[:4]
+            email   = f"{first.lower()}.{last.lower()}.{suffix}@shemford.edu"
+            user_id = f"usr_{uuid.uuid4().hex[:12]}"
+            await db.users.insert_one({
+                "user_id":       user_id,
+                "name":          f"{first} {last}",
+                "email":         email,
+                "role":          "student",
+                "password_hash": hash_password("Student1234"),
+                "is_active":     True,
+                "created_at":    datetime.now(timezone.utc).isoformat(),
+            })
+
+            admission = f"STU{datetime.now().year}{uuid.uuid4().hex[:6].upper()}"
+            await db.students.insert_one({
+                "student_id":       f"std_{uuid.uuid4().hex[:12]}",
+                "user_id":          user_id,
+                "admission_number": admission,
+                "first_name":       first,
+                "last_name":        last,
+                "email":            email,
+                "class_name":       cls,
+                "section":          sec,
+                "academic_year":    ay,
+                "is_active":        True,
+                "created_at":       datetime.now(timezone.utc).isoformat(),
+            })
+            classmates_created += 1
+
+    # ── 6. Syllabus — chapters per subject for the student's class ──────────
+    # Subjects come from real data wherever possible:
+    #   a) existing syllabus rows for this class (already-curated subjects)
+    #   b) the class's exam subjects (what teachers grade on)
+    #   c) class_structure subject list
+    #   d) last-resort core list — only when none of the above has anything
+    syllabus_subjects = []
+    async for s in db.syllabus.find({"class_name": cls}, {"_id": 0, "subject": 1}):
+        if s.get("subject") and s["subject"] not in syllabus_subjects:
+            syllabus_subjects.append(s["subject"])
+    if not syllabus_subjects:
+        for ex in exams:
+            for subj in ex.get("subjects", []) or []:
+                name = subj.get("subject")
+                if name and name not in syllabus_subjects:
+                    syllabus_subjects.append(name)
+    if not syllabus_subjects:
+        cs = await db.class_structure.find_one({"class_name": cls}, {"_id": 0, "subjects": 1})
+        if cs and cs.get("subjects"):
+            for s in cs["subjects"]:
+                name = s if isinstance(s, str) else s.get("name")
+                if name and name not in syllabus_subjects:
+                    syllabus_subjects.append(name)
+    if not syllabus_subjects:
+        syllabus_subjects = ["Mathematics", "Science", "English", "Social Studies", "Hindi"]
+
+    syllabus_chapters = [
+        ("Chapter 1 — Introduction",   "Foundational concepts and overview of the subject for the term."),
+        ("Chapter 2 — Core Concepts",  "Deep dive into core ideas, definitions, and key principles."),
+        ("Chapter 3 — Applications",   "Worked problems and real-world examples connecting theory to practice."),
+        ("Chapter 4 — Practice Sets",  "Exercises, sample questions, and revision aids for the unit."),
+    ]
+
+    syllabus_inserted = 0
+    for subject in syllabus_subjects:
+        for title_suffix, desc in syllabus_chapters:
+            title = f"{subject} — {title_suffix}"
+            r = await db.syllabus.update_one(
+                {"class_name": cls, "subject": subject, "title": title, "academic_year": ay},
+                {"$setOnInsert": {
+                    "syllabus_id":   f"syl_{uuid.uuid4().hex[:12]}",
+                    "class_name":    cls,
+                    "subject":       subject,
+                    "title":         title,
+                    "description":   desc,
+                    "file_url":      None,
+                    "file_name":     None,
+                    "academic_year": ay,
+                    "uploaded_by":   "system",
+                    "is_active":     True,
+                    "created_at":    datetime.now(timezone.utc).isoformat(),
+                }},
+                upsert=True,
+            )
+            if r.upserted_id is not None:
+                syllabus_inserted += 1
+
     print(f"✓ Attendance inserted: {att_inserted}/{len(days)} working days "
           f"({days[-1] if days else '—'} → {days[0] if days else '—'})")
     print(f"✓ Marks inserted     : {marks_inserted} (across {len(exams)} published exam(s))")
     print(f"✓ Fee ledger inserted: {fee_inserted} for AY {ay}"
           f"{' (skipped — already had ' + str(existing_count) + ' entries)' if existing_count else ''}")
+    print(f"✓ Syllabus inserted  : {syllabus_inserted} entries across {len(syllabus_subjects)} subject(s) for class {cls}")
+    print(f"✓ Classmates seeded  : {classmates_created} new ({existing_classmates} already existed in {cls}-{sec or '—'})")
     client.close()
 
 

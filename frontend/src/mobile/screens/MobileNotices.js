@@ -137,7 +137,10 @@ const MobileNotices = () => {
   const canManage = isAdmin || isTeacher;
   const isStaff = canManage || role === 'accountant';
 
-  const categories = isStaff ? ALL_CATEGORIES : ALL_CATEGORIES.filter(c => c.key !== 'employees');
+  // Employees-category announcements are an admin-only space (staff comms).
+  // Teachers manage Homework / Classwork / General but should not see or
+  // post into the Employees tab.
+  const categories = isAdmin ? ALL_CATEGORIES : ALL_CATEGORIES.filter(c => c.key !== 'employees');
 
   const [tab, setTab] = useState('general');
   const [searchTerm, setSearchTerm] = useState('');
@@ -255,6 +258,7 @@ const MobileNotices = () => {
         <ComposeSheet
           mode="create"
           activeCategory={tab}
+          isAdmin={isAdmin}
           onClose={() => setShowCreate(false)}
           onSaved={() => { setShowCreate(false); invalidatePrefix('m-notices'); fetchData(); }}
         />
@@ -265,6 +269,7 @@ const MobileNotices = () => {
           mode="edit"
           announcement={editTarget}
           activeCategory={editTarget.announcement_type || tab}
+          isAdmin={isAdmin}
           onClose={() => setEditTarget(null)}
           onSaved={() => { setEditTarget(null); invalidatePrefix('m-notices'); fetchData(); }}
         />
@@ -340,7 +345,7 @@ const AnnouncementCard = ({ announcement: a, canManage, onEdit, onDelete }) => (
 
 // ─── Compose / Edit sheet ──────────────────────────────────────────────────
 
-const ComposeSheet = ({ mode, announcement, activeCategory, onClose, onSaved }) => {
+const ComposeSheet = ({ mode, announcement, activeCategory, isAdmin, onClose, onSaved }) => {
   const isEdit = mode === 'edit';
   const voice = useVoiceRecorder();
 
@@ -545,7 +550,7 @@ const ComposeSheet = ({ mode, announcement, activeCategory, onClose, onSaved }) 
           <label style={formLabel}>Category</label>
           <select className="m-input" value={type}
             onChange={(e) => { setType(e.target.value); setTargetMode('all'); setTargetValue(''); setTargetAudiences([]); setUseClassFilter(false); }}>
-            {ALL_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+            {(isAdmin ? ALL_CATEGORIES : ALL_CATEGORIES.filter(c => c.key !== 'employees')).map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
           </select>
         </div>
       )}
