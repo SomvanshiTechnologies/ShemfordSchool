@@ -159,6 +159,97 @@ async def list_employee_departments(request: Request):
     return sorted([d for d in depts if d])
 
 
+@router.post("/employees/{employee_id}/reset-password")
+async def reset_employee_password(employee_id: str, request: Request):
+    """
+    Admin sets / regenerates the linked-user password for an employee.
+    Body: {} → generate a random 10-char password.
+          {"password": "..."} → set explicitly (min 6 chars).
+    Mirrors the student reset-password endpoint so the EmployeesPage edit
+    dialog can use the same UX.
+    """
+    import string
+    await require_roles(UserRole.ADMIN)(request)
+    body = await request.json()
+
+    employee = await db.employees.find_one({"employee_id": employee_id}, {"_id": 0})
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    new_password = body.get("password")
+    if not new_password:
+        alphabet = string.ascii_letters + string.digits
+        new_password = "".join(secrets.choice(alphabet) for _ in range(10))
+
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    # Resolve the linked users row; create one if missing (legacy employees
+    # onboarded before auto-account creation).
+    user_account = None
+    if employee.get("user_id"):
+        user_account = await db.users.find_one({"user_id": employee["user_id"]}, {"_id": 0})
+    if not user_account and employee.get("email"):
+        user_account = await db.users.find_one({"email": employee["email"]}, {"_id": 0})
+
+    if not user_account:
+        email = employee.get("email") or f"{employee_id.lower()}@employee.shemford.in"
+        dept = (employee.get("department") or "").lower()
+        designation = (employee.get("designation") or "").lower()
+        if "account" in designation or "finance" in dept:
+            role = UserRole.ACCOUNTANT
+        else:
+            role = UserRole.TEACHER
+        new_user = UserBase(
+            email=email,
+            name=f"{employee.get('first_name','')} {employee.get('last_name','')}".strip() or email,
+            role=role,
+            phone=employee.get("phone"),
+        )
+        u_dict = new_user.model_dump()
+        u_dict["password_hash"] = hash_password(new_password)
+        u_dict["created_at"] = u_dict["created_at"].isoformat()
+        await db.users.insert_one(u_dict)
+        await db.employees.update_one(
+            {"employee_id": employee_id},
+            {"$set": {"user_id": new_user.user_id, "email": email, "temp_password": new_password}},
+        )
+        return {
+            "message": "Employee account created and password set",
+            "password": new_password,
+            "email": email,
+        }
+
+    await db.users.update_one(
+        {"user_id": user_account["user_id"]},
+        {"$set": {"password_hash": hash_password(new_password)}},
+    )
+    await db.employees.update_one(
+        {"employee_id": employee_id},
+        {"$set": {"temp_password": new_password}},
+    )
+    return {
+        "message": "Password reset successfully",
+        "password": new_password,
+        "email": employee.get("email"),
+    }
+
+
+@router.get("/employees/{employee_id}/password")
+async def get_employee_password_hint(employee_id: str, request: Request):
+    """Admin-only: returns the last-reset password stored on the employee
+    record. Empty if never generated or wiped after a self-service change."""
+    await require_roles(UserRole.ADMIN)(request)
+    employee = await db.employees.find_one({"employee_id": employee_id}, {"_id": 0})
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    return {
+        "password": employee.get("temp_password") or None,
+        "email": employee.get("email"),
+        "has_account": bool(employee.get("user_id") or employee.get("email")),
+    }
+
+
 @router.get("/employees/me")
 async def get_my_employee_record(request: Request):
     """Any logged-in user can fetch their own employee record (used by teachers for payroll)."""
@@ -257,6 +348,28 @@ async def update_employee(employee_id: str, request: Request):
         old_val = old_employee.get(key)
         if old_val != new_val:
             changes[key] = {"old": old_val, "new": new_val}
+
+    # Email change — propagate to the linked users row so the employee can
+    # still log in with the new address. Reject duplicates against other users.
+    if "email" in body:
+        new_email = (body.get("email") or "").strip().lower()
+        body["email"] = new_email
+        if new_email and new_email != (old_employee.get("email") or "").lower():
+            existing_user_id = old_employee.get("user_id")
+            clash = await db.users.find_one(
+                {"email": new_email, "user_id": {"$ne": existing_user_id}},
+                {"_id": 0, "user_id": 1},
+            )
+            if clash:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Email '{new_email}' is already used by another user account."
+                )
+            if existing_user_id:
+                await db.users.update_one(
+                    {"user_id": existing_user_id},
+                    {"$set": {"email": new_email}},
+                )
 
     # Validate and normalize bank fields if any are being updated
     if any(f in body for f in BANK_FIELDS):

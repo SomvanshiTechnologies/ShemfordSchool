@@ -36,6 +36,25 @@
 .m-content select,
 .m-content textarea { max-width: 100%; box-sizing: border-box; }
 
+/* iOS Safari ignores width:100% on empty <input type="date"> and shrinks
+   the field to fit its placeholder glyphs (the screenshot showed a tiny
+   pill where a full-width date input was expected). Force native chrome
+   off and pin a full width + 44px min-height so date / time inputs stay
+   visually consistent with text inputs. */
+input[type="date"].m-input,
+input[type="time"].m-input,
+input[type="datetime-local"].m-input,
+.m-content input[type="date"],
+.m-content input[type="time"],
+.m-content input[type="datetime-local"] {
+  -webkit-appearance: none;
+  appearance: none;
+  min-width: 100%;
+  width: 100%;
+  min-height: 44px;
+  display: block;
+}
+
 /* Bottom Nav */
 .m-bottom-nav {
   position: fixed;

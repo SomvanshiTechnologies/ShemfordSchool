@@ -48,7 +48,7 @@ import {
   AlertDialogTitle,
 } from './ui/alert-dialog';
 import { toast } from 'sonner';
-import { Plus, Search, Eye, Edit, UserCog, Filter, AlertTriangle, Link2, Loader2, Copy, Check, X, RefreshCw } from 'lucide-react';
+import { Plus, Search, Eye, EyeOff, Edit, UserCog, Filter, AlertTriangle, Link2, Loader2, Copy, Check, X, RefreshCw, KeyRound } from 'lucide-react';
 
 const EmployeesPage = () => {
   const [employees, setEmployees] = useState([]);
@@ -74,6 +74,14 @@ const EmployeesPage = () => {
   const [passwordCopied, setPasswordCopied] = useState(false);
   const [deactivateTarget, setDeactivateTarget] = useState(null);
   const [saving, setSaving] = useState(false);
+  // Password management (admin sets/regenerates login password from the
+  // edit dialog — same UX as the StudentsPage password section).
+  const [pwInput, setPwInput] = useState('');
+  const [pwResult, setPwResult] = useState(null);
+  const [pwLoading, setPwLoading] = useState(false);
+  const [pwVisible, setPwVisible] = useState(false);
+  const [currentPw, setCurrentPw] = useState(null);
+  const [currentPwVisible, setCurrentPwVisible] = useState(false);
   const [formData, setFormData] = useState({
     employee_id: '',
     first_name: '',
@@ -232,6 +240,7 @@ const EmployeesPage = () => {
       employee_id: employee.employee_id || '',
       first_name: employee.first_name || '',
       last_name: employee.last_name || '',
+      email: employee.email || '',
       phone: employee.phone || '',
       date_of_birth: employee.date_of_birth || '',
       gender: employee.gender || 'male',
@@ -240,7 +249,40 @@ const EmployeesPage = () => {
       department: employee.department || '',
       salary: employee.salary || '',
     });
+    // Reset password-management state so the dialog starts clean each open
+    setPwInput('');
+    setPwResult(null);
+    setPwVisible(false);
+    setCurrentPw(null);
+    setCurrentPwVisible(false);
+
+    // Load the existing temp password (if any) so the admin can re-share it
+    (async () => {
+      try {
+        const r = await api.get(`/employees/${employee.employee_id}/password`);
+        setCurrentPw(r.data?.password || null);
+      } catch { /* non-fatal — just hides the "Current password" row */ }
+    })();
+
     setShowEditDialog(true);
+  };
+
+  const handleResetEmployeePassword = async (generate = false) => {
+    setPwLoading(true);
+    try {
+      const body = generate ? {} : { password: pwInput };
+      const res = await api.post(`/employees/${selectedEmployee.employee_id}/reset-password`, body);
+      setPwResult(res.data);
+      setCurrentPw(res.data.password);
+      setCurrentPwVisible(true);
+      setPwInput('');
+      setPwVisible(true);
+      toast.success('Password updated successfully');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to reset password');
+    } finally {
+      setPwLoading(false);
+    }
   };
 
   const handleUpdateEmployee = async (e) => {
@@ -728,6 +770,17 @@ const EmployeesPage = () => {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
+                  <Label htmlFor="edit_email">Email * <span className="text-xs text-muted-foreground font-normal">(used to log in)</span></Label>
+                  <Input
+                    id="edit_email"
+                    type="email"
+                    value={editData.email}
+                    onChange={(e) => setEditData({...editData, email: e.target.value})}
+                    placeholder="employee@shemford.edu"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
                   <Label htmlFor="edit_phone">Phone</Label>
                   <Input
                     id="edit_phone"
@@ -735,6 +788,8 @@ const EmployeesPage = () => {
                     onChange={(e) => setEditData({...editData, phone: e.target.value})}
                   />
                 </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="edit_dob">Date of Birth</Label>
                   <Input
@@ -806,6 +861,64 @@ const EmployeesPage = () => {
                   value={editData.address}
                   onChange={(e) => setEditData({...editData, address: e.target.value})}
                 />
+              </div>
+
+              {/* ── Password Management (admin-only) ────────────────── */}
+              <div className="border-t pt-4">
+                <h4 className="font-medium mb-3 text-foreground flex items-center gap-2">
+                  <KeyRound className="h-4 w-4" />Password Management
+                </h4>
+
+                {currentPw && !pwResult && (
+                  <div className="mb-3 p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-muted-foreground">Current password:</span>
+                      <code className="font-mono font-bold text-foreground bg-white px-2 py-0.5 rounded border">
+                        {currentPwVisible ? currentPw : '••••••••••'}
+                      </code>
+                      <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={() => setCurrentPwVisible(v => !v)}>
+                        {currentPwVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                      </Button>
+                      <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={() => { navigator.clipboard?.writeText(currentPw); toast.success('Copied'); }}>
+                        <Copy className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {pwResult && (
+                  <div className="mb-3 p-3 rounded-lg bg-green-50 border border-green-200 text-sm">
+                    <p className="text-green-700 font-medium mb-1">Password updated successfully</p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-muted-foreground">New password:</span>
+                      <code className="font-mono font-bold text-foreground bg-white px-2 py-0.5 rounded border">
+                        {pwVisible ? pwResult.password : '••••••••••'}
+                      </code>
+                      <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={() => setPwVisible(v => !v)}>
+                        {pwVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                      </Button>
+                      <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={() => { navigator.clipboard?.writeText(pwResult.password); toast.success('Copied'); }}>
+                        <Copy className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-2 flex-wrap">
+                  <Input
+                    placeholder="Enter new password (min 6 chars)"
+                    value={pwInput}
+                    onChange={e => setPwInput(e.target.value)}
+                    type="text"
+                    className="flex-1 min-w-[180px]"
+                  />
+                  <Button type="button" variant="outline" size="sm" onClick={() => handleResetEmployeePassword(false)} disabled={pwLoading || pwInput.length < 6}>
+                    Set
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" onClick={() => handleResetEmployeePassword(true)} disabled={pwLoading} className="flex items-center gap-1">
+                    <RefreshCw className="h-3 w-3" /> Generate
+                  </Button>
+                </div>
               </div>
             </div>
             <DialogFooter>
