@@ -364,7 +364,9 @@ const MessagesPage = () => {
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between gap-1 mb-0.5">
                               <p className={`text-sm truncate ${isUnread ? 'font-bold text-slate-900' : 'font-medium text-slate-800'}`}>
-                                {activeTab === 'inbox' ? message.sender_name : 'To: ' + (message.recipient_type || 'User')}
+                                {activeTab === 'inbox'
+                                  ? (message.sender_name || message.sender_id || 'Unknown')
+                                  : 'To: ' + (message.recipient_label || message.recipient_value || message.recipient_type || 'Recipient')}
                               </p>
                               <div className="flex items-center gap-1.5 shrink-0">
                                 {isUnread && <span className="h-2 w-2 rounded-full bg-slate-900 inline-block" />}
@@ -396,7 +398,10 @@ const MessagesPage = () => {
                     <div>
                       <CardTitle>{selectedMessage.subject}</CardTitle>
                       <p className="text-sm text-muted-foreground mt-1">
-                        From: {selectedMessage.sender_name} • {formatDateTime(selectedMessage.created_at)}
+                        {activeTab === 'inbox'
+                          ? `From: ${selectedMessage.sender_name || selectedMessage.sender_id || 'Unknown'}`
+                          : `To: ${selectedMessage.recipient_label || selectedMessage.recipient_value || selectedMessage.recipient_type || 'Recipient'}`}
+                        {' • '}{formatDateTime(selectedMessage.created_at)}
                       </p>
                     </div>
                     {selectedMessage.is_read && (

@@ -43,13 +43,28 @@ async def send_message(request: Request):
         # Also check student record directly
         student_rec = await db.students.find_one(
             {"$or": [{"user_id": body["recipient_id"]}, {"student_id": body["recipient_id"]}]},
-            {"_id": 0, "is_active": 1}
+            {"_id": 0, "is_active": 1, "first_name": 1, "last_name": 1}
         )
         if student_rec and not student_rec.get("is_active", True):
             raise HTTPException(
                 status_code=400,
                 detail="Cannot send message: student is currently deactivated"
             )
+
+        # Denormalize the recipient's display name onto the message so the
+        # Sent folder doesn't render "TO: user". Prefer the users row's name;
+        # fall back to the students row for student recipients without a
+        # populated users.name; finally fall back to the email local-part.
+        if not body.get("recipient_label"):
+            name = None
+            if recipient_user:
+                name = recipient_user.get("name") or recipient_user.get("email")
+            if not name and student_rec:
+                name = f"{student_rec.get('first_name','')} {student_rec.get('last_name','')}".strip() or None
+            if name and "@" in name:
+                name = name.split("@", 1)[0]
+            if name:
+                body["recipient_label"] = name
 
     message = Message(**body, sender_id=user["user_id"], sender_name=user["name"])
     msg_dict = message.model_dump()
@@ -108,29 +123,25 @@ async def list_messageable_contacts(request: Request, q: Optional[str] = None):
         )
 
     elif role == UserRole.TEACHER:
-        await add_users_with_roles(
-            [UserRole.ADMIN, UserRole.ACCOUNTANT, UserRole.TEACHER],
-            "staff",
-        )
-        from auth_utils import get_teacher_assigned_classes
-        assigned = await get_teacher_assigned_classes(me)
-        if assigned:
-            pairs = {(a["class_name"], a["section"]) for a in assigned}
-            async for s in db.students.find({"is_active": {"$ne": False}}, {"_id": 0}):
-                if (s.get("class_name"), s.get("section")) in pairs:
-                    uid = s.get("user_id") or s.get("student_id")
-                    if uid and uid not in seen_ids and uid != me:
-                        seen_ids.add(uid)
-                        contacts.append({
-                            "user_id":          uid,
-                            "name":             f"{s.get('first_name','')} {s.get('last_name','')}".strip(),
-                            "email":            s.get("email", ""),
-                            "role":             "student",
-                            "class_name":       s.get("class_name"),
-                            "section":          s.get("section"),
-                            "admission_number": s.get("admission_number"),
-                            "scope":            "my_class",
-                        })
+        # Teachers see ALL students (their primary audience) plus admins and
+        # accountants for escalation. They do NOT see other teachers — keeps
+        # the picker focused on people they'd actually message in practice.
+        async for s in db.students.find({"is_active": {"$ne": False}}, {"_id": 0}):
+            uid = s.get("user_id") or s.get("student_id")
+            if uid and uid not in seen_ids and uid != me:
+                seen_ids.add(uid)
+                contacts.append({
+                    "user_id":          uid,
+                    "name":             f"{s.get('first_name','')} {s.get('last_name','')}".strip(),
+                    "email":            s.get("email", ""),
+                    "role":             "student",
+                    "class_name":       s.get("class_name"),
+                    "section":          s.get("section"),
+                    "admission_number": s.get("admission_number"),
+                    "scope":            "student",
+                })
+        await add_users_with_roles([UserRole.ADMIN],      "school_office")
+        await add_users_with_roles([UserRole.ACCOUNTANT], "accounts")
 
     elif role == UserRole.STUDENT:
         # Classmates first (same class + section), then all teachers,
@@ -209,6 +220,42 @@ async def get_messages(request: Request, sent: bool = False):
         query = {"$or": or_clauses}
 
     messages = await db.messages.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+    # Enrich messages sent to specific users with the recipient's display
+    # name when recipient_label is missing — this covers messages stored
+    # before the send-time denormalization was added, so the Sent folder
+    # stops showing "TO: user" / "TO: student".
+    missing_label_ids = list({
+        m.get("recipient_id") for m in messages
+        if m.get("recipient_type") == "user"
+        and m.get("recipient_id")
+        and not m.get("recipient_label")
+    })
+    if missing_label_ids:
+        name_by_id: dict[str, str] = {}
+        async for u in db.users.find(
+            {"user_id": {"$in": missing_label_ids}},
+            {"_id": 0, "user_id": 1, "name": 1, "email": 1},
+        ):
+            nm = u.get("name") or (u.get("email") or "").split("@")[0]
+            if nm:
+                name_by_id[u["user_id"]] = nm
+        unresolved = [i for i in missing_label_ids if i not in name_by_id]
+        if unresolved:
+            async for s in db.students.find(
+                {"$or": [{"user_id": {"$in": unresolved}}, {"student_id": {"$in": unresolved}}]},
+                {"_id": 0, "user_id": 1, "student_id": 1, "first_name": 1, "last_name": 1},
+            ):
+                nm = f"{s.get('first_name','')} {s.get('last_name','')}".strip()
+                if nm:
+                    if s.get("user_id"):    name_by_id[s["user_id"]]    = nm
+                    if s.get("student_id"): name_by_id[s["student_id"]] = nm
+        for m in messages:
+            if not m.get("recipient_label"):
+                resolved = name_by_id.get(m.get("recipient_id"))
+                if resolved:
+                    m["recipient_label"] = resolved
+
     return messages
 
 
