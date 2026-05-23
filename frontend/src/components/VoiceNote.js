@@ -129,6 +129,16 @@ export function useVoiceRecorder() {
 
   const start = useCallback(async () => {
     setMicError(null);
+    // Browsers expose navigator.mediaDevices only in secure contexts
+    // (https://, localhost, 127.0.0.1). On plain http://<ip>, the API is
+    // undefined and getUserMedia throws TypeError — surface that explicitly
+    // so admins on LAN HTTP know the cause.
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      setMicError(
+        `Microphone needs a secure connection (HTTPS or localhost). This page is served over ${window.location.protocol}//${window.location.host} — switch to HTTPS to record.`
+      );
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
@@ -146,11 +156,27 @@ export function useVoiceRecorder() {
       mr.start();
       setRecording(true);
     } catch (err) {
-      setMicError(
-        err.name === 'NotAllowedError'
-          ? 'Please allow microphone access in your browser settings.'
-          : 'Microphone not available.'
-      );
+      let msg;
+      switch (err?.name) {
+        case 'NotAllowedError':
+        case 'SecurityError':
+          msg = 'Microphone permission denied. Click the lock icon in the address bar → Site settings → Microphone → Allow.';
+          break;
+        case 'NotFoundError':
+        case 'DevicesNotFoundError':
+          msg = 'No microphone detected on this device.';
+          break;
+        case 'NotReadableError':
+        case 'TrackStartError':
+          msg = 'Microphone is in use by another app. Close it and try again.';
+          break;
+        case 'OverconstrainedError':
+          msg = 'No microphone matched the requested settings.';
+          break;
+        default:
+          msg = `Microphone not available (${err?.name || 'unknown error'}).`;
+      }
+      setMicError(msg);
     }
   }, []);
 
