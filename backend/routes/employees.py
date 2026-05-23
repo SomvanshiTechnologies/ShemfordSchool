@@ -94,10 +94,11 @@ async def create_employee(employee: EmployeeCreate, request: Request):
         await db.users.insert_one(user_dict)
 
         employee_dict["user_id"] = user_obj.user_id
-        employee_dict["_temp_password"] = temp_password
+        # Persist plaintext temp password on employee record so admin can view/share
+        # later from the edit dialog — same UX choice as the students collection.
+        employee_dict["temp_password"] = temp_password
 
-    # (#17) Pop temp password BEFORE inserting into DB so it's never stored
-    temp_pw = employee_dict.pop("_temp_password", None)
+    temp_pw = employee_dict.get("temp_password")
 
     # Encrypt PII bank fields before storage
     encrypt_bank_fields(employee_dict)
@@ -436,7 +437,7 @@ async def link_employee_user(employee_id: str, request: Request):
 
     await db.employees.update_one(
         {"employee_id": employee_id},
-        {"$set": {"user_id": user_obj.user_id}}
+        {"$set": {"user_id": user_obj.user_id, "temp_password": temp_password}}
     )
 
     await create_audit_log("employee", employee_id, "link-user", {"user_id": user_obj.user_id, "role": role}, user)

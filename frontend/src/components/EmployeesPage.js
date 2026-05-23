@@ -231,7 +231,15 @@ const EmployeesPage = () => {
 
   const handleViewEmployee = (employee) => {
     setSelectedEmployee(employee);
+    setCurrentPw(null);
+    setCurrentPwVisible(false);
     setShowViewDialog(true);
+    (async () => {
+      try {
+        const r = await api.get(`/employees/${employee.employee_id}/password`);
+        setCurrentPw(r.data?.password || null);
+      } catch { /* admin-only endpoint; non-admin viewers just won't see the row */ }
+    })();
   };
 
   const handleEditEmployee = (employee) => {
@@ -1011,6 +1019,24 @@ const EmployeesPage = () => {
                 <div>
                   <Label className="text-muted-foreground">Email</Label>
                   <p className="font-medium">{selectedEmployee.email}</p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">Password</Label>
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <p className="font-medium font-mono">
+                      {currentPw == null ? '—' : currentPwVisible ? currentPw : '••••••••••'}
+                    </p>
+                    {currentPw && (
+                      <>
+                        <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => setCurrentPwVisible(v => !v)}>
+                          {currentPwVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => { navigator.clipboard?.writeText(currentPw); toast.success('Copied'); }}>
+                          <Copy className="h-3 w-3" />
+                        </Button>
+                      </>
+                    )}
+                  </div>
                 </div>
                 <div>
                   <Label className="text-muted-foreground">Phone</Label>
