@@ -50,3 +50,19 @@ export function truncate(str, length = 50) {
   if (!str) return '';
   return str.length > length ? str.slice(0, length) + '...' : str;
 }
+
+// For Class 11th / 12th the section displayed to users should be the
+// stream (Science / Humanities) rather than the colour-named section
+// that older student records still carry (Indigo / Red / Violet …).
+// Pass a student-like object with { class_name, section, stream }.
+const STREAM_CLASSES = new Set(['11', '11th', '12', '12th', 'Class 11', 'Class 12']);
+export function displaySection(student) {
+  if (!student) return '';
+  const cls = student.class_name || student.class || '';
+  const isStreamClass = STREAM_CLASSES.has(String(cls));
+  if (isStreamClass && student.stream) {
+    const s = String(student.stream);
+    return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+  }
+  return student.section || '';
+}

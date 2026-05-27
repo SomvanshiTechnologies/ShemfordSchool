@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from database import db
 from models import UserRole, Issue
-from auth_utils import get_current_user, require_roles
+from auth_utils import get_current_user, require_roles, session_year_filter, active_session_name, ensure_active_session
 
 router = APIRouter()
 
@@ -12,9 +12,13 @@ router = APIRouter()
 @router.post("/issues")
 async def create_issue(request: Request):
     user = await get_current_user(request)
+    await ensure_active_session(request)  # previous sessions are read-only
     body = await request.json()
 
-    issue = Issue(**body, raised_by=user["user_id"], raised_by_role=user["role"])
+    # Stamp the owning session (true session ownership, not created_at).
+    body.pop("academic_year", None)
+    issue = Issue(**body, raised_by=user["user_id"], raised_by_role=user["role"],
+                  academic_year=await active_session_name())
     issue_dict = issue.model_dump()
     issue_dict["created_at"] = issue_dict["created_at"].isoformat()
     if issue_dict.get("resolved_at"):
@@ -44,6 +48,8 @@ async def get_issues(
         query["status"] = status
     if category:
         query["category"] = category
+    # Scope strictly by owning session (academic_year), not created_at.
+    query.update(session_year_filter(request))
 
     issues = await db.issues.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
     return issues

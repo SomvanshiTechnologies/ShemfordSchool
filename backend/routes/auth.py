@@ -6,6 +6,7 @@ import httpx
 import secrets
 import os
 import logging
+import re
 
 from database import db
 from models import (
@@ -15,7 +16,7 @@ from auth_utils import (
     hash_password, verify_password, create_jwt_token, decode_jwt_token,
     get_current_user, require_roles, create_audit_log,
     create_refresh_token_db, verify_refresh_token,
-    revoke_refresh_token, revoke_all_refresh_tokens, revoke_jti,
+    revoke_refresh_token, revoke_all_refresh_tokens, revoke_jti, session_window,
 )
 
 def _system_actor(user_id: str, name: str = "system") -> dict:
@@ -155,9 +156,27 @@ async def login_user(credentials: UserLogin):
     # ("  student@shemford.edu" / "Student@Shemford.edu") still match the
     # stored record. Emails are always stored lowercased by our seed/register
     # flows, but real users and autocorrect frequently add case or spaces.
-    email = (credentials.email or "").strip().lower()
+    identifier = (credentials.email or "").strip()
 
-    user = await db.users.find_one({"email": email}, {"_id": 0})
+    # Resolve the account by any of: email, student admission number, or
+    # employee ID. Students log in with their admission number, employees with
+    # their employee ID (both linked to a users account via user_id).
+    user = await db.users.find_one({"email": identifier.lower()}, {"_id": 0})
+    if not user:
+        stu = await db.students.find_one(
+            {"admission_number": {"$regex": f"^{re.escape(identifier)}$", "$options": "i"}},
+            {"_id": 0, "user_id": 1},
+        )
+        if stu and stu.get("user_id"):
+            user = await db.users.find_one({"user_id": stu["user_id"]}, {"_id": 0})
+    if not user:
+        emp = await db.employees.find_one(
+            {"employee_id": {"$regex": f"^{re.escape(identifier)}$", "$options": "i"}},
+            {"_id": 0, "user_id": 1},
+        )
+        if emp and emp.get("user_id"):
+            user = await db.users.find_one({"user_id": emp["user_id"]}, {"_id": 0})
+
     if not user or not verify_password(credentials.password, user.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
@@ -256,8 +275,9 @@ async def get_current_user_info(request: Request):
 
 @router.put("/auth/me")
 async def update_current_user_info(request: Request):
-    """Logged-in user updates their own profile fields (name, phone, picture).
-    Email and role are NOT editable here — those require admin action."""
+    """Logged-in user updates their own profile fields (name, phone, picture, email).
+    Setting an email lets the user log in with it; their admission/employee ID still
+    works as a fallback. Role is NOT editable here — that requires admin action."""
     user = await get_current_user(request)
     body = await request.json()
 
@@ -271,11 +291,34 @@ async def update_current_user_info(request: Request):
         updates["phone"] = (body.get("phone") or "").strip() or None
     if "picture" in body:
         updates["picture"] = body.get("picture") or None
+    if "email" in body:
+        email = (body.get("email") or "").strip().lower()
+        if email:
+            if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+                raise HTTPException(status_code=400, detail="Please enter a valid email address.")
+            clash = await db.users.find_one(
+                {"email": email, "user_id": {"$ne": user["user_id"]}},
+                {"_id": 0, "user_id": 1},
+            )
+            if clash:
+                raise HTTPException(status_code=400, detail="That email is already in use by another account.")
+            updates["email"] = email
 
     if not updates:
         raise HTTPException(status_code=400, detail="No editable fields provided.")
 
     await db.users.update_one({"user_id": user["user_id"]}, {"$set": updates})
+
+    # Keep the linked student/employee record in sync so admin sees the same email
+    # in the student/employee details, and so email login resolves correctly.
+    if "email" in updates:
+        await db.students.update_one(
+            {"user_id": user["user_id"]}, {"$set": {"email": updates["email"]}}
+        )
+        await db.employees.update_one(
+            {"user_id": user["user_id"]}, {"$set": {"email": updates["email"]}}
+        )
+
     updated = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
     if isinstance(updated.get("created_at"), str):
         updated["created_at"] = datetime.fromisoformat(updated["created_at"])
@@ -514,6 +557,24 @@ async def get_users(
         # 1000+ accounts without scrolling through paged results.
         rx = _re.compile(_re.escape(search.strip()), _re.IGNORECASE)
         query["$or"] = [{"name": rx}, {"email": rx}]
+    # Active-period scoping: accounts created on or before the session ends, and
+    # not deactivated before it starts (deactivated_at stamped on deactivation).
+    win_start, win_end = await session_window(request)
+    if win_start:
+        from datetime import datetime as _dt, timedelta as _td
+        end_excl = (_dt.strptime(win_end, "%Y-%m-%d").date() + _td(days=1)).isoformat()
+        period = {
+            "created_at": {"$lt": end_excl},
+            "$and": [{"$or": [
+                {"deactivated_at": None}, {"deactivated_at": {"$exists": False}},
+                {"deactivated_at": {"$gte": win_start}},
+            ]}],
+        }
+        # Merge without clobbering a search $or.
+        if "$or" in query:
+            query = {"$and": [query, period]}
+        else:
+            query.update(period)
     total, users = await _asyncio.gather(
         db.users.count_documents(query),
         db.users.find(query, {"_id": 0, "password_hash": 0})

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import api from '../lib/api';
 import { previewInTab, previewExcelHtml } from '../lib/preview';
 import { useAuth } from '../contexts/AuthContext';
+import { useSession } from '../contexts/SessionContext';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -45,6 +46,7 @@ const currentMonth = new Date().getMonth() + 1;
 // Admin view — generate, approve, pay, export
 // ─────────────────────────────────────────────────────────────────────────────
 export const AdminPayrollView = ({ canManage = true }) => {
+  const { sessionBounds, sessionToday } = useSession();
   const [records,      setRecords]      = useState([]);
   const [loading,      setLoading]      = useState(false);
   const [loadingMore,  setLoadingMore]  = useState(false);
@@ -65,6 +67,23 @@ export const AdminPayrollView = ({ canManage = true }) => {
   const [actionLoading,setActionLoading]= useState('');
 
   const monthYear = `${year}-${String(month).padStart(2, '0')}`;
+
+  // Drive the month navigator from the selected session: default to the
+  // session-aware "today" month and clamp navigation to the session's months
+  // (e.g. 2025-2026 → Apr 2025 … Mar 2026). Switching session re-anchors here,
+  // so payroll no longer shows the same month across every session.
+  useEffect(() => {
+    if (!sessionToday) return;
+    const [y, m] = sessionToday.split('-').map(Number);
+    if (y && m) { setYear(y); setMonth(m); }
+  }, [sessionToday]);
+
+  const startYM = sessionBounds.start ? sessionBounds.start.slice(0, 7) : '';
+  const endYM   = sessionBounds.end ? sessionBounds.end.slice(0, 7) : '';
+  const atStart = !!startYM && monthYear <= startYM;
+  const atEnd   = !!endYM && monthYear >= endYM;
+  const goPrev = () => { if (atStart) return; if (month === 1) { setMonth(12); setYear((y) => y - 1); } else setMonth((m) => m - 1); };
+  const goNext = () => { if (atEnd) return; if (month === 12) { setMonth(1); setYear((y) => y + 1); } else setMonth((m) => m + 1); };
 
   const load = useCallback(async (pg = 1, append = false) => {
     if (append) setLoadingMore(true);
@@ -197,15 +216,15 @@ export const AdminPayrollView = ({ canManage = true }) => {
       {/* ── Month selector + actions ── */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2">
-          <button onClick={() => { if (month === 1) { setMonth(12); setYear(y => y-1); } else setMonth(m => m-1); }}
-            className="h-8 w-8 rounded-lg border border-slate-200 flex items-center justify-center hover:bg-slate-50">
+          <button onClick={goPrev} disabled={atStart}
+            className="h-8 w-8 rounded-lg border border-slate-200 flex items-center justify-center hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed">
             <ChevronLeft className="h-4 w-4" />
           </button>
           <span className="font-semibold text-slate-800 min-w-[140px] text-center">
             {MONTHS[month - 1]} {year}
           </span>
-          <button onClick={() => { if (month === 12) { setMonth(1); setYear(y => y+1); } else setMonth(m => m+1); }}
-            className="h-8 w-8 rounded-lg border border-slate-200 flex items-center justify-center hover:bg-slate-50">
+          <button onClick={goNext} disabled={atEnd}
+            className="h-8 w-8 rounded-lg border border-slate-200 flex items-center justify-center hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed">
             <ChevronRight className="h-4 w-4" />
           </button>
         </div>

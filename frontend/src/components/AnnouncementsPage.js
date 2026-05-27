@@ -9,6 +9,7 @@ const TopProgressBar = ({ active }) =>
     </div>
   ) : null;
 import { useAuth } from '../contexts/AuthContext';
+import { useSession } from '../contexts/SessionContext';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -39,6 +40,7 @@ import { VoiceNotePlayer, VoiceNoteRecorder, useVoiceRecorder } from './VoiceNot
 
 const AnnouncementsPage = () => {
   const { user, isAdmin, isTeacher } = useAuth();
+  const { sessionBounds, viewSession } = useSession();
   const [deleting, setDeleting] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [editTarget, setEditTarget] = useState(null);
@@ -388,13 +390,23 @@ const AnnouncementsPage = () => {
   const isStaff = isAdmin || isTeacher || user?.role === 'accountant';
   const CATEGORIES = isAdmin ? ALL_CATEGORIES : ALL_CATEGORIES.filter(c => c.key !== 'employees');
 
+  // Scope to the selected session. New announcements are tagged with the
+  // session they were posted in (academic_year); match on that. Legacy rows
+  // without the tag fall back to their post date against the session window
+  // (the active session's window extends to today — see SessionContext).
+  const inSession = (a) => {
+    if (a.academic_year) return a.academic_year === viewSession;
+    const day = (a.created_at || '').slice(0, 10);
+    return !sessionBounds.start || !day || (day >= sessionBounds.start && day <= sessionBounds.end);
+  };
+
   const filteredAnnouncements = announcements.filter(a => {
     const cat = a.announcement_type || 'general';
     const matchCat = cat === activeCategory;
     const matchSearch = !searchTerm ||
       a.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
       a.content.toLowerCase().includes(searchTerm.toLowerCase());
-    return matchCat && matchSearch;
+    return matchCat && matchSearch && inSession(a);
   });
 
   return (
@@ -645,7 +657,7 @@ const AnnouncementsPage = () => {
           >
             {cat.label}
             <span className="ml-1.5 text-[10px] text-slate-400">
-              ({announcements.filter(a => (a.announcement_type || 'general') === cat.key).length})
+              ({announcements.filter(a => (a.announcement_type || 'general') === cat.key && inSession(a)).length})
             </span>
           </button>
         ))}

@@ -9,6 +9,7 @@ const TopProgressBar = ({ active }) =>
     </div>
   ) : null;
 import { useAuth } from '../contexts/AuthContext';
+import { useSession } from '../contexts/SessionContext';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -45,6 +46,7 @@ import { getInitials, formatDate } from '../lib/utils';
 
 const UsersPage = () => {
   const { user: currentUser } = useAuth();
+  const { viewSession } = useSession();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -73,7 +75,7 @@ const UsersPage = () => {
   }, [searchTerm]);
 
   const fetchUsers = useCallback(async (pg = 1, append = false) => {
-    const cacheKey = `users:${filterRole}:${debouncedSearch}:${pg}`;
+    const cacheKey = `users:${viewSession}:${filterRole}:${debouncedSearch}:${pg}`;
     const cached = getCached(cacheKey);
 
     if (!append) {
@@ -114,7 +116,7 @@ const UsersPage = () => {
       setRefreshing(false);
       setLoadingMore(false);
     }
-  }, [filterRole, debouncedSearch]);
+  }, [filterRole, debouncedSearch, viewSession]);
 
   useEffect(() => {
     setPage(1);

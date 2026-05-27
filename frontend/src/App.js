@@ -18,6 +18,7 @@ class PageErrorBoundary extends Component {
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { SessionProvider } from "./contexts/SessionContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Layout from "./components/Layout";
 import LoginPage from "./components/LoginPage";
@@ -357,6 +358,7 @@ function AppRouter() {
 function App() {
   return (
     <AuthProvider>
+      <SessionProvider>
       <BrowserRouter>
         <ScreenshotBlocker>
           <AppRouter />
@@ -372,6 +374,7 @@ function App() {
           />
         </ScreenshotBlocker>
       </BrowserRouter>
+      </SessionProvider>
     </AuthProvider>
   );
 }

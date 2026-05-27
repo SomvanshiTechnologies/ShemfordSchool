@@ -23,7 +23,7 @@ from reportlab.lib.enums import TA_CENTER
 
 from database import db
 from models import UserRole, ExamDefinition, MarkRecord
-from auth_utils import get_current_user, require_roles, calculate_grade, create_audit_log, get_teacher_assigned_classes
+from auth_utils import get_current_user, require_roles, calculate_grade, create_audit_log, get_teacher_assigned_classes, request_session, ensure_active_session
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -35,8 +35,13 @@ logger = logging.getLogger(__name__)
 async def create_exam(request: Request):
     """Admin defines an exam with subjects and max marks."""
     user = await require_roles(UserRole.ADMIN)(request)
+    await ensure_active_session(request)  # previous sessions are read-only
     body = await request.json()
 
+    # The exam (and therefore its marks) belongs to the session the admin is
+    # operating in — the session header is authoritative over the body.
+    from routes.fees import active_session
+    body["academic_year"] = request_session(request) or body.get("academic_year") or await active_session()
     exam = ExamDefinition(**body, created_by=user["user_id"])
     exam_dict = exam.model_dump()
     exam_dict["created_at"] = exam_dict["created_at"].isoformat()
@@ -161,6 +166,10 @@ async def add_marks(request: Request):
 
     if exam.get("is_locked"):
         raise HTTPException(status_code=400, detail="This exam is locked. Contact admin to unlock.")
+
+    # Archive protection — no marks entry in an archived session.
+    from routes.fees import ensure_session_writable
+    await ensure_session_writable(exam.get("academic_year"))
 
     # Teachers can only enter marks for their assigned class
     if user["role"] == UserRole.TEACHER:

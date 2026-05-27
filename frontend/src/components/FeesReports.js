@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import api from '../lib/api';
+import { useSession } from '../contexts/SessionContext';
+import SessionDatePicker from './SessionDatePicker';
+import { resolveDuration } from '../lib/sessionDates';
 import { getCached, setCached } from '../lib/pageCache';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
@@ -201,12 +204,33 @@ const DURATIONS = [
   { value: 'custom', label: 'Custom Range' },
 ];
 
-// Fee buckets used by StudentLedgerEntry.fee_type
+// Specific fee categories for the reports filter: 12 calendar months of
+// tuition (matched by due-date month, any year) + each fee component.
+// Value format: "tuition:MM" for a month, or a bare fee_component id.
 const FEE_TYPES = [
-  { value: 'one_time', label: 'One Time' },
-  { value: 'monthly', label: 'Monthly' },
-  { value: 'yearly', label: 'Yearly' },
+  { value: 'tuition', label: 'Tuition Fee' },
+  { value: 'admission', label: 'Admission Fee' },
+  { value: 'registration', label: 'Registration Fee' },
+  { value: 'annual_charge', label: 'Annual Charge' },
+  { value: 'activity_fee', label: 'Activity Fee' },
+  { value: 'exam_fee', label: 'Exam Fee' },
+  { value: 'lab_fee', label: 'Lab Fee' },
+  { value: 'ai_robotics_fee', label: 'AI & Robotics Fee' },
+  { value: 'caution_deposit', label: 'Caution Deposit' },
+  { value: 'upgradation', label: 'Upgradation Fee' },
 ];
+
+// Convert a FEE_TYPES value into backend query params.
+// "tuition:04" → { fee_component: 'tuition', fee_month: '04' }
+// "exam_fee"   → { fee_component: 'exam_fee' }
+const feeCategoryParams = (value) => {
+  if (!value) return {};
+  if (value.includes(':')) {
+    const [comp, mm] = value.split(':');
+    return { fee_component: comp, fee_month: mm };
+  }
+  return { fee_component: value };
+};
 
 // Payment methods recorded on FeePayment.payment_method
 const PAYMENT_METHODS = [
@@ -218,6 +242,11 @@ const PAYMENT_METHODS = [
 ];
 
 // ─── Collection Report ───────────────────────────────────────────────────────
+
+// 11th & 12th use stream sections (Science/Humanities) instead of the colour
+// sections used by lower classes.
+const sectionOptionsFor = (className, sections) =>
+  ['11th', '12th'].includes(className) ? ['Science', 'Humanities'] : sections;
 
 const COLLECTION_DEFAULTS = {
   duration: 'all_time', start_date: '', end_date: '',
@@ -235,6 +264,7 @@ const fmtPeriod = (s, rollup) => {
 };
 
 const CollectionReport = ({ classes, sections }) => {
+  const { viewSession, sessionBounds, sessionToday } = useSession();
   const [filters, setFilters] = useState(COLLECTION_DEFAULTS);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -242,12 +272,15 @@ const CollectionReport = ({ classes, sections }) => {
   const [searched, setSearched] = useState(false);
 
   const runFetch = async (f) => {
+    // Resolve the duration to a concrete range anchored to the session, then
+    // send it as a custom range so the backend never anchors to the live clock.
+    const range = resolveDuration(f.duration, sessionToday, sessionBounds, { start: f.start_date, end: f.end_date });
     const params = {
-      duration: f.duration,
-      ...(f.duration === 'custom' && { start_date: f.start_date, end_date: f.end_date }),
+      ...(viewSession && { academic_year: viewSession }),
+      ...(range ? { duration: 'custom', start_date: range.start, end_date: range.end } : { duration: 'all_time' }),
       ...(f.class_name && { class_name: f.class_name }),
       ...(f.section && { section: f.section }),
-      ...(f.fee_type && { fee_type: f.fee_type }),
+      ...feeCategoryParams(f.fee_type),
       ...(f.payment_method && { payment_method: f.payment_method }),
     };
     const cacheKey = 'fees-collection:' + JSON.stringify(params);
@@ -279,19 +312,29 @@ const CollectionReport = ({ classes, sections }) => {
   // Clear Filters → reset to defaults AND show the default (all-time) view
   const clearAndFetch = () => { setFilters(COLLECTION_DEFAULTS); runFetch(COLLECTION_DEFAULTS); };
 
-  // Auto-load with default filters on mount — instant if cached, otherwise fetches
-  useEffect(() => { runFetch(COLLECTION_DEFAULTS); /* eslint-disable-next-line */ }, []);
+  // Apply filters instantly: refetch whenever any filter (or the session)
+  // changes. A short debounce coalesces rapid changes; an incomplete custom
+  // date range is skipped until both ends are set.
+  useEffect(() => {
+    if (filters.duration === 'custom' && (!filters.start_date || !filters.end_date)) return;
+    const t = setTimeout(() => runFetch(filters), 150);
+    return () => clearTimeout(t);
+    /* eslint-disable-next-line */
+  }, [filters, viewSession]);
 
   // Build the param object the way the backend expects — used for both fetching
   // and for the Excel/PDF export URLs.
-  const exportParams = useMemo(() => ({
-    duration: filters.duration,
-    ...(filters.duration === 'custom' && { start_date: filters.start_date, end_date: filters.end_date }),
-    ...(filters.class_name && { class_name: filters.class_name }),
-    ...(filters.section && { section: filters.section }),
-    ...(filters.fee_type && { fee_type: filters.fee_type }),
-    ...(filters.payment_method && { payment_method: filters.payment_method }),
-  }), [filters]);
+  const exportParams = useMemo(() => {
+    const range = resolveDuration(filters.duration, sessionToday, sessionBounds, { start: filters.start_date, end: filters.end_date });
+    return {
+      ...(viewSession && { academic_year: viewSession }),
+      ...(range ? { duration: 'custom', start_date: range.start, end_date: range.end } : { duration: 'all_time' }),
+      ...(filters.class_name && { class_name: filters.class_name }),
+      ...(filters.section && { section: filters.section }),
+      ...feeCategoryParams(filters.fee_type),
+      ...(filters.payment_method && { payment_method: filters.payment_method }),
+    };
+  }, [filters, viewSession, sessionBounds, sessionToday]);
 
   const columns = useMemo(() => [
     { key: 'admission',       label: 'Admission No',     value: (r) => r.admission_number },
@@ -326,28 +369,28 @@ const CollectionReport = ({ classes, sections }) => {
               <Label className="text-[10px] font-bold uppercase tracking-wider">Search Duration <span className="text-red-500">*</span></Label>
               <Select value={filters.duration} onValueChange={(v) => setFilters((f) => ({ ...f, duration: v }))}>
                 <SelectTrigger className="h-9 text-sm mt-1"><SelectValue /></SelectTrigger>
-                <SelectContent>{DURATIONS.map((d) => <SelectItem key={d.value} value={d.value}>{d.label}</SelectItem>)}</SelectContent>
+                <SelectContent position="popper" side="bottom" sideOffset={4} avoidCollisions={false}>{DURATIONS.map((d) => <SelectItem key={d.value} value={d.value}>{d.label}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div>
               <Label className="text-[10px] font-bold uppercase tracking-wider">Class</Label>
-              <Select value={filters.class_name || 'all'} onValueChange={(v) => setFilters((f) => ({ ...f, class_name: v === 'all' ? '' : v }))}>
+              <Select value={filters.class_name || 'all'} onValueChange={(v) => setFilters((f) => ({ ...f, class_name: v === 'all' ? '' : v, section: '' }))}>
                 <SelectTrigger className="h-9 text-sm mt-1"><SelectValue placeholder="Select" /></SelectTrigger>
-                <SelectContent><SelectItem value="all">All Classes</SelectItem>{classes.map((c) => <SelectItem key={c.name || c} value={c.name || c}>Class {c.name || c}</SelectItem>)}</SelectContent>
+                <SelectContent position="popper" side="bottom" sideOffset={4} avoidCollisions={false}><SelectItem value="all">All Classes</SelectItem>{classes.map((c) => <SelectItem key={c.name || c} value={c.name || c}>Class {c.name || c}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div>
               <Label className="text-[10px] font-bold uppercase tracking-wider">Section</Label>
               <Select value={filters.section || 'all'} onValueChange={(v) => setFilters((f) => ({ ...f, section: v === 'all' ? '' : v }))}>
                 <SelectTrigger className="h-9 text-sm mt-1"><SelectValue placeholder="Select" /></SelectTrigger>
-                <SelectContent><SelectItem value="all">All Sections</SelectItem>{sections.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                <SelectContent position="popper" side="bottom" sideOffset={4} avoidCollisions={false}><SelectItem value="all">All Sections</SelectItem>{sectionOptionsFor(filters.class_name, sections).map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div>
               <Label className="text-[10px] font-bold uppercase tracking-wider">Fees Type</Label>
               <Select value={filters.fee_type || 'all'} onValueChange={(v) => setFilters((f) => ({ ...f, fee_type: v === 'all' ? '' : v }))}>
                 <SelectTrigger className="h-9 text-sm mt-1"><SelectValue placeholder="Select" /></SelectTrigger>
-                <SelectContent>
+                <SelectContent position="popper" side="bottom" sideOffset={4} avoidCollisions={false}>
                   <SelectItem value="all">All Types</SelectItem>
                   {FEE_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
                 </SelectContent>
@@ -357,7 +400,7 @@ const CollectionReport = ({ classes, sections }) => {
               <Label className="text-[10px] font-bold uppercase tracking-wider">Payment Method</Label>
               <Select value={filters.payment_method || 'all'} onValueChange={(v) => setFilters((f) => ({ ...f, payment_method: v === 'all' ? '' : v }))}>
                 <SelectTrigger className="h-9 text-sm mt-1"><SelectValue placeholder="Select" /></SelectTrigger>
-                <SelectContent>
+                <SelectContent position="popper" side="bottom" sideOffset={4} avoidCollisions={false}>
                   <SelectItem value="all">All Methods</SelectItem>
                   {PAYMENT_METHODS.map((m) => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
                 </SelectContent>
@@ -369,11 +412,11 @@ const CollectionReport = ({ classes, sections }) => {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label className="text-[10px] font-bold uppercase tracking-wider">Start Date</Label>
-                <Input type="date" className="h-9 mt-1" value={filters.start_date} onChange={(e) => setFilters((f) => ({ ...f, start_date: e.target.value }))} />
+                <div className="mt-1"><SessionDatePicker value={filters.start_date} onChange={(v) => setFilters((f) => ({ ...f, start_date: v }))} /></div>
               </div>
               <div>
                 <Label className="text-[10px] font-bold uppercase tracking-wider">End Date</Label>
-                <Input type="date" className="h-9 mt-1" value={filters.end_date} onChange={(e) => setFilters((f) => ({ ...f, end_date: e.target.value }))} />
+                <div className="mt-1"><SessionDatePicker value={filters.end_date} onChange={(v) => setFilters((f) => ({ ...f, end_date: v }))} /></div>
               </div>
             </div>
           )}
@@ -444,9 +487,10 @@ const CollectionReport = ({ classes, sections }) => {
 
 // ─── Due Fees Report ─────────────────────────────────────────────────────────
 
-const DUE_DEFAULTS = { class_name: '', section: '', fee_type: '', as_of_date: '' };
+const DUE_DEFAULTS = { duration: 'all_time', start_date: '', end_date: '', class_name: '', section: '', fee_type: '', as_of_date: '' };
 
 const DueReport = ({ classes, sections }) => {
+  const { viewSession, sessionBounds, sessionToday } = useSession();
   const [filters, setFilters] = useState(DUE_DEFAULTS);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -455,9 +499,12 @@ const DueReport = ({ classes, sections }) => {
 
   const runFetch = async (f) => {
     const params = {};
+    if (viewSession) params.academic_year = viewSession;
+    const range = resolveDuration(f.duration, sessionToday, sessionBounds, { start: f.start_date, end: f.end_date });
+    if (range) { params.duration = 'custom'; params.start_date = range.start; params.end_date = range.end; }
     if (f.class_name) params.class_name = f.class_name;
     if (f.section) params.section = f.section;
-    if (f.fee_type) params.fee_type = f.fee_type;
+    Object.assign(params, feeCategoryParams(f.fee_type));
     if (f.as_of_date) params.as_of_date = f.as_of_date;
     const cacheKey = 'fees-due:' + JSON.stringify(params);
 
@@ -486,17 +533,27 @@ const DueReport = ({ classes, sections }) => {
   const fetchData = useCallback(() => runFetch(filters), [filters]);
   const clearAndFetch = () => { setFilters(DUE_DEFAULTS); runFetch(DUE_DEFAULTS); };
 
-  // Auto-load with default filters on mount
-  useEffect(() => { runFetch(DUE_DEFAULTS); /* eslint-disable-next-line */ }, []);
+  // Apply filters instantly: refetch whenever any filter (or the session)
+  // changes. Short debounce coalesces rapid changes; an incomplete custom
+  // date range is skipped until both ends are set.
+  useEffect(() => {
+    if (filters.duration === 'custom' && (!filters.start_date || !filters.end_date)) return;
+    const t = setTimeout(() => runFetch(filters), 150);
+    return () => clearTimeout(t);
+    /* eslint-disable-next-line */
+  }, [filters, viewSession]);
 
   const exportParams = useMemo(() => {
     const p = {};
+    if (viewSession) p.academic_year = viewSession;
+    const range = resolveDuration(filters.duration, sessionToday, sessionBounds, { start: filters.start_date, end: filters.end_date });
+    if (range) { p.duration = 'custom'; p.start_date = range.start; p.end_date = range.end; }
     if (filters.class_name) p.class_name = filters.class_name;
     if (filters.section) p.section = filters.section;
-    if (filters.fee_type) p.fee_type = filters.fee_type;
+    Object.assign(p, feeCategoryParams(filters.fee_type));
     if (filters.as_of_date) p.as_of_date = filters.as_of_date;
     return p;
-  }, [filters]);
+  }, [filters, viewSession, sessionBounds, sessionToday]);
 
   const columns = useMemo(() => [
     { key: 'admission', label: 'Admission No',    value: (r) => r.admission_number },
@@ -525,26 +582,33 @@ const DueReport = ({ classes, sections }) => {
       <Card>
         <CardContent className="p-4 space-y-3">
           <div className="text-sm font-semibold">Select Criteria</div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            <div>
+              <Label className="text-[10px] font-bold uppercase tracking-wider">Duration</Label>
+              <Select value={filters.duration} onValueChange={(v) => setFilters((f) => ({ ...f, duration: v }))}>
+                <SelectTrigger className="h-9 text-sm mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent position="popper" side="bottom" sideOffset={4} avoidCollisions={false}>{DURATIONS.map((d) => <SelectItem key={d.value} value={d.value}>{d.label}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
             <div>
               <Label className="text-[10px] font-bold uppercase tracking-wider">Class</Label>
-              <Select value={filters.class_name || 'all'} onValueChange={(v) => setFilters((f) => ({ ...f, class_name: v === 'all' ? '' : v }))}>
+              <Select value={filters.class_name || 'all'} onValueChange={(v) => setFilters((f) => ({ ...f, class_name: v === 'all' ? '' : v, section: '' }))}>
                 <SelectTrigger className="h-9 text-sm mt-1"><SelectValue placeholder="Select" /></SelectTrigger>
-                <SelectContent><SelectItem value="all">All Classes</SelectItem>{classes.map((c) => <SelectItem key={c.name || c} value={c.name || c}>Class {c.name || c}</SelectItem>)}</SelectContent>
+                <SelectContent position="popper" side="bottom" sideOffset={4} avoidCollisions={false}><SelectItem value="all">All Classes</SelectItem>{classes.map((c) => <SelectItem key={c.name || c} value={c.name || c}>Class {c.name || c}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div>
               <Label className="text-[10px] font-bold uppercase tracking-wider">Section</Label>
               <Select value={filters.section || 'all'} onValueChange={(v) => setFilters((f) => ({ ...f, section: v === 'all' ? '' : v }))}>
                 <SelectTrigger className="h-9 text-sm mt-1"><SelectValue placeholder="Select" /></SelectTrigger>
-                <SelectContent><SelectItem value="all">All Sections</SelectItem>{sections.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                <SelectContent position="popper" side="bottom" sideOffset={4} avoidCollisions={false}><SelectItem value="all">All Sections</SelectItem>{sectionOptionsFor(filters.class_name, sections).map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div>
               <Label className="text-[10px] font-bold uppercase tracking-wider">Fees Type</Label>
               <Select value={filters.fee_type || 'all'} onValueChange={(v) => setFilters((f) => ({ ...f, fee_type: v === 'all' ? '' : v }))}>
                 <SelectTrigger className="h-9 text-sm mt-1"><SelectValue placeholder="Select" /></SelectTrigger>
-                <SelectContent>
+                <SelectContent position="popper" side="bottom" sideOffset={4} avoidCollisions={false}>
                   <SelectItem value="all">All Types</SelectItem>
                   {FEE_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
                 </SelectContent>
@@ -552,9 +616,23 @@ const DueReport = ({ classes, sections }) => {
             </div>
             <div>
               <Label className="text-[10px] font-bold uppercase tracking-wider">As of Date</Label>
-              <Input type="date" className="h-9 mt-1" value={filters.as_of_date} onChange={(e) => setFilters((f) => ({ ...f, as_of_date: e.target.value }))} />
+              <div className="mt-1"><SessionDatePicker value={filters.as_of_date} onChange={(v) => setFilters((f) => ({ ...f, as_of_date: v }))} /></div>
             </div>
           </div>
+
+          {filters.duration === 'custom' && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-[10px] font-bold uppercase tracking-wider">Start Date</Label>
+                <div className="mt-1"><SessionDatePicker value={filters.start_date} onChange={(v) => setFilters((f) => ({ ...f, start_date: v }))} /></div>
+              </div>
+              <div>
+                <Label className="text-[10px] font-bold uppercase tracking-wider">End Date</Label>
+                <div className="mt-1"><SessionDatePicker value={filters.end_date} onChange={(v) => setFilters((f) => ({ ...f, end_date: v }))} /></div>
+              </div>
+            </div>
+          )}
+
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={clearAndFetch} disabled={loading} className="h-9">
               Clear Filters

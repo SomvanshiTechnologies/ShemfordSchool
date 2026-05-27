@@ -43,7 +43,7 @@ from reportlab.platypus import (
 
 from database import db
 from models import UserRole, PayrollRecord, PayrollStatus
-from auth_utils import get_current_user, require_roles, create_audit_log, get_rid
+from auth_utils import get_current_user, require_roles, create_audit_log, get_rid, ensure_active_session
 from security import decrypt_bank_fields
 
 router = APIRouter()
@@ -141,6 +141,7 @@ async def generate_payroll(body: GeneratePayrollRequest, request: Request, backg
     - Returns summary of generated / skipped / failed records.
     """
     user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    await ensure_active_session(request)  # previous sessions are read-only
 
     if not (1 <= body.month <= 12):
         raise HTTPException(status_code=400, detail="Month must be between 1 and 12.")

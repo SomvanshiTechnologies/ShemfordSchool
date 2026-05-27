@@ -25,8 +25,8 @@ from models import (
     UserRole, UserBase, StudentBase, OnboardingApplication, StudentDocument,
     REQUIRED_DOCUMENTS, CLASSES_WITH_STREAMS
 )
-from auth_utils import hash_password, require_roles, generate_admission_number, create_audit_log
-from routes.fees import get_fee_config, create_admission_ledger, build_admission_fee_breakdown, current_academic_year
+from auth_utils import hash_password, require_roles, generate_admission_number, create_audit_log, request_session
+from routes.fees import get_fee_config, create_admission_ledger, build_admission_fee_breakdown, current_academic_year, active_session, ensure_session_writable
 from routes.students import get_next_roll_number
 
 router = APIRouter()
@@ -155,7 +155,8 @@ async def set_onboarding_class(onboarding_id: str, request: Request):
     class_name = body.get("class_name")
     section = body.get("section")
     stream = body.get("stream")  # required for class 11/12
-    academic_year = body.get("academic_year") or current_academic_year()
+    # Admission belongs to the session the admin is operating in.
+    academic_year = body.get("academic_year") or request_session(request) or await active_session()
 
     if not class_name or not section:
         raise HTTPException(status_code=400, detail="class_name and section are required")
@@ -424,7 +425,9 @@ async def complete_onboarding(onboarding_id: str, request: Request):
 
     # Generate admission number
     admission_number = await generate_admission_number()
-    academic_year = app.get("academic_year") or current_academic_year()
+    academic_year = app.get("academic_year") or request_session(request) or await active_session()
+    # Past (archived) years are read-only — can't admit into a closed session.
+    await ensure_session_writable(academic_year)
 
     # Auto-assign roll number (class-section-stream scoped, sequential from 1)
     roll_number = str(await get_next_roll_number(
@@ -505,35 +508,37 @@ async def complete_onboarding(onboarding_id: str, request: Request):
                 {"$set": {"parent_id": existing_parent["user_id"]}}
             )
 
-    # Create student login account with auto-generated password
+    # Create student login account — only if an email was provided.
+    # Admin can add email + provision the account later from StudentsPage.
     student_account = None
-    student_email = app.get("email") or f"{student_obj.student_id.lower()}@student.shemford.in"
-    existing_student_user = await db.users.find_one({"email": student_email}, {"_id": 0})
-    if not existing_student_user:
-        student_temp_password = secrets.token_urlsafe(8)
-        student_user = UserBase(
-            email=student_email,
-            name=f"{app['first_name']} {app.get('last_name', '')}".strip(),
-            role=UserRole.STUDENT,
-            phone=app.get("phone"),
-        )
-        su_dict = student_user.model_dump()
-        su_dict["password_hash"] = hash_password(student_temp_password)
-        su_dict["created_at"] = su_dict["created_at"].isoformat()
-        await db.users.insert_one(su_dict)
-        await db.students.update_one(
-            {"student_id": student_obj.student_id},
-            {"$set": {
-                "user_id": student_user.user_id,
+    student_email = app.get("email")
+    if student_email:
+        existing_student_user = await db.users.find_one({"email": student_email}, {"_id": 0})
+        if not existing_student_user:
+            student_temp_password = secrets.token_urlsafe(8)
+            student_user = UserBase(
+                email=student_email,
+                name=f"{app['first_name']} {app.get('last_name', '')}".strip(),
+                role=UserRole.STUDENT,
+                phone=app.get("phone"),
+            )
+            su_dict = student_user.model_dump()
+            su_dict["password_hash"] = hash_password(student_temp_password)
+            su_dict["created_at"] = su_dict["created_at"].isoformat()
+            await db.users.insert_one(su_dict)
+            await db.students.update_one(
+                {"student_id": student_obj.student_id},
+                {"$set": {
+                    "user_id": student_user.user_id,
+                    "email": student_email,
+                    "temp_password": student_temp_password,
+                }}
+            )
+            student_account = {
                 "email": student_email,
                 "temp_password": student_temp_password,
-            }}
-        )
-        student_account = {
-            "email": student_email,
-            "temp_password": student_temp_password,
-            "user_id": student_user.user_id,
-        }
+                "user_id": student_user.user_id,
+            }
 
     # Attach student_id to uploaded documents
     await db.student_documents.update_many(

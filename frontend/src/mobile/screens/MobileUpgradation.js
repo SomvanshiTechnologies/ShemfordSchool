@@ -16,8 +16,10 @@ const PAYMENT_METHODS = [
   { value: 'card', label: 'Card' },
 ];
 
-const STREAMS = ['Science', 'Arts', 'Commerce'];
-const CLASSES_WITH_STREAMS = ['Class 11', 'Class 12'];
+const STREAMS = ['Science', 'Humanities'];
+const CLASSES_WITH_STREAMS = ['Class 11', 'Class 12', '11th', '12th'];
+const STREAM_SECTIONS = STREAMS.map(s => ({ section_name: s, capacity: 999 }));
+const isStreamClass = (cn) => CLASSES_WITH_STREAMS.includes(cn) || /^(11|12)(th)?$/i.test((cn || '').replace(/^Class\s*/i, ''));
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
@@ -204,6 +206,7 @@ const UpgradeTab = ({ classes }) => {
 
   const sectionOptions = useMemo(() => {
     if (!toClass) return [];
+    if (isStreamClass(toClass)) return STREAM_SECTIONS;
     return classes.find(c => c.name === toClass)?.sections || [];
   }, [classes, toClass]);
 
@@ -219,7 +222,8 @@ const UpgradeTab = ({ classes }) => {
       toast.error('Select target class and section');
       return;
     }
-    if (CLASSES_WITH_STREAMS.includes(toClass) && !toStream) {
+    const effectiveStream = isStreamClass(toClass) ? (toStream || (toSection || '').toLowerCase()) : toStream;
+    if (isStreamClass(toClass) && !effectiveStream) {
       toast.error(`Stream is required for ${toClass}`);
       return;
     }
@@ -230,7 +234,7 @@ const UpgradeTab = ({ classes }) => {
       const r = await api.post(`/students/${selected.student_id}/upgrade`, {
         to_class: toClass,
         to_section: toSection,
-        to_stream: toStream || null,
+        to_stream: effectiveStream || null,
         academic_year: toAY,
         notes,
       });
@@ -470,25 +474,25 @@ const UpgradeTab = ({ classes }) => {
             </div>
             <div>
               <label style={formLabel}>New Section</label>
-              <select className="m-input" value={toSection} onChange={(e) => setToSection(e.target.value)} disabled={!toClass}>
+              <select
+                className="m-input"
+                value={toSection}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setToSection(v);
+                  if (isStreamClass(toClass)) setToStream(v.toLowerCase());
+                }}
+                disabled={!toClass}
+              >
                 <option value="">Select</option>
                 {sectionOptions.map(s => (
                   <option key={s.section_name} value={s.section_name}>
-                    {s.section_name} (cap {s.capacity || 40})
+                    {isStreamClass(toClass) ? s.section_name : `${s.section_name} (cap ${s.capacity || 40})`}
                   </option>
                 ))}
               </select>
             </div>
           </div>
-          {CLASSES_WITH_STREAMS.includes(toClass) && (
-            <div style={{marginBottom:10}}>
-              <label style={formLabel}>Stream <span style={{color:'#dc2626'}}>*</span></label>
-              <select className="m-input" value={toStream} onChange={(e) => setToStream(e.target.value)}>
-                <option value="">Select stream</option>
-                {STREAMS.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-          )}
           <div style={{marginBottom:10}}>
             <label style={formLabel}>Academic Year</label>
             <input className="m-input" value={toAY} readOnly style={{background:'#F8F8F8'}} />

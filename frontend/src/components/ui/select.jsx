@@ -47,7 +47,17 @@ const SelectScrollDownButton = React.forwardRef(({ className, ...props }, ref) =
 SelectScrollDownButton.displayName =
   SelectPrimitive.ScrollDownButton.displayName
 
-const SelectContent = React.forwardRef(({ className, children, position = "popper", ...props }, ref) => (
+const SelectContent = React.forwardRef(({
+  className, children,
+  position = "popper",
+  // Default every dropdown to open downward and not flip up when near the
+  // bottom of the viewport. The max-height + scroll keeps long lists usable.
+  // Callers can still override side/avoidCollisions per instance.
+  side = "bottom",
+  sideOffset = 4,
+  avoidCollisions = false,
+  ...props
+}, ref) => (
   <SelectPrimitive.Portal>
     <SelectPrimitive.Content
       ref={ref}
@@ -58,6 +68,9 @@ const SelectContent = React.forwardRef(({ className, children, position = "poppe
         className
       )}
       position={position}
+      side={side}
+      sideOffset={sideOffset}
+      avoidCollisions={avoidCollisions}
       {...props}>
       <SelectScrollUpButton />
       <SelectPrimitive.Viewport

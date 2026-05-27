@@ -10,7 +10,7 @@ from models import (
     UserRole, UserBase, EmployeeBase, EmployeeCreate
 )
 from auth_utils import (
-    hash_password, require_roles, create_audit_log, get_current_user
+    hash_password, require_roles, create_audit_log, get_current_user, session_window
 )
 from security import encrypt_bank_fields, decrypt_bank_fields, BANK_FIELDS, strip_pii_for_audit
 
@@ -135,6 +135,13 @@ async def get_employees(
         query["department"] = department
     if is_active is not None:
         query["is_active"] = is_active
+
+    # Active-period scoping: an employee belongs to the session if they joined on
+    # or before the session ends AND hadn't left before it starts.
+    win_start, win_end = await session_window(request)
+    if win_start:
+        query["joining_date"] = {"$lte": win_end}
+        query["$or"] = [{"date_left": None}, {"date_left": {"$exists": False}}, {"date_left": {"$gte": win_start}}]
 
     import asyncio
     total, employees = await asyncio.gather(

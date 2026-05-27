@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useSession } from '../contexts/SessionContext';
 import api from '../lib/api';
 import { getCached, setCached } from '../lib/pageCache';
+import { PAYMENT_METHODS, PAYMENT_METHODS_WITH_POS } from '../lib/paymentMethods';
 
 const TopProgressBar = ({ active }) =>
   active ? (
@@ -17,6 +19,8 @@ import { Badge } from './ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+import { Checkbox } from './ui/checkbox';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { toast } from 'sonner';
 import {
@@ -56,6 +60,8 @@ const STATUS_COLORS = {
   waived: 'bg-gray-50 text-gray-500 border border-gray-200',
 };
 
+const STATUS_LABELS = {};
+
 const CURRENT_YEAR = (() => {
   const now = new Date();
   return now.getMonth() >= 3 ? `${now.getFullYear()}-${now.getFullYear() + 1}` : `${now.getFullYear() - 1}-${now.getFullYear()}`;
@@ -92,7 +98,7 @@ const StatusBadge = ({ status }) => (
     {status === 'paid' && <CheckCircle2 className="h-3 w-3" />}
     {status === 'overdue' && <AlertTriangle className="h-3 w-3" />}
     {status === 'pending' && <Clock className="h-3 w-3" />}
-    {status}
+    {STATUS_LABELS[status] || status}
   </span>
 );
 
@@ -100,6 +106,7 @@ const StatusBadge = ({ status }) => (
 
 const FeesPage = () => {
   const { user } = useAuth();
+  const { viewSession, sessionBounds } = useSession();
   const [searchParams] = useSearchParams();
   const isParent = user?.role === 'parent';
   const isStudent = user?.role === 'student';
@@ -137,17 +144,29 @@ const FeesPage = () => {
   // Payment dialog
   const [showPayDialog, setShowPayDialog] = useState(false);
   const [payLedgerIds, setPayLedgerIds] = useState([]);
-  const [payForm, setPayForm] = useState({ method: 'cash', transaction_id: '', remarks: '', payment_date: todayDDMMYYYY(), split_cash: '', split_online: '' });
+  const [payForm, setPayForm] = useState({ method: 'cash', transaction_id: '', remarks: '', payment_date: todayDDMMYYYY(), split_cash: '', split_online: '', partial_amount: '' });
   const [processingPayment, setProcessingPayment] = useState(false);
 
   // Admission fee payment dialog
   const [showAdmissionPayDialog, setShowAdmissionPayDialog] = useState(false);
-  const [admissionPayForm, setAdmissionPayForm] = useState({ method: 'cash', transaction_id: '', remarks: '' });
+  const [admissionPayForm, setAdmissionPayForm] = useState({ method: 'cash', transaction_id: '', remarks: '', split_cash: '', split_online: '' });
   const [processingAdmissionPay, setProcessingAdmissionPay] = useState(false);
 
   // Due chart
   const [dueChart, setDueChart] = useState([]);
   const [dueSearch, setDueSearch] = useState('');
+  // Fee Type filter (category only) — list of fee_component names.
+  const [dueFeeSelections, setDueFeeSelections] = useState([]);
+  // Duration filter (month) — 'all' or 1-12. Resolved to YYYY-MM at fetch.
+  const [dueMonth, setDueMonth] = useState('all');
+  // Class / section / session filters, work together with the fee-type multi-select
+  const [dueClass, setDueClass] = useState('all');
+  const [dueSection, setDueSection] = useState('all');
+  const [dueSession, setDueSession] = useState('all');
+  const [dueSessions, setDueSessions] = useState([]); // distinct academic years from DB
+
+  // Receipt preview shown immediately after a successful Collect Fee
+  const [receiptPreview, setReceiptPreview] = useState(null); // { url, paymentId, receiptNumber }
 
   // Concessions
   const [concessions, setConcessions] = useState([]);
@@ -203,10 +222,12 @@ const FeesPage = () => {
     }
     setRefreshing(true);
     try {
-      const [studRes, dueRes, concRes] = await Promise.all([
-        api.get('/students', { params: { is_active: true, limit: 500 } }).catch(() => ({ data: [] })),
-        api.get('/fees/due-chart').catch(() => ({ data: [] })),
+      const ay = viewSession ? { academic_year: viewSession } : {};
+      const [studRes, dueRes, concRes, sessRes] = await Promise.all([
+        api.get('/students', { params: { is_active: true, limit: 500, ...ay } }).catch(() => ({ data: [] })),
+        api.get('/fees/due-chart', { params: ay }).catch(() => ({ data: [] })),
         api.get('/fees/concessions').catch(() => ({ data: [] })),
+        api.get('/fees/sessions').catch(() => ({ data: [] })),
       ]);
       const studArr = studRes.data.students ?? (Array.isArray(studRes.data) ? studRes.data : []);
       const dueArr = Array.isArray(dueRes.data) ? dueRes.data : [];
@@ -214,10 +235,37 @@ const FeesPage = () => {
       setStudents(studArr);
       setDueChart(dueArr);
       setConcessions(concArr);
+      setDueSessions(Array.isArray(sessRes.data) ? sessRes.data : []);
       setCached('fees:admin-data', { students: studArr, due: dueArr, concessions: concArr });
     } catch {}
     finally { setRefreshing(false); }
-  }, []);
+  }, [viewSession]);
+
+  // Refetch the due chart whenever any due-tab filter changes
+  useEffect(() => {
+    let active = true;
+    const params = {};
+    if (dueFeeSelections.length > 0) {
+      params.fee_selections = dueFeeSelections.join(',');
+    }
+    if (dueClass && dueClass !== 'all') params.class_name = dueClass;
+    if (dueSection && dueSection !== 'all') params.section = dueSection;
+    // Due-tab session filter wins; otherwise scope to the global session.
+    const ay = (dueSession && dueSession !== 'all') ? dueSession : viewSession;
+    if (ay) params.academic_year = ay;
+    // Duration filter → YYYY-MM. Indian academic year: Apr-Dec use the start
+    // year, Jan-Mar use the next year.
+    if (dueMonth && dueMonth !== 'all' && ay) {
+      const startYear = Number(String(ay).split('-')[0]);
+      const m = Number(dueMonth);
+      const y = m >= 4 ? startYear : startYear + 1;
+      params.month = `${y}-${String(m).padStart(2, '0')}`;
+    }
+    api.get('/fees/due-chart', { params })
+      .then(r => { if (active) setDueChart(Array.isArray(r.data) ? r.data : []); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [dueFeeSelections, dueClass, dueSection, dueSession, dueMonth, viewSession]);
 
   const fetchParentData = useCallback(async () => {
     try {
@@ -260,6 +308,17 @@ const FeesPage = () => {
       .finally(() => { if (!controller.signal.aborted) setLoadingLedger(false); });
     return () => controller.abort();
   }, [selectedStudentId]);
+
+  // When the admin switches academic session, clear the selected student so a
+  // previous session's student/ledger doesn't linger under the new session.
+  useEffect(() => {
+    setSelectedStudentId('');
+    setStudentLedger(null);
+    setStudentSearch('');
+    setStudentSearchResults([]);
+    setPayLedgerIds([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewSession]);
 
   // ── Config form helpers ───────────────────────────────────────────────────
 
@@ -339,6 +398,15 @@ const FeesPage = () => {
         remarks: payForm.remarks || undefined,
         payment_date: isoPaymentDate || undefined,
       };
+      // Partial amount only valid for single-entry selection.
+      const partial = parseFloat(payForm.partial_amount);
+      if (payLedgerIds.length === 1 && payForm.partial_amount && partial > 0) {
+        payload.amount = partial;
+      } else if (payForm.partial_amount && payLedgerIds.length !== 1) {
+        toast.error('Partial payment supports exactly one selected entry.');
+        setProcessingPayment(false);
+        return;
+      }
       if (payForm.method === 'split') {
         const cash = parseFloat(payForm.split_cash) || 0;
         const online = parseFloat(payForm.split_online) || 0;
@@ -350,9 +418,13 @@ const FeesPage = () => {
       toast.success(res.data.message);
       setShowPayDialog(false);
       setPayLedgerIds([]);
+      // Clear the partial/split inputs so the next collection starts blank
+      // (pay-in-full) instead of carrying over this payment's amount.
+      setPayForm(f => ({ ...f, partial_amount: '', split_cash: '', split_online: '' }));
       const lr = await api.get(`/fees/ledger/${selectedStudentId}`);
       setStudentLedger(lr.data);
       fetchAdminData();
+      openReceiptPreview(res.data.payment?.payment_id, res.data.receipt_number);
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Payment failed');
     } finally { setProcessingPayment(false); }
@@ -361,17 +433,25 @@ const FeesPage = () => {
   const payAdmissionFees = async () => {
     setProcessingAdmissionPay(true);
     try {
-      const res = await api.post('/fees/admission-payment', {
+      const admPayload = {
         student_id: selectedStudentId,
         payment_method: admissionPayForm.method,
         transaction_id: admissionPayForm.transaction_id || undefined,
         remarks: admissionPayForm.remarks || 'Admission fee collection',
-      });
+      };
+      if (admissionPayForm.method === 'split') {
+        const cash = parseFloat(admissionPayForm.split_cash) || 0;
+        const online = parseFloat(admissionPayForm.split_online) || 0;
+        if (cash <= 0 && online <= 0) { toast.error('Enter at least one split amount'); setProcessingAdmissionPay(false); return; }
+        admPayload.split_payments = { cash, online };
+      }
+      const res = await api.post('/fees/admission-payment', admPayload);
       toast.success(res.data.message);
       setShowAdmissionPayDialog(false);
       const lr = await api.get(`/fees/ledger/${selectedStudentId}`);
       setStudentLedger(lr.data);
       fetchAdminData();
+      openReceiptPreview(res.data.payment?.payment_id || res.data.payment_id, res.data.receipt_number);
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Admission payment failed');
     } finally { setProcessingAdmissionPay(false); }
@@ -386,6 +466,39 @@ const FeesPage = () => {
     } catch {
       toast.error('Failed to load receipt');
     }
+  };
+
+  // Receipt for a ledger entry — uses the stamped payment_id when present,
+  // otherwise looks up the payment that covers this entry. Handles seeded
+  // partial rows that have amount_paid but no linked payment record.
+  const downloadEntryReceipt = async (entry, studentId) => {
+    if (entry?.payment_id) return downloadReceipt(entry.payment_id);
+    try {
+      const res = await api.get('/fees/payments', { params: { student_id: studentId } });
+      const all = Array.isArray(res.data) ? res.data : [];
+      const p = all.find(x => (x.installment_ids || []).includes(entry.ledger_id));
+      if (p?.payment_id) return downloadReceipt(p.payment_id);
+      toast.error('No receipt on record for this partial payment.');
+    } catch {
+      toast.error('Could not load receipt.');
+    }
+  };
+
+  // Fetch the receipt PDF and surface it in an inline preview modal —
+  // called right after Collect Fee / Admission Payment succeed.
+  const openReceiptPreview = async (paymentId, receiptNumber) => {
+    if (!paymentId) return;
+    try {
+      const res = await api.get(`/fees/receipt/${paymentId}/pdf`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      setReceiptPreview({ url, paymentId, receiptNumber });
+    } catch {
+      toast.error('Receipt generated but preview failed — use the Download button in History.');
+    }
+  };
+  const closeReceiptPreview = () => {
+    if (receiptPreview?.url) URL.revokeObjectURL(receiptPreview.url);
+    setReceiptPreview(null);
   };
 
   const selectedStudentIdRef = useRef(selectedStudentId);
@@ -456,7 +569,7 @@ const FeesPage = () => {
     searchDebounceRef.current = setTimeout(async () => {
       setSearchingStudents(true);
       try {
-        const res = await api.get('/fees/search-students', { params: { q: value } });
+        const res = await api.get('/fees/search-students', { params: { q: value, ...(viewSession && { academic_year: viewSession }) } });
         setStudentSearchResults(res.data || []);
         setShowSearchDropdown(true);
       } catch {
@@ -843,6 +956,9 @@ const FeesPage = () => {
                         classes.forEach(c => (c.sections || []).forEach(s => set.add(s.section_name || s)));
                         return Array.from(set).filter(Boolean).sort().map(sec => <SelectItem key={sec} value={sec}>{sec}</SelectItem>);
                       }
+                      if (['11th', '12th'].includes(collectClassFilter)) {
+                        return ['Science', 'Humanities'].map(sec => <SelectItem key={sec} value={sec}>{sec}</SelectItem>);
+                      }
                       const cls = classes.find(c => c.name === collectClassFilter);
                       return (cls?.sections || []).map(s => s.section_name || s).filter(Boolean).map(sec => <SelectItem key={sec} value={sec}>{sec}</SelectItem>);
                     })()}
@@ -860,6 +976,7 @@ const FeesPage = () => {
                   classes.forEach(c => (c.sections || []).forEach(s => set.add(s.section_name || s)));
                   return Array.from(set).filter(Boolean).sort();
                 }
+                if (['11th', '12th'].includes(collectClassFilter)) return ['Science', 'Humanities'];
                 const cls = classes.find(c => c.name === collectClassFilter);
                 return (cls?.sections || []).map(s => s.section_name || s).filter(Boolean);
               })();
@@ -879,19 +996,20 @@ const FeesPage = () => {
                   </div>
                 ) : (
                   <div className="border border-slate-200 rounded-xl overflow-hidden">
-                    <div className="grid grid-cols-6 gap-4 px-4 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                      <span>Admission No.</span><span>Student</span><span>Class</span><span>Section</span><span>Mobile</span><span className="text-right">Pending</span>
+                    <div className="grid grid-cols-7 gap-4 px-4 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      <span>Admission No.</span><span>Student</span><span>Class</span><span>Section</span><span>Academic Year</span><span>Mobile</span><span className="text-right">Pending</span>
                     </div>
                     {filteredCollect.slice(0, 50).map(s => (
                       <button
                         key={s.student_id}
                         onClick={() => selectSearchResult({ student_id: s.student_id, name: s.name, admission_number: s.admission_number, class_name: s.class_name, section: s.section, stream: s.stream })}
-                        className="w-full text-left grid grid-cols-6 gap-4 px-4 py-3 hover:bg-orange-50 border-b border-slate-100 last:border-0 items-center transition-colors"
+                        className="w-full text-left grid grid-cols-7 gap-4 px-4 py-3 hover:bg-orange-50 border-b border-slate-100 last:border-0 items-center transition-colors"
                       >
                         <p className="text-sm text-slate-600 font-mono">{s.admission_number || '—'}</p>
                         <p className="text-sm font-semibold text-slate-900 truncate">{s.name}</p>
                         <p className="text-sm text-slate-600">{s.class_name || '—'}{s.stream ? ` (${s.stream})` : ''}</p>
                         <p className="text-sm text-slate-600">{s.section || '—'}</p>
+                        <p className="text-sm text-slate-600">{s.academic_year || viewSession || '—'}</p>
                         <p className="text-sm text-slate-600 font-mono">{s.mobile || '—'}</p>
                         <div className="text-right">
                           <p className="text-sm font-bold text-red-600">₹{Number(s.total_due || 0).toLocaleString('en-IN')}</p>
@@ -930,9 +1048,10 @@ const FeesPage = () => {
                   studentId={selectedStudentId}
                   payLedgerIds={payLedgerIds}
                   setPayLedgerIds={setPayLedgerIds}
-                  onPaySelected={() => setShowPayDialog(true)}
+                  onPaySelected={() => { setPayForm(f => ({ ...f, partial_amount: '', split_cash: '', split_online: '' })); setShowPayDialog(true); }}
                   onPayAdmission={() => setShowAdmissionPayDialog(true)}
                   onDownloadReceipt={downloadReceipt}
+                  onDownloadEntryReceipt={downloadEntryReceipt}
                   onRazorpaySuccess={handleRazorpaySuccess}
                 />
               </>
@@ -943,8 +1062,8 @@ const FeesPage = () => {
         {/* ════════════ DUE CHART TAB ════════════ */}
         <TabsContent value="due">
           <div className="space-y-4">
-            <div className="flex gap-3 items-center">
-              <div className="relative flex-1 max-w-sm">
+            <div className="flex flex-wrap gap-3 items-center">
+              <div className="relative flex-1 min-w-[200px] max-w-sm">
                 <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" strokeWidth={1.5} />
                 <Input
                   placeholder="Search by name or admission no."
@@ -953,6 +1072,132 @@ const FeesPage = () => {
                   onChange={e => setDueSearch(e.target.value)}
                 />
               </div>
+              <Select value={dueSession} onValueChange={setDueSession}>
+                <SelectTrigger className="h-9 w-[160px] text-sm" data-testid="due-session-filter">
+                  <SelectValue placeholder="All Sessions" />
+                </SelectTrigger>
+                <SelectContent position="popper" side="bottom" sideOffset={4} avoidCollisions={false}>
+                  <SelectItem value="all">All Sessions</SelectItem>
+                  {dueSessions.map(y => (
+                    <SelectItem key={y} value={y}>{y}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={dueClass} onValueChange={v => { setDueClass(v); setDueSection('all'); }}>
+                <SelectTrigger className="h-9 w-[140px] text-sm" data-testid="due-class-filter">
+                  <SelectValue placeholder="All Classes" />
+                </SelectTrigger>
+                <SelectContent position="popper" side="bottom" sideOffset={4} avoidCollisions={false}>
+                  <SelectItem value="all">All Classes</SelectItem>
+                  {classes.map(c => (
+                    <SelectItem key={c.name || c} value={c.name || c}>Class {c.name || c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={dueSection} onValueChange={setDueSection} disabled={dueClass === 'all'}>
+                <SelectTrigger className="h-9 w-[140px] text-sm" data-testid="due-section-filter">
+                  <SelectValue placeholder="All Sections" />
+                </SelectTrigger>
+                <SelectContent position="popper" side="bottom" sideOffset={4} avoidCollisions={false}>
+                  <SelectItem value="all">All Sections</SelectItem>
+                  {(['11th', '12th'].includes(dueClass)
+                    ? [{ section_name: 'Science' }, { section_name: 'Humanities' }]
+                    : (classes.find(c => (c.name || c) === dueClass)?.sections || [])
+                  ).map(s => (
+                    <SelectItem key={s.section_name} value={s.section_name}>
+                      {['11th', '12th'].includes(dueClass) ? s.section_name : `Section ${s.section_name}`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={dueMonth} onValueChange={setDueMonth}>
+                <SelectTrigger className="h-9 w-[150px] text-sm" data-testid="due-month-filter">
+                  <SelectValue placeholder="All Months" />
+                </SelectTrigger>
+                <SelectContent position="popper" side="bottom" sideOffset={4} avoidCollisions={false}>
+                  <SelectItem value="all">All Durations</SelectItem>
+                  {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => (
+                    <SelectItem key={m} value={String(m)}>
+                      {new Date(2000, m - 1, 1).toLocaleString('en-IN', { month: 'long' })}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {(() => {
+                // Fee-type options: the fee components the school configures
+                // (no per-month options). Tuition is a single "Tuition Fee"
+                // entry matching any month.
+                const KEY_TO_COMPONENT = {
+                  registration_fee: 'registration',
+                  admission_fee: 'admission',
+                  caution_deposit: 'caution_deposit',
+                  annual_charge: 'annual_charge',
+                  activity_fee: 'activity_fee',
+                  exam_fee: 'exam_fee',
+                  lab_fee: 'lab_fee',
+                  ai_robotics_fee: 'ai_robotics_fee',
+                  monthly_tuition: 'tuition',
+                  upgradation_fee: 'upgradation',
+                };
+                const COMPONENT_LABELS = { monthly_tuition: 'Tuition Fee' };
+                const feeOpts = FEE_COMPONENTS
+                  .filter(c => KEY_TO_COMPONENT[c.key])
+                  .map(c => ({
+                    id: KEY_TO_COMPONENT[c.key],
+                    label: COMPONENT_LABELS[c.key] || c.label,
+                  }));
+                const toggle = (id) =>
+                  setDueFeeSelections(prev =>
+                    prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+                  );
+                const selectedCount = dueFeeSelections.length;
+                const triggerLabel = selectedCount === 0
+                  ? 'All Fee Types'
+                  : selectedCount === 1
+                    ? feeOpts.find(o => o.id === dueFeeSelections[0])?.label || '1 selected'
+                    : `${selectedCount} types selected`;
+                return (
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" className="h-9 w-[220px] text-sm justify-between font-normal" data-testid="due-fee-type-filter">
+                        <span className="truncate text-left">{triggerLabel}</span>
+                        <ChevronDown className="h-4 w-4 text-slate-400 shrink-0 ml-2" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[260px] p-0" align="start">
+                      <div className="flex items-center justify-between px-3 py-2 border-b">
+                        <span className="text-xs font-semibold text-slate-700">Fee Types</span>
+                        {selectedCount > 0 && (
+                          <button
+                            type="button"
+                            className="text-[11px] text-slate-500 hover:text-slate-900"
+                            onClick={() => setDueFeeSelections([])}
+                          >
+                            Clear all
+                          </button>
+                        )}
+                      </div>
+                      <div className="max-h-72 overflow-y-auto py-1">
+                        {feeOpts.length === 0 && (
+                          <p className="px-3 py-2 text-xs text-slate-400">No pending fee types in the system.</p>
+                        )}
+                        {feeOpts.map(opt => {
+                          const checked = dueFeeSelections.includes(opt.id);
+                          return (
+                            <label
+                              key={opt.id}
+                              className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-slate-50 cursor-pointer"
+                            >
+                              <Checkbox checked={checked} onCheckedChange={() => toggle(opt.id)} />
+                              <span className="truncate">{opt.label}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                );
+              })()}
               <div className="text-sm text-slate-500">
                 {filteredDue.length} students with dues
               </div>
@@ -962,7 +1207,7 @@ const FeesPage = () => {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-slate-50">
-                    {['Admission No.', 'Name', 'Class', 'Total Due', 'Entries Pending', 'Overdue', 'Oldest Due', 'Status', 'Action'].map(h => (
+                    {['Admission No.', 'Name', 'Class', 'Academic Year', 'Total Due', 'Entries Pending', 'Overdue', 'Oldest Due', 'Status', 'Action'].map(h => (
                       <TableHead key={h} className="text-[10px] uppercase tracking-wider font-bold text-slate-500">{h}</TableHead>
                     ))}
                   </TableRow>
@@ -970,7 +1215,7 @@ const FeesPage = () => {
                 <TableBody>
                   {filteredDue.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={9} className="text-center py-12 text-slate-500">
+                      <TableCell colSpan={10} className="text-center py-12 text-slate-500">
                         <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-green-500" />
                         No pending dues found
                       </TableCell>
@@ -980,6 +1225,7 @@ const FeesPage = () => {
                       <TableCell className="text-xs font-mono">{d.admission_number || '—'}</TableCell>
                       <TableCell className="font-medium">{d.name}</TableCell>
                       <TableCell className="text-sm">{d.class_name}-{d.section} {d.stream ? `(${d.stream})` : ''}</TableCell>
+                      <TableCell className="text-xs text-slate-600">{d.academic_year || viewSession || '—'}</TableCell>
                       <TableCell className="font-bold text-red-600">{fmt(d.total_due)}</TableCell>
                       <TableCell>{d.entries_pending}</TableCell>
                       <TableCell>
@@ -1152,6 +1398,7 @@ const FeesPage = () => {
                 onPaySelected={() => setShowPayDialog(true)}
                 onPayAdmission={() => setShowAdmissionPayDialog(true)}
                 onDownloadReceipt={downloadReceipt}
+                onDownloadEntryReceipt={downloadEntryReceipt}
                 onRazorpaySuccess={handleRazorpaySuccess}
                 readOnly={isParent || isStudent}
               />
@@ -1350,10 +1597,13 @@ const FeesPage = () => {
       </Dialog>
 
       {/* Pay Fee Dialog */}
-      <Dialog open={showPayDialog} onOpenChange={setShowPayDialog}>
+      <Dialog open={showPayDialog} onOpenChange={(open) => {
+        setShowPayDialog(open);
+        if (!open) setPayForm(f => ({ ...f, partial_amount: '', split_cash: '', split_online: '' }));
+      }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Record Payment</DialogTitle>
+            <DialogTitle>Collect Payment</DialogTitle>
             <DialogDescription>
               {payLedgerIds.length} entry/entries selected
             </DialogDescription>
@@ -1362,23 +1612,46 @@ const FeesPage = () => {
             <div>
               <Label className="text-xs font-bold uppercase tracking-wider">Payment Date</Label>
               <Input
-                type="text"
-                inputMode="numeric"
-                placeholder="DD-MM-YYYY"
-                pattern="\d{2}-\d{2}-\d{4}"
-                maxLength={10}
+                type="date"
                 className="mt-1 h-9 text-sm"
-                value={payForm.payment_date}
-                onChange={e => {
-                  let v = e.target.value.replace(/[^\d-]/g, '').slice(0, 10);
-                  // Auto-insert dashes after DD and MM
-                  if (v.length > 2 && v[2] !== '-') v = v.slice(0, 2) + '-' + v.slice(2);
-                  if (v.length > 5 && v[5] !== '-') v = v.slice(0, 5) + '-' + v.slice(5);
-                  setPayForm(f => ({ ...f, payment_date: v }));
-                }}
+                min={sessionBounds?.start || undefined}
+                max={sessionBounds?.end || undefined}
+                value={payForm.payment_date ? ddmmyyyyToIso(payForm.payment_date) : ''}
+                onChange={e => setPayForm(f => ({ ...f, payment_date: e.target.value ? isoToDDMMYYYY(e.target.value) : '' }))}
               />
-              <p className="text-[10px] text-slate-400 mt-1">Format: DD-MM-YYYY. For back-dated payments (e.g. fees collected earlier)</p>
+              <p className="text-[10px] text-slate-400 mt-1">Pick the date from the calendar. Back-dated payments allowed within this session.</p>
             </div>
+            {/* Partial amount — only when exactly one entry is selected */}
+            {payLedgerIds.length === 1 && (() => {
+              const all = [
+                ...(studentLedger?.ledger?.one_time || []),
+                ...(studentLedger?.ledger?.yearly || []),
+                ...(studentLedger?.ledger?.monthly || []),
+              ];
+              const entry = all.find(e => e.ledger_id === payLedgerIds[0]);
+              const remaining = Number(entry?.remaining_balance ?? entry?.net_amount ?? 0);
+              return (
+                <div>
+                  <Label className="text-xs font-bold uppercase tracking-wider">
+                    Amount to collect <span className="text-slate-400 font-normal normal-case">(leave blank to pay in full)</span>
+                  </Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    max={remaining}
+                    className="mt-1 h-9 text-sm"
+                    placeholder={`Full: ₹${remaining.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`}
+                    value={payForm.partial_amount}
+                    onChange={e => setPayForm(f => ({ ...f, partial_amount: e.target.value }))}
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Remaining on this entry: ₹{remaining.toLocaleString('en-IN', { maximumFractionDigits: 2 })}.
+                    Enter a smaller amount to record a partial payment.
+                  </p>
+                </div>
+              );
+            })()}
             <div>
               <Label className="text-xs font-bold uppercase tracking-wider">Payment Method</Label>
               <Select value={payForm.method} onValueChange={v => setPayForm(f => ({ ...f, method: v }))}>
@@ -1386,12 +1659,7 @@ const FeesPage = () => {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="cash">Cash</SelectItem>
-                  <SelectItem value="cheque">Cheque</SelectItem>
-                  <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
-                  <SelectItem value="online">Online / UPI</SelectItem>
-                  <SelectItem value="split">Split (Cash + Online)</SelectItem>
-                  <SelectItem value="pos_terminal">POS Terminal (Ezetap)</SelectItem>
+                  {PAYMENT_METHODS_WITH_POS.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -1457,7 +1725,7 @@ const FeesPage = () => {
                 className="bg-slate-900 hover:bg-slate-800 text-white"
               >
                 {processingPayment ? <Loader2 className="h-3 w-3 mr-2 animate-spin" /> : <CreditCard className="h-3 w-3 mr-2" />}
-                Record Payment
+                Collect Payment
               </Button>
             )}
           </DialogFooter>
@@ -1599,14 +1867,24 @@ const FeesPage = () => {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="cash">Cash</SelectItem>
-                  <SelectItem value="cheque">Cheque</SelectItem>
-                  <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
-                  <SelectItem value="online">Online / UPI</SelectItem>
+                  {PAYMENT_METHODS_WITH_POS.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
-            {admissionPayForm.method !== 'cash' && (
+            {admissionPayForm.method === 'split' && (
+              <div className="grid grid-cols-2 gap-3 p-3 rounded-xl border border-orange-200 bg-orange-50">
+                <div>
+                  <Label className="text-xs font-bold uppercase tracking-wider">Cash Amount</Label>
+                  <Input type="number" min={0} step="0.01" className="mt-1 h-9 text-sm" value={admissionPayForm.split_cash} onChange={e => setAdmissionPayForm(f => ({ ...f, split_cash: e.target.value }))} placeholder="0" />
+                </div>
+                <div>
+                  <Label className="text-xs font-bold uppercase tracking-wider">Online Amount</Label>
+                  <Input type="number" min={0} step="0.01" className="mt-1 h-9 text-sm" value={admissionPayForm.split_online} onChange={e => setAdmissionPayForm(f => ({ ...f, split_online: e.target.value }))} placeholder="0" />
+                </div>
+                <p className="col-span-2 text-[10px] text-slate-500">Cash + Online must equal the total amount.</p>
+              </div>
+            )}
+            {admissionPayForm.method !== 'cash' && admissionPayForm.method !== 'split' && (
               <div>
                 <Label className="text-xs font-bold uppercase tracking-wider">Transaction ID</Label>
                 <Input
@@ -1640,6 +1918,38 @@ const FeesPage = () => {
               {processingAdmissionPay ? <Loader2 className="h-3 w-3 mr-2 animate-spin" /> : <CreditCard className="h-3 w-3 mr-2" />}
               Collect Admission Fee
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Receipt preview shown right after a successful Collect Fee */}
+      <Dialog open={!!receiptPreview} onOpenChange={(open) => { if (!open) closeReceiptPreview(); }}>
+        <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col p-0 gap-0">
+          <DialogHeader className="p-4 border-b">
+            <DialogTitle className="flex items-center gap-2">
+              <CheckCircle2 className="h-5 w-5 text-green-600" />
+              Payment recorded
+              {receiptPreview?.receiptNumber && (
+                <span className="text-xs font-mono text-muted-foreground ml-2">
+                  Receipt: {receiptPreview.receiptNumber}
+                </span>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 min-h-[60vh] bg-slate-100">
+            {receiptPreview?.url && (
+              <iframe
+                src={receiptPreview.url}
+                title="Fee receipt"
+                className="w-full h-full min-h-[60vh] border-0"
+              />
+            )}
+          </div>
+          <DialogFooter className="p-3 border-t gap-2">
+            <Button variant="outline" size="sm" onClick={() => downloadReceipt(receiptPreview?.paymentId)}>
+              <Download className="h-4 w-4 mr-2" /> Open in new tab
+            </Button>
+            <Button size="sm" onClick={closeReceiptPreview}>Done</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1716,7 +2026,7 @@ const FeeTypeDropdown = ({ label, entries, payLedgerIds, setPayLedgerIds }) => {
                 </span>
                 <div className="flex items-center gap-1.5 shrink-0">
                   {e.status === 'overdue' && <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full font-medium">overdue</span>}
-                  <span className="text-xs font-semibold text-slate-900">₹{fmt(amount)}</span>
+                  <span className="text-xs font-semibold text-slate-900">{fmt(amount)}</span>
                 </div>
               </label>
             );
@@ -1732,7 +2042,7 @@ const FeeTypeDropdown = ({ label, entries, payLedgerIds, setPayLedgerIds }) => {
 
 const LedgerView = ({
   ledger, isAdmin, studentId, payLedgerIds, setPayLedgerIds,
-  onPaySelected, onPayAdmission, onDownloadReceipt, onRazorpaySuccess, readOnly = false
+  onPaySelected, onPayAdmission, onDownloadReceipt, onDownloadEntryReceipt, onRazorpaySuccess, readOnly = false
 }) => {
   const [expandedSections, setExpandedSections] = useState({ one_time: true, yearly: true, monthly: true });
   const [showMonthlyDropdown, setShowMonthlyDropdown] = useState(false);
@@ -1755,7 +2065,7 @@ const LedgerView = ({
     ...(grouped.monthly || []),
   ];
 
-  const payableEntries   = allEntries.filter(e => ['pending', 'overdue', 'partially_paid'].includes(e.status));
+  const payableEntries   = allEntries.filter(e => ['pending', 'overdue'].includes(e.status));
   const overdueEntries   = allEntries.filter(e => e.status === 'overdue');
 
   const hasAdmissionPending = (
@@ -1949,7 +2259,7 @@ const LedgerView = ({
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Net Due</TableHead>
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Due Date</TableHead>
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Status</TableHead>
-                    <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Action</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500 w-[150px]">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1965,30 +2275,46 @@ const LedgerView = ({
                       <TableCell className="text-sm text-red-600">
                         {entry.late_fee_applied > 0 ? `+${fmt(entry.late_fee_applied)}` : '—'}
                       </TableCell>
-                      <TableCell className="font-bold text-sm">{fmt(entry.net_amount)}</TableCell>
+                      <TableCell className="font-bold text-sm">
+                        {fmt(entry.net_amount)}
+                        {entry.amount_paid > 0 && entry.status !== 'paid' && (
+                          <p className="text-[10px] font-normal text-blue-600 mt-0.5">
+                            Paid {fmt(entry.amount_paid)} · {fmt(entry.remaining_balance ?? (entry.net_amount - entry.amount_paid))} due
+                          </p>
+                        )}
+                      </TableCell>
                       <TableCell className="text-xs text-slate-500">
                         {entry.due_date ? new Date(entry.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
                       </TableCell>
                       <TableCell><StatusBadge status={entry.status} /></TableCell>
-                      <TableCell>
-                        {entry.status === 'paid' || entry.status === 'waived' ? (
-                          entry.payment_id && (
-                            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs"
-                              onClick={() => onDownloadReceipt(entry.payment_id)}>
-                              <Download className="h-3 w-3 mr-1" />PDF
-                            </Button>
-                          )
+                      <TableCell className="w-[150px]">
+                        {entry.status === 'paid' ? (
+                          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs"
+                            onClick={() => (onDownloadEntryReceipt ? onDownloadEntryReceipt(entry, studentId) : onDownloadReceipt(entry.payment_id))}>
+                            <Download className="h-3 w-3 mr-1" />PDF
+                          </Button>
+                        ) : entry.status === 'waived' ? (
+                          <span className="text-xs text-slate-400">—</span>
                         ) : readOnly ? (
                           <RazorpayCheckout studentId={studentId} ledgerIds={[entry.ledger_id]} onSuccess={onRazorpaySuccess} onCancel={() => {}}>
                             <CreditCard className="h-3 w-3 mr-1" />Pay
                           </RazorpayCheckout>
                         ) : (
-                          <Button size="sm"
-                            className="h-7 px-2.5 text-xs bg-orange-500 hover:bg-orange-600 text-white"
-                            onClick={() => { setPayLedgerIds([entry.ledger_id]); onPaySelected && onPaySelected(); }}
-                          >
-                            <CreditCard className="h-3 w-3 mr-1" />Collect
-                          </Button>
+                          <div className="flex items-center gap-1">
+                            <Button size="sm"
+                              className="h-7 px-2.5 text-xs bg-orange-500 hover:bg-orange-600 text-white"
+                              onClick={() => { setPayLedgerIds([entry.ledger_id]); onPaySelected && onPaySelected(); }}
+                            >
+                              <CreditCard className="h-3 w-3 mr-1" />Collect
+                            </Button>
+                            {entry.amount_paid > 0 && (
+                              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs"
+                                title="Preview latest receipt"
+                                onClick={() => (onDownloadEntryReceipt ? onDownloadEntryReceipt(entry, studentId) : onDownloadReceipt(entry.payment_id))}>
+                                <Download className="h-3 w-3 mr-1" />PDF
+                              </Button>
+                            )}
+                          </div>
                         )}
                       </TableCell>
                     </TableRow>

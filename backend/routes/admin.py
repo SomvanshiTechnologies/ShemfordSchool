@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from database import db
 from models import UserRole
-from auth_utils import require_roles, create_audit_log
+from auth_utils import require_roles, create_audit_log, session_year_filter
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -214,6 +214,8 @@ async def list_audit_trail(
         query["restored_at"] = None
     if entity_type:
         query["entity_type"] = entity_type
+    # Scope strictly by owning session (academic_year), not created_at.
+    query.update(session_year_filter(request))
 
     import asyncio
     total, entries = await asyncio.gather(

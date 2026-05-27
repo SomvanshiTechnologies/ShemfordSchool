@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../lib/api';
+import { useSession } from '../contexts/SessionContext';
+import SessionDatePicker from './SessionDatePicker';
 import { previewReportInTab } from '../lib/preview';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Button } from './ui/button';
@@ -26,6 +28,7 @@ import { BarChart3, TrendingUp, Download, CreditCard, GraduationCap, Calendar, F
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from 'recharts';
 
 const ReportsPage = () => {
+  const { viewSession } = useSession();
   const [activeTab, setActiveTab] = useState('financial');
   const [loading, setLoading] = useState(false);
   const [financialReport, setFinancialReport] = useState(null);
@@ -168,9 +171,10 @@ const ReportsPage = () => {
     setLoading(true);
     try {
       const params = {};
+      if (viewSession) params.academic_year = viewSession;
       if (startDate) params.start_date = startDate;
       if (endDate) params.end_date = endDate;
-      
+
       const response = await api.get('/reports/financial', { params });
       setFinancialReport(response.data);
     } catch (error) {
@@ -189,7 +193,8 @@ const ReportsPage = () => {
     try {
       const params = { class_name: selectedClass };
       if (selectedSection) params.section = selectedSection;
-      
+      if (viewSession) params.academic_year = viewSession;
+
       const response = await api.get('/reports/academic', { params });
       setAcademicReport(response.data);
     } catch (error) {
@@ -276,27 +281,17 @@ const ReportsPage = () => {
                 <div className="flex flex-col sm:flex-row gap-4 items-end flex-wrap">
                   <div className="space-y-2">
                     <Label>Start Date</Label>
-                    <Input
-                      type="date"
-                      value={startDate}
-                      onChange={(e) => setStartDate(e.target.value)}
-                      data-testid="start-date"
-                    />
+                    <SessionDatePicker value={startDate} onChange={setStartDate} data-testid="start-date" />
                   </div>
                   <div className="space-y-2">
                     <Label>End Date</Label>
-                    <Input
-                      type="date"
-                      value={endDate}
-                      onChange={(e) => setEndDate(e.target.value)}
-                      data-testid="end-date"
-                    />
+                    <SessionDatePicker value={endDate} onChange={setEndDate} data-testid="end-date" />
                   </div>
                   <Button onClick={fetchFinancialReport} disabled={loading} data-testid="generate-financial-btn">
                     {loading ? 'Loading...' : 'Generate Report'}
                   </Button>
                   <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => downloadReport('/reports/financial/export', { format: 'pdf', ...(startDate && { start_date: startDate }), ...(endDate && { end_date: endDate }) }, 'financial-report.pdf')} data-testid="export-financial-pdf">
+                    <Button variant="outline" size="sm" onClick={() => downloadReport('/reports/financial/export', { format: 'pdf', ...(viewSession && { academic_year: viewSession }), ...(startDate && { start_date: startDate }), ...(endDate && { end_date: endDate }) }, 'financial-report.pdf')} data-testid="export-financial-pdf">
                       <Download className="h-4 w-4 mr-1" /> PDF
                     </Button>
                     <Button variant="outline" size="sm" onClick={previewFinancialExcel} data-testid="export-financial-excel">
@@ -422,7 +417,7 @@ const ReportsPage = () => {
                 </Button>
                 {selectedClass && (
                   <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => downloadReport('/reports/academic/export', { format: 'pdf', class_name: selectedClass, ...(selectedSection && { section: selectedSection }) }, 'academic-report.pdf')} data-testid="export-academic-pdf">
+                    <Button variant="outline" size="sm" onClick={() => downloadReport('/reports/academic/export', { format: 'pdf', class_name: selectedClass, ...(selectedSection && { section: selectedSection }), ...(viewSession && { academic_year: viewSession }) }, 'academic-report.pdf')} data-testid="export-academic-pdf">
                       <Download className="h-4 w-4 mr-1" /> PDF
                     </Button>
                     <Button variant="outline" size="sm" onClick={previewAcademicExcel} data-testid="export-academic-excel">
@@ -532,15 +527,15 @@ const ReportsPage = () => {
                   </div>
                   <div className="space-y-2">
                     <Label>Single Date</Label>
-                    <Input type="date" value={attDate} onChange={(e) => { setAttDate(e.target.value); if (e.target.value) { setAttStartDate(''); setAttEndDate(''); }}} data-testid="att-date" />
+                    <SessionDatePicker value={attDate} onChange={(v) => { setAttDate(v); if (v) { setAttStartDate(''); setAttEndDate(''); }}} data-testid="att-date" />
                   </div>
                   <div className="space-y-2">
                     <Label>Start Date</Label>
-                    <Input type="date" value={attStartDate} onChange={(e) => { setAttStartDate(e.target.value); setAttDate(''); }} data-testid="att-start-date" />
+                    <SessionDatePicker value={attStartDate} onChange={(v) => { setAttStartDate(v); setAttDate(''); }} data-testid="att-start-date" />
                   </div>
                   <div className="space-y-2">
                     <Label>End Date</Label>
-                    <Input type="date" value={attEndDate} onChange={(e) => { setAttEndDate(e.target.value); setAttDate(''); }} data-testid="att-end-date" />
+                    <SessionDatePicker value={attEndDate} onChange={(v) => { setAttEndDate(v); setAttDate(''); }} data-testid="att-end-date" />
                   </div>
                   <Button onClick={fetchAttendanceReport} disabled={loading} data-testid="generate-attendance-btn">
                     {loading ? 'Loading...' : 'Generate Report'}

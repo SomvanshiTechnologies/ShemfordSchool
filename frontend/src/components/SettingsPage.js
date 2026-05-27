@@ -14,14 +14,22 @@ const SettingsPage = () => {
   const isAdmin = user?.role === 'admin';
 
   // ── My profile (all users) ───────────────────────────────────────────────
+  // System-generated logins (no real email) use a synthetic address — hide it
+  // so the user can add their own real email.
+  const isSyntheticEmail = (em) => /@(student|staff)\.shemford\.in$/i.test(em || '');
   const [meForm, setMeForm] = useState({
     name: user?.name || '',
     phone: user?.phone || '',
+    email: isSyntheticEmail(user?.email) ? '' : (user?.email || ''),
   });
   const [meSaving, setMeSaving] = useState(false);
   useEffect(() => {
-    setMeForm({ name: user?.name || '', phone: user?.phone || '' });
-  }, [user?.user_id, user?.name, user?.phone]);
+    setMeForm({
+      name: user?.name || '',
+      phone: user?.phone || '',
+      email: isSyntheticEmail(user?.email) ? '' : (user?.email || ''),
+    });
+  }, [user?.user_id, user?.name, user?.phone, user?.email]);
 
   const handleProfileUpdate = async (e) => {
     e.preventDefault();
@@ -31,10 +39,13 @@ const SettingsPage = () => {
     }
     setMeSaving(true);
     try {
-      const res = await api.put('/auth/me', {
+      const payload = {
         name: meForm.name.trim(),
         phone: meForm.phone?.trim() || null,
-      });
+      };
+      // Only send email when the user typed one (blank = keep current login email)
+      if (meForm.email?.trim()) payload.email = meForm.email.trim();
+      const res = await api.put('/auth/me', payload);
       if (typeof setAuthUser === 'function') setAuthUser(res.data);
       toast.success('Profile updated');
     } catch (err) {
@@ -145,14 +156,21 @@ const SettingsPage = () => {
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-bold uppercase tracking-wider text-slate-500">Email</Label>
-                <Input className="h-10 rounded-xl bg-slate-50 text-slate-500" value={user?.email || ''} disabled />
+                <Input
+                  type="email"
+                  className="h-10 rounded-xl"
+                  placeholder="you@example.com (optional)"
+                  value={meForm.email}
+                  onChange={e => setMeForm(f => ({ ...f, email: e.target.value }))}
+                  data-testid="profile-email-input"
+                />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-bold uppercase tracking-wider text-slate-500">Role</Label>
                 <Input className="h-10 rounded-xl bg-slate-50 text-slate-500 capitalize" value={user?.role || ''} disabled />
               </div>
             </div>
-            <p className="text-[11px] text-slate-500">Email and role can't be changed here — contact an admin.</p>
+            <p className="text-[11px] text-slate-500">Add or update your email to log in with it. You can also log in with your admission/employee ID. Role can't be changed here — contact an admin.</p>
             <div className="flex justify-end">
               <Button type="submit" className="rounded-xl" disabled={meSaving}>
                 {meSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" strokeWidth={1.5} />}

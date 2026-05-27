@@ -143,7 +143,15 @@ async def log_requests(request: Request, call_next):
 # append CORS headers to the 401 responses that RBAC generates, preventing
 # the browser from masking real 401s with CORS errors.
 
-_cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
+_cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
+# Dev convenience: also accept any localhost / 127.0.0.1 origin regardless of
+# port (CRA sometimes falls back to :3001, etc). Production origins are still
+# pinned via the explicit CORS_ORIGINS list above. Override/disable by setting
+# CORS_ORIGIN_REGEX to an empty string in the environment.
+_cors_origin_regex = os.environ.get(
+    "CORS_ORIGIN_REGEX",
+    r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+)
 
 # 1. Innermost: RBAC
 app.add_middleware(RBACEnforcementMiddleware)
@@ -156,8 +164,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
     allow_origins=_cors_origins,
+    allow_origin_regex=_cors_origin_regex or None,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-Request-ID"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-Request-ID", "X-Academic-Year"],
     expose_headers=["X-Total-Count", "X-Total-Pages", "X-Page", "X-Request-ID"],
 )
 

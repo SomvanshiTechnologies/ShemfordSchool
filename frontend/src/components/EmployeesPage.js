@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../lib/api';
 import { getCached, setCached } from '../lib/pageCache';
+import { copyText } from '../lib/clipboard';
+import { useSession } from '../contexts/SessionContext';
 
 const TopProgressBar = ({ active }) =>
   active ? (
@@ -51,6 +53,7 @@ import { toast } from 'sonner';
 import { Plus, Search, Eye, EyeOff, Edit, UserCog, Filter, AlertTriangle, Link2, Loader2, Copy, Check, X, RefreshCw, KeyRound } from 'lucide-react';
 
 const EmployeesPage = () => {
+  const { viewSession } = useSession();
   const [employees, setEmployees] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -120,7 +123,7 @@ const EmployeesPage = () => {
   }, [filterDept, filterStatus]);
 
   const fetchEmployees = useCallback(async (pg = 1, append = false) => {
-    const cacheKey = `employees:${filterStatus}:${filterDept}:${pg}`;
+    const cacheKey = `employees:${viewSession}:${filterStatus}:${filterDept}:${pg}`;
     const cached = getCached(cacheKey);
 
     if (!append) {
@@ -154,7 +157,7 @@ const EmployeesPage = () => {
       setRefreshing(false);
       setLoadingMore(false);
     }
-  }, [filterStatus, filterDept]);
+  }, [filterStatus, filterDept, viewSession]);
 
   // Infinite scroll
   useEffect(() => {
@@ -327,9 +330,10 @@ const EmployeesPage = () => {
     }
   };
 
-  const copyPassword = () => {
+  const copyPassword = async () => {
     if (linkedPassword) {
-      navigator.clipboard.writeText(linkedPassword);
+      const ok = await copyText(linkedPassword);
+      if (!ok) { toast.error('Copy failed'); return; }
       setPasswordCopied(true);
       setTimeout(() => setPasswordCopied(false), 2000);
     }
@@ -754,7 +758,7 @@ const EmployeesPage = () => {
                   onChange={(e) => setEditData({ ...editData, employee_id: e.target.value })}
                   data-testid="edit-emp-id"
                 />
-                <p className="text-xs text-muted-foreground">Admin can rename the Employee ID; must remain unique.</p>
+                {/* <p className="text-xs text-muted-foreground">Admin can rename the Employee ID; must remain unique.</p> */}
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
@@ -778,35 +782,34 @@ const EmployeesPage = () => {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="edit_email">Email * <span className="text-xs text-muted-foreground font-normal">(used to log in)</span></Label>
+                  <Label htmlFor="edit_email">Email</Label>
                   <Input
                     id="edit_email"
                     type="email"
                     value={editData.email}
                     onChange={(e) => setEditData({...editData, email: e.target.value})}
                     placeholder="employee@shemford.edu"
-                    required
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="edit_phone">Phone</Label>
+                  <Label htmlFor="edit_phone">Phone *</Label>
                   <Input
                     id="edit_phone"
                     value={editData.phone}
                     onChange={(e) => setEditData({...editData, phone: e.target.value})}
+                    required
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="edit_dob">Date of Birth</Label>
-                  <Input
-                    id="edit_dob"
-                    type="date"
-                    value={editData.date_of_birth}
-                    onChange={(e) => setEditData({...editData, date_of_birth: e.target.value})}
-                  />
-                </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_dob">Date of Birth</Label>
+                <Input
+                  id="edit_dob"
+                  type="date"
+                  className="w-44"
+                  value={editData.date_of_birth}
+                  onChange={(e) => setEditData({...editData, date_of_birth: e.target.value})}
+                />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
@@ -887,7 +890,7 @@ const EmployeesPage = () => {
                       <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={() => setCurrentPwVisible(v => !v)}>
                         {currentPwVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                       </Button>
-                      <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={() => { navigator.clipboard?.writeText(currentPw); toast.success('Copied'); }}>
+                      <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={async () => { const ok = await copyText(currentPw); toast[ok ? 'success' : 'error'](ok ? 'Copied' : 'Copy failed'); }}>
                         <Copy className="h-3 w-3" />
                       </Button>
                     </div>
@@ -905,7 +908,7 @@ const EmployeesPage = () => {
                       <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={() => setPwVisible(v => !v)}>
                         {pwVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                       </Button>
-                      <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={() => { navigator.clipboard?.writeText(pwResult.password); toast.success('Copied'); }}>
+                      <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={async () => { const ok = await copyText(pwResult.password); toast[ok ? 'success' : 'error'](ok ? 'Copied' : 'Copy failed'); }}>
                         <Copy className="h-3 w-3" />
                       </Button>
                     </div>
@@ -999,7 +1002,7 @@ const EmployeesPage = () => {
                 <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center">
                   <UserCog className="h-8 w-8 text-primary" />
                 </div>
-                <div>
+                <div className="select-none">
                   <h3 className="text-xl font-semibold">{selectedEmployee.first_name} {selectedEmployee.last_name}</h3>
                   <p className="text-muted-foreground">ID: {selectedEmployee.employee_id}</p>
                 </div>
@@ -1031,7 +1034,7 @@ const EmployeesPage = () => {
                         <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => setCurrentPwVisible(v => !v)}>
                           {currentPwVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => { navigator.clipboard?.writeText(currentPw); toast.success('Copied'); }}>
+                        <Button variant="ghost" size="icon" className="h-5 w-5" onClick={async () => { const ok = await copyText(currentPw); toast[ok ? 'success' : 'error'](ok ? 'Copied' : 'Copy failed'); }}>
                           <Copy className="h-3 w-3" />
                         </Button>
                       </>

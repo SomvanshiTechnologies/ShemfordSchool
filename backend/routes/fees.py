@@ -63,6 +63,65 @@ CFG_FIELD_TO_COMPONENT = {
 
 ACADEMIC_MONTHS = ["04", "05", "06", "07", "08", "09", "10", "11", "12", "01", "02", "03"]
 
+# Human-readable labels for fee components — must match the report filter
+# dropdown so the "Fees Type" column lines up with what admins can filter by.
+_COMPONENT_LABELS = {
+    "registration": "Registration Fee",
+    "admission": "Admission Fee",
+    "caution_deposit": "Caution Deposit",
+    "annual_charge": "Annual Charge",
+    "activity_fee": "Activity Fee",
+    "exam_fee": "Exam Fee",
+    "lab_fee": "Lab Fee",
+    "ai_robotics_fee": "AI & Robotics Fee",
+    "tuition": "Tuition Fee",
+    "upgradation": "Upgradation Fee",
+}
+
+
+def _filter_label(fee_component: str = None, fee_month: str = None) -> str:
+    """Human label for an active fee-type filter, matching the dropdown
+    (e.g. fee_month='08' -> 'August Fees', fee_component='exam_fee' -> 'Exam Fee')."""
+    import calendar
+    if fee_month:
+        try:
+            return f"{calendar.month_name[int(fee_month)]} Fees"
+        except (ValueError, IndexError):
+            return "Tuition Fee"
+    if fee_component:
+        return _COMPONENT_LABELS.get(fee_component, fee_component.replace("_", " ").title())
+    return ""
+
+
+def _entry_category_label(e: dict) -> str:
+    """Map a ledger entry to its display category, matching the report filter
+    options: monthly tuition → '<Month> Fees', everything else → component label."""
+    import calendar
+    comp = e.get("fee_component")
+    if comp == "tuition":
+        dd = str(e.get("due_date") or "")
+        try:
+            mo = int(dd[5:7])
+            return f"{calendar.month_name[mo]} Fees"
+        except (ValueError, IndexError):
+            return "Tuition Fee"
+    if comp in _COMPONENT_LABELS:
+        return _COMPONENT_LABELS[comp]
+    if comp:
+        return comp.replace("_", " ").title()
+    return str(e.get("fee_type") or "")
+
+
+def _report_category(e: dict) -> str:
+    """Display category for a ledger entry in reports — tuition collapsed to a
+    single 'Tuition Fee' (matches the Collection report and the filter dropdown)."""
+    comp = e.get("fee_component")
+    if comp and comp in _COMPONENT_LABELS:
+        return _COMPONENT_LABELS[comp]
+    if comp:
+        return comp.replace("_", " ").title()
+    return (e.get("fee_type") or "Other").replace("_", " ").title()
+
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
 import re
@@ -113,6 +172,52 @@ def current_academic_year() -> str:
     if now.month >= 4:
         return f"{now.year}-{now.year + 1}"
     return f"{now.year - 1}-{now.year}"
+
+
+async def active_session() -> str:
+    """
+    The school's active academic session. Reads the sessions collection
+    (is_active=true) first, then the legacy school_settings doc, then the
+    calendar-computed current year. New admissions / fees attach to THIS session.
+    """
+    try:
+        sess = await db.sessions.find_one({"is_active": True}, {"_id": 0, "session_name": 1})
+        if sess and sess.get("session_name"):
+            return sess["session_name"]
+    except Exception:
+        pass
+    try:
+        doc = await db.school_settings.find_one({"_id": "session"}, {"_id": 0, "active_session": 1})
+        if doc and doc.get("active_session"):
+            return doc["active_session"]
+    except Exception:
+        pass
+    return current_academic_year()
+
+
+async def session_status(academic_year: str) -> str:
+    """Return a session's status (active/archived/upcoming), or 'active' if unknown."""
+    try:
+        sess = await db.sessions.find_one({"session_name": academic_year}, {"_id": 0, "status": 1})
+        if sess:
+            return sess.get("status", "active")
+    except Exception:
+        pass
+    return "active"
+
+
+async def ensure_session_writable(academic_year: str):
+    """
+    Phase 2 — archive protection. Raise 403 if the given session is archived
+    (read-only). Used by write endpoints across modules. Unknown sessions are
+    treated as writable (backward-compatible).
+    """
+    from fastapi import HTTPException
+    if academic_year and await session_status(academic_year) == "archived":
+        raise HTTPException(
+            status_code=403,
+            detail="This academic session is closed and available in read-only mode.",
+        )
 
 
 def get_fy_prefix() -> str:
@@ -846,6 +951,7 @@ async def record_admission_payment(request: Request):
     payment_method = body.get("payment_method", "cash")
     transaction_id = body.get("transaction_id")
     remarks = body.get("remarks", "Admission fee collection")
+    split_payments = body.get("split_payments")
 
     student = await db.students.find_one({"student_id": student_id}, {"_id": 0})
     if not student:
@@ -853,6 +959,7 @@ async def record_admission_payment(request: Request):
 
     # Fetch pending one-time + yearly + first-month tuition
     academic_year = student.get("academic_year", current_academic_year())
+    await ensure_session_writable(academic_year)  # archive protection
     all_months = get_academic_year_months(academic_year)
     first_month = all_months[0]
     admission_month = student.get("admission_date", "")[:7] or first_month
@@ -892,6 +999,17 @@ async def record_admission_payment(request: Request):
     pay_dict = payment.model_dump()
     pay_dict["receipt_number"] = receipt_number
     pay_dict["created_at"] = pay_dict["created_at"].isoformat()
+
+    # Split-payment breakdown — sums must equal the admission total.
+    if split_payments and isinstance(split_payments, dict):
+        try:
+            split_total = round(sum(float(v) for v in split_payments.values()), 2)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid split_payments format")
+        if abs(split_total - total_amount) > 0.01:
+            raise HTTPException(status_code=400,
+                detail=f"Split payment total ({split_total}) does not match admission total ({total_amount})")
+        pay_dict["split_payments"] = {k: float(v) for k, v in split_payments.items() if float(v) > 0}
 
     today = datetime.now().strftime("%Y-%m-%d")
     ledger_updates = [
@@ -1052,10 +1170,13 @@ async def generate_monthly_fees(request: Request):
 async def pay_fee(request: Request):
     """
     Record a fee payment against specific ledger entry IDs or the next pending month.
+
     Rules:
-    - Must pay oldest overdue/pending first (no skip)
-    - No partial payment per entry
-    - Amount must exactly match selected entries
+    - Must pay oldest overdue/pending first (no skip).
+    - Multi-entry payment is full-only (must clear each entry).
+    - Single-entry payment may be PARTIAL: pass `amount` <= remaining_balance.
+      The entry's amount_paid is incremented and status becomes
+      'partially_paid' until remaining_balance reaches 0, then 'paid'.
     """
     user = await get_current_user(request)
     body = await request.json()
@@ -1065,6 +1186,8 @@ async def pay_fee(request: Request):
     transaction_id = body.get("transaction_id")
     remarks = body.get("remarks")
     ledger_ids = body.get("ledger_ids")  # optional list of specific entry IDs
+    # Partial payment — only valid when ledger_ids contains exactly one entry.
+    partial_amount = body.get("amount")
     # Optional back-dated payment date (admin only). Must not be in the future.
     custom_payment_date = body.get("payment_date")
     # Split payments: { "cash": 1500, "online": 500 } — sums must equal total
@@ -1087,26 +1210,64 @@ async def pay_fee(request: Request):
 
     await refresh_overdue_for_student(student_id)
 
+    # Entries with amount_paid > 0 stay in 'pending'/'overdue' until cleared
+    payable_statuses = ["pending", "overdue"]
     if ledger_ids:
         entries_to_pay = await db.student_ledger.find({
             "student_id": student_id,
             "ledger_id": {"$in": ledger_ids},
-            "status": {"$in": ["pending", "overdue"]}
+            "status": {"$in": payable_statuses}
         }, {"_id": 0}).sort("due_date", 1).to_list(100)
         if len(entries_to_pay) != len(ledger_ids):
             raise HTTPException(status_code=400, detail="Some ledger entries not found or already paid")
     else:
-        # Default: pay all monthly tuition entries in order
+        # Default: pay the next pending tuition entry
         entries_to_pay = await db.student_ledger.find({
             "student_id": student_id,
             "fee_component": "tuition",
-            "status": {"$in": ["pending", "overdue"]}
+            "status": {"$in": payable_statuses}
         }, {"_id": 0}).sort("due_date", 1).limit(1).to_list(1)
 
     if not entries_to_pay:
         raise HTTPException(status_code=400, detail="No pending fees to pay")
 
-    total = round(sum(e["net_amount"] for e in entries_to_pay), 2)
+    # Archive protection — block collecting against an archived session.
+    await ensure_session_writable(entries_to_pay[0].get("academic_year"))
+
+    # Per-entry payable = remaining_balance if set, else fall back to net_amount
+    # (older rows created before the partial-payment fields existed).
+    def _entry_remaining(e):
+        rb = e.get("remaining_balance")
+        return float(rb) if rb is not None and rb > 0 else float(e.get("net_amount", 0))
+
+    # Compute how much of `total` this payment will apply to each entry.
+    # Single-entry path supports partial; multi-entry must be full-clear.
+    is_partial = False
+    per_entry_paid = {}  # ledger_id -> amount paid in THIS payment
+    if partial_amount is not None:
+        try:
+            partial_amount = round(float(partial_amount), 2)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid amount")
+        if len(entries_to_pay) != 1:
+            raise HTTPException(status_code=400,
+                detail="Partial payment supports exactly one ledger entry. Pick a single fee to pay partially.")
+        if partial_amount <= 0:
+            raise HTTPException(status_code=400, detail="Amount must be greater than 0")
+        entry = entries_to_pay[0]
+        remaining = _entry_remaining(entry)
+        if partial_amount > remaining + 0.001:
+            raise HTTPException(status_code=400,
+                detail=f"Amount ₹{partial_amount:,.2f} exceeds remaining ₹{remaining:,.2f} on this entry.")
+        per_entry_paid[entry["ledger_id"]] = partial_amount
+        total = partial_amount
+        is_partial = partial_amount < remaining - 0.001
+    else:
+        # Full payment of every selected entry (using remaining_balance to
+        # support entries already partially paid via earlier transactions).
+        for e in entries_to_pay:
+            per_entry_paid[e["ledger_id"]] = round(_entry_remaining(e), 2)
+        total = round(sum(per_entry_paid.values()), 2)
     receipt_number = await get_next_receipt_number()
 
     payment = FeePayment(
@@ -1146,18 +1307,46 @@ async def pay_fee(request: Request):
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid split_payments format")
 
-    ledger_updates = [
-        UpdateOne(
-            {"ledger_id": entry["ledger_id"]},
-            {"$set": {
-                "status": "paid",
+    # Per-entry ledger update: increment amount_paid, recompute remaining,
+    # flip status to 'partially_paid' or 'paid' accordingly.
+    ledger_updates = []
+    for entry in entries_to_pay:
+        paid_now = per_entry_paid[entry["ledger_id"]]
+        prev_paid = float(entry.get("amount_paid") or 0)
+        new_paid = round(prev_paid + paid_now, 2)
+        new_remaining = round(float(entry.get("net_amount", 0)) - new_paid, 2)
+        if new_remaining < 0.005:
+            new_status = "paid"
+            new_remaining = 0
+            set_doc = {
+                "status": new_status,
+                "amount_paid": new_paid,
+                "remaining_balance": 0,
                 "paid_date": paid_date,
                 "payment_id": payment.payment_id,
                 "receipt_number": receipt_number,
-            }}
-        )
-        for entry in entries_to_pay
-    ]
+            }
+        else:
+            # Per the school's preference, partials stay 'pending' (the
+            # overdue sweep will flip them to 'overdue' once past due_date).
+            # Only amount_paid + remaining_balance reflect the partial.
+            today_iso = datetime.now().strftime("%Y-%m-%d")
+            past_due = entry.get("due_date") and entry["due_date"] < today_iso
+            new_status = "overdue" if past_due else "pending"
+            set_doc = {
+                "status": new_status,
+                "amount_paid": new_paid,
+                "remaining_balance": new_remaining,
+                # Stamp the latest payment so admin can preview the partial
+                # receipt from the ledger row.
+                "paid_date": paid_date,
+                "payment_id": payment.payment_id,
+                "receipt_number": receipt_number,
+            }
+        ledger_updates.append(UpdateOne(
+            {"ledger_id": entry["ledger_id"]},
+            {"$set": set_doc},
+        ))
 
     try:
         async with await mongo_client.start_session() as session:
@@ -1175,19 +1364,40 @@ async def pay_fee(request: Request):
     }, user)
 
     pay_dict.pop("_id", None)
+    msg = f"Payment of ₹{total:,.2f} recorded. Receipt: {receipt_number}"
+    if is_partial:
+        entry = entries_to_pay[0]
+        new_remaining = round(float(entry.get("net_amount", 0)) - (float(entry.get("amount_paid") or 0) + total), 2)
+        if new_remaining < 0: new_remaining = 0
+        msg = (f"Partial payment of ₹{total:,.2f} recorded. "
+               f"₹{new_remaining:,.2f} still due. Receipt: {receipt_number}")
     return {
         "payment": pay_dict,
         "receipt_number": receipt_number,
         "amount": total,
         "entries_paid": len(entries_to_pay),
-        "message": f"Payment of ₹{total:,.2f} recorded. Receipt: {receipt_number}"
+        "is_partial": is_partial,
+        "message": msg,
     }
 
 
 # ─── Due Chart ────────────────────────────────────────────────────────────────
 
 @router.get("/fees/due-chart")
-async def get_due_chart(request: Request, class_name: Optional[str] = None, search: Optional[str] = None):
+async def get_due_chart(
+    request: Request,
+    class_name: Optional[str] = None,
+    section: Optional[str] = None,
+    search: Optional[str] = None,
+    fee_component: Optional[str] = None,  # single-component legacy param
+    month: Optional[str] = None,          # single-month legacy param (YYYY-MM)
+    # Multi-select filter: comma-separated list of selections. Each selection
+    # is either "<component>" or "<component>:YYYY-MM" for month-scoped
+    # entries (currently used for per-month tuition). Multiple selections
+    # are OR-combined in the ledger match.
+    fee_selections: Optional[str] = None,
+    academic_year: Optional[str] = None,  # e.g. "2025-2026"
+):
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -1198,14 +1408,38 @@ async def get_due_chart(request: Request, class_name: Optional[str] = None, sear
         {"$set": {"status": "overdue"}}
     )
 
-    # 2. Aggregate pending/overdue totals per student from ledger in one query
+    # 2. Aggregate pending/overdue totals per student. For entries that
+    # have been partially paid (amount_paid > 0), sum remaining_balance
+    # instead of net_amount so the chart reflects what's actually owed.
+    ledger_match: dict = {"status": {"$in": ["pending", "overdue"]}}
+    # Fee Type (category) and Duration (month) are independent filters,
+    # combined with AND. fee_selections is a comma list of fee_component names.
+    comps = [s.strip() for s in (fee_selections or "").split(",") if s.strip()]
+    if fee_component and fee_component not in comps:
+        comps.append(fee_component)  # legacy single-value support
+    if len(comps) == 1:
+        ledger_match["fee_component"] = comps[0]
+    elif len(comps) > 1:
+        ledger_match["fee_component"] = {"$in": comps}
+    if month:
+        # Duration filter: YYYY-MM prefix match on the YYYY-MM-DD due_date.
+        ledger_match["due_date"] = {"$regex": f"^{month}-"}
     ledger_pipeline = [
-        {"$match": {"status": {"$in": ["pending", "overdue"]}}},
+        {"$match": ledger_match},
         {"$group": {
             "_id": "$student_id",
-            "total_due":       {"$sum": "$net_amount"},
+            "total_due": {"$sum": {
+                "$cond": [
+                    {"$gt": [{"$ifNull": ["$amount_paid", 0]}, 0]},
+                    {"$ifNull": ["$remaining_balance", "$net_amount"]},
+                    "$net_amount",
+                ]
+            }},
             "entries_pending": {"$sum": 1},
             "entries_overdue": {"$sum": {"$cond": [{"$eq": ["$status", "overdue"]}, 1, 0]}},
+            "entries_partial": {"$sum": {
+                "$cond": [{"$gt": [{"$ifNull": ["$amount_paid", 0]}, 0]}, 1, 0]
+            }},
             "oldest_due":      {"$min": "$due_date"},
         }},
     ]
@@ -1219,11 +1453,15 @@ async def get_due_chart(request: Request, class_name: Optional[str] = None, sear
     student_query: dict = {"is_active": True, "student_id": {"$in": student_ids}}
     if class_name:
         student_query["class_name"] = class_name
+    if section:
+        student_query["section"] = section
+    if academic_year:
+        student_query["academic_year"] = academic_year
 
     students = await db.students.find(student_query, {
         "_id": 0, "student_id": 1, "first_name": 1, "last_name": 1,
         "class_name": 1, "section": 1, "stream": 1, "admission_number": 1, "fee_status": 1,
-        "phone": 1,
+        "phone": 1, "academic_year": 1,
     }).to_list(5000)
 
     student_map = {s["student_id"]: s for s in students}
@@ -1239,10 +1477,12 @@ async def get_due_chart(request: Request, class_name: Optional[str] = None, sear
             "class_name":       s["class_name"],
             "section":          s["section"],
             "stream":           s.get("stream"),
+            "academic_year":    s.get("academic_year", ""),
             "mobile":           s.get("phone", ""),
             "total_due":        round(row["total_due"], 2),
             "entries_pending":  row["entries_pending"],
             "entries_overdue":  row["entries_overdue"],
+            "entries_partial":  row.get("entries_partial", 0),
             "fee_status":       s.get("fee_status", "pending"),
             "oldest_due":       row["oldest_due"] or "",
         })
@@ -1258,6 +1498,44 @@ async def get_due_chart(request: Request, class_name: Optional[str] = None, sear
         ]
 
     return due_chart
+
+
+@router.get("/fees/sessions")
+async def list_academic_sessions(request: Request):
+    """
+    Distinct academic_year values present in the ledger, newest first.
+    Falls back to the current academic year if the ledger is empty.
+    Feeds the Session filter dropdown (and similar selectors).
+    """
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    years = await db.student_ledger.distinct("academic_year")
+    cleaned = sorted({y for y in years if y}, reverse=True)
+    if not cleaned:
+        cleaned = [current_academic_year()]
+    return cleaned
+
+
+@router.get("/fees/due-fee-types")
+async def get_due_fee_types(request: Request):
+    """
+    Distinct fee components and tuition months currently present in
+    pending/overdue ledger entries. Feeds the Due Fees filter dropdown
+    so the options are DB-driven, not hardcoded.
+    """
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    pipeline = [
+        {"$match": {"status": {"$in": ["pending", "overdue"]}}},
+        {"$group": {
+            "_id": "$fee_component",
+            "months": {"$addToSet": {"$substr": ["$due_date", 0, 7]}},
+        }},
+    ]
+    rows = await db.student_ledger.aggregate(pipeline).to_list(100)
+    components = sorted([r["_id"] for r in rows if r["_id"]])
+    tuition_months = sorted({
+        m for r in rows if r["_id"] == "tuition" for m in (r.get("months") or []) if m
+    })
+    return {"components": components, "tuition_months": tuition_months}
 
 
 @router.post("/fees/refresh-overdue")
@@ -1447,12 +1725,25 @@ async def download_receipt_pdf(payment_id: str, request: Request):
     elements.append(div_table)
     elements.append(Spacer(1, 10))
 
+    # For senior classes (11th/12th) the section IS the stream, so show the
+    # class alone in Class and the stream/section in Stream — not combined.
+    _cls = student.get("class_name", "") or ""
+    _section = student.get("section", "") or ""
+    _stream = student.get("stream", "") or ""
+    _STREAM_CLASSES = {"11th", "12th", "11", "12", "Class 11", "Class 12"}
+    if _cls in _STREAM_CLASSES:
+        class_label = _cls
+        stream_src = _stream or _section
+        stream_label = stream_src.title() if stream_src else "—"
+    else:
+        class_label = f"{_cls} – {_section}" if _section else _cls
+        stream_label = _stream.title() if _stream else "—"
+
     info_data = [
         ["Receipt No.", payment.get("receipt_number", ""), "Date", payment.get("payment_date", "")],
         ["Student Name", f"{student['first_name']} {student['last_name']}",
          "Admission No.", student.get("admission_number", "")],
-        ["Class", f"{student['class_name']} – {student.get('section', '')}",
-         "Stream", student.get("stream", "—").title() if student.get("stream") else "—"],
+        ["Class", class_label, "Stream", stream_label],
         ["Payment Method", payment.get("payment_method", "").upper(),
          "Txn ID", payment.get("transaction_id", "—") or "—"],
     ]
@@ -1478,7 +1769,13 @@ async def download_receipt_pdf(payment_id: str, request: Request):
             f"{e.get('late_fee_applied', 0):,.2f}" if e.get("late_fee_applied", 0) > 0 else "—",
             f"{e['net_amount']:,.2f}",
         ])
-    fee_data.append(["", "", "", "", "TOTAL PAID", f"{payment['amount']:,.2f}"])
+    # Summary: total billed (net), what was paid in THIS txn, and the balance
+    # still remaining on these fees after this payment.
+    net_total = round(sum(e["net_amount"] for e in entries), 2)
+    total_remaining = round(sum(float(e.get("remaining_balance", 0) or 0) for e in entries), 2)
+    fee_data.append(["", "", "", "", "TOTAL BILLED (Net)", f"{net_total:,.2f}"])
+    fee_data.append(["", "", "", "", "AMOUNT PAID (this txn)", f"{payment['amount']:,.2f}"])
+    fee_data.append(["", "", "", "", "BALANCE REMAINING", f"{total_remaining:,.2f}"])
 
     col_w = [2.6 * inch, 1.0 * inch, 0.9 * inch, 0.9 * inch, 0.9 * inch, 0.9 * inch]
     fee_table = Table(fee_data, colWidths=col_w)
@@ -1491,12 +1788,63 @@ async def download_receipt_pdf(payment_id: str, request: Request):
         ("ALIGN", (2, 0), (-1, -1), "RIGHT"),
         ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
         ("PADDING", (0, 0), (-1, -1), 5),
-        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f5f5f5")),
-        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#fafafa")]),
+        # Last three rows are the summary block.
+        ("BACKGROUND", (0, -3), (-1, -1), colors.HexColor("#f5f5f5")),
+        ("FONTNAME", (0, -3), (-1, -1), "Helvetica-Bold"),
+        ("TEXTCOLOR", (4, -1), (-1, -1), colors.HexColor("#c0392b")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -4), [colors.white, colors.HexColor("#fafafa")]),
     ]))
     elements.append(fee_table)
-    elements.append(Spacer(1, 30))
+    elements.append(Spacer(1, 12))
+
+    # ── Payment history for these fee entries ──────────────────────────────
+    # Partial payments each create their own record against the same ledger
+    # entry. Show ALL of them combined so the receipt reflects the full payment
+    # trail (e.g. ₹200 + ₹300) with cumulative total and remaining balance.
+    related_payments = await db.fee_payments.find(
+        {"student_id": payment["student_id"], "installment_ids": {"$in": ledger_ids}},
+        {"_id": 0},
+    ).to_list(200)
+    related_payments.sort(key=lambda p: str(p.get("payment_date") or p.get("created_at") or ""))
+
+    if len(related_payments) > 1:
+        hist_data = [["#", "Date", "Receipt No.", "Method", "Amount (Rs.)"]]
+        total_received = 0.0
+        for i, p in enumerate(related_payments, start=1):
+            amt = float(p.get("amount", 0))
+            total_received += amt
+            is_current = p.get("payment_id") == payment_id
+            hist_data.append([
+                str(i),
+                str(p.get("payment_date") or p.get("created_at", ""))[:10],
+                (p.get("receipt_number", "") or "") + ("  (this)" if is_current else ""),
+                (p.get("payment_method", "") or "").upper(),
+                f"{amt:,.2f}",
+            ])
+        total_received = round(total_received, 2)
+        balance = round(max(0.0, net_total - total_received), 2)
+        hist_data.append(["", "", "", "TOTAL RECEIVED", f"{total_received:,.2f}"])
+        hist_data.append(["", "", "", "BALANCE DUE", f"{balance:,.2f}"])
+
+        elements.append(Paragraph("Payment History (this fee)", normal_bold))
+        elements.append(Spacer(1, 4))
+        hist_table = Table(hist_data, colWidths=[0.4 * inch, 1.1 * inch, 2.4 * inch, 1.4 * inch, 1.2 * inch])
+        hist_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#334155")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("ALIGN", (4, 0), (4, -1), "RIGHT"),
+            ("ALIGN", (3, -2), (3, -1), "RIGHT"),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
+            ("PADDING", (0, 0), (-1, -1), 5),
+            ("BACKGROUND", (0, -2), (-1, -1), colors.HexColor("#f5f5f5")),
+            ("FONTNAME", (0, -2), (-1, -1), "Helvetica-Bold"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -3), [colors.white, colors.HexColor("#fafafa")]),
+        ]))
+        elements.append(hist_table)
+    elements.append(Spacer(1, 24))
 
     if payment.get("remarks"):
         elements.append(Paragraph(f"Remarks: {payment['remarks']}", styles["Normal"]))
@@ -1689,8 +2037,11 @@ async def report_fees_collection(
     class_name: Optional[str] = None,
     section: Optional[str] = None,
     fee_type: Optional[str] = None,
+    fee_component: Optional[str] = None,
+    fee_month: Optional[str] = None,  # MM — matches due_date month, any year
     payment_method: Optional[str] = None,
     student_id: Optional[str] = None,
+    academic_year: Optional[str] = None,
     rollup: str = "monthly",
 ):
     """Fees Collection Report — JSON for the dashboard."""
@@ -1698,7 +2049,9 @@ async def report_fees_collection(
     return await _collect_report_rows(
         duration=duration, start_date=start_date, end_date=end_date,
         class_name=class_name, section=section, fee_type=fee_type,
+        fee_component=fee_component, fee_month=fee_month,
         payment_method=payment_method, student_id=student_id,
+        academic_year=academic_year,
     )
 
 
@@ -1709,11 +2062,16 @@ async def _collect_report_rows(
     class_name: Optional[str] = None,
     section: Optional[str] = None,
     fee_type: Optional[str] = None,
+    fee_component: Optional[str] = None,
+    fee_month: Optional[str] = None,
     payment_method: Optional[str] = None,
     student_id: Optional[str] = None,
+    academic_year: Optional[str] = None,
 ) -> list:
     """Internal: shared query body used by JSON, PDF, and Excel report endpoints."""
     pay_query: dict = {}
+    if academic_year:
+        pay_query["academic_year"] = academic_year
     if duration != "all_time":
         range_start, range_end = _duration_range(duration, start_date, end_date)
         try:
@@ -1761,8 +2119,18 @@ async def _collect_report_rows(
     section_filter = norm(section)
     fee_filter     = norm(fee_type)
 
-    # Aggregate per-student
-    per_student: dict = {}
+    # Component → display label (tuition collapsed to a single "Tuition Fee").
+    def _category(e: dict) -> str:
+        comp = e.get("fee_component")
+        if comp and comp in _COMPONENT_LABELS:
+            return _COMPONENT_LABELS[comp]
+        if comp:
+            return comp.replace("_", " ").title()
+        return (e.get("fee_type") or "Other").replace("_", " ").title()
+
+    # One row per (student, fee category) so each fee type shows separately
+    # with its own collected amount.
+    per_row: dict = {}
     for p in payments:
         s = student_map.get(p["student_id"]) or {}
         if class_filter and norm(s.get("class_name")) != class_filter:
@@ -1772,46 +2140,58 @@ async def _collect_report_rows(
 
         entry_ids = p.get("installment_ids", []) or []
         linked = [ledger_by_id[i] for i in entry_ids if i in ledger_by_id]
-        if fee_filter:
+        if fee_component:
+            linked = [e for e in linked if e.get("fee_component") == fee_component]
+        if fee_month:
+            linked = [e for e in linked if (e.get("due_date") or "")[5:7] == fee_month]
+        if (fee_component or fee_month or fee_filter) and not linked:
+            continue
+        if fee_filter and not (fee_component or fee_month):
             linked = [e for e in linked if norm(e.get("fee_type")) == fee_filter]
             if not linked:
                 continue
-            contribution = round(sum(e.get("net_amount", 0) for e in linked), 2)
-        else:
-            contribution = round(p.get("amount", 0), 2)
 
-        agg = per_student.setdefault(p["student_id"], {
-            "admission_number": s.get("admission_number", ""),
-            "student_name":     f"{s.get('first_name','')} {s.get('last_name','')}".strip(),
-            "mobile":           s.get("parent_phone") or s.get("phone") or "",
-            "guardian":         s.get("parent_name", "") or "",
-            "class_section":    f"{s.get('class_name','')}{(' (' + s.get('section') + ')') if s.get('section') else ''}",
-            "fee_types":        set(),
-            "payments_count":   0,
-            "total_collected":  0.0,
-            "last_payment_date": None,
-            "due_date":         None,
-        })
-        for e in linked:
-            ft = e.get("fee_type")
-            if ft:
-                agg["fee_types"].add(str(ft))
-            # Latest due_date among the ledger entries this student has paid against
-            d = e.get("due_date")
-            if d and (agg["due_date"] is None or d > agg["due_date"]):
-                agg["due_date"] = d
-        agg["payments_count"] += 1
-        agg["total_collected"] += contribution
         pd = str(p.get("payment_date", ""))[:10]
-        if pd and (agg["last_payment_date"] is None or pd > agg["last_payment_date"]):
-            agg["last_payment_date"] = pd
+
+        def _ensure(cat):
+            key = (p["student_id"], cat)
+            return per_row.setdefault(key, {
+                "admission_number": s.get("admission_number", ""),
+                "student_name":     f"{s.get('first_name','')} {s.get('last_name','')}".strip(),
+                "mobile":           s.get("parent_phone") or s.get("phone") or "",
+                "guardian":         s.get("parent_name", "") or "",
+                "class_section":    f"{s.get('class_name','')}{(' (' + s.get('section') + ')') if s.get('section') else ''}",
+                "fee_types":        cat,
+                "payments_count":   0,
+                "total_collected":  0.0,
+                "last_payment_date": None,
+                "due_date":         None,
+            })
+
+        if linked:
+            for e in linked:
+                cat = _category(e)
+                row = _ensure(cat)
+                row["total_collected"] += float(e.get("net_amount", 0))
+                row["payments_count"] += 1
+                d = e.get("due_date")
+                if d and (row["due_date"] is None or d > row["due_date"]):
+                    row["due_date"] = d
+                if pd and (row["last_payment_date"] is None or pd > row["last_payment_date"]):
+                    row["last_payment_date"] = pd
+        else:
+            # Payment with no linked ledger entries — bucket under "Fees".
+            row = _ensure("Fees")
+            row["total_collected"] += float(p.get("amount", 0))
+            row["payments_count"] += 1
+            if pd and (row["last_payment_date"] is None or pd > row["last_payment_date"]):
+                row["last_payment_date"] = pd
 
     rows = []
-    for agg in per_student.values():
-        agg["total_collected"] = round(agg["total_collected"], 2)
-        agg["fee_types"] = ", ".join(sorted(agg["fee_types"]))
-        rows.append(agg)
-    rows.sort(key=lambda r: r["total_collected"], reverse=True)
+    for row in per_row.values():
+        row["total_collected"] = round(row["total_collected"], 2)
+        rows.append(row)
+    rows.sort(key=lambda r: (r["student_name"], r["fee_types"]))
     return rows
 
 
@@ -1821,14 +2201,23 @@ async def report_fees_due(
     class_name: Optional[str] = None,
     section: Optional[str] = None,
     fee_type: Optional[str] = None,
+    fee_component: Optional[str] = None,
+    fee_month: Optional[str] = None,  # MM — matches due_date month, any year
     as_of_date: Optional[str] = None,
+    duration: Optional[str] = None,   # keyword range (today/this_month/...) on due_date
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     student_id: Optional[str] = None,
+    academic_year: Optional[str] = None,
 ):
     """Due Fees Report — JSON for the dashboard."""
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     return await _due_report_rows(
         class_name=class_name, section=section, fee_type=fee_type,
-        as_of_date=as_of_date, student_id=student_id,
+        fee_component=fee_component, fee_month=fee_month,
+        as_of_date=as_of_date, duration=duration,
+        start_date=start_date, end_date=end_date,
+        student_id=student_id, academic_year=academic_year,
     )
 
 
@@ -1836,13 +2225,32 @@ async def _due_report_rows(
     class_name: Optional[str] = None,
     section: Optional[str] = None,
     fee_type: Optional[str] = None,
+    fee_component: Optional[str] = None,
+    fee_month: Optional[str] = None,
     as_of_date: Optional[str] = None,
+    duration: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     student_id: Optional[str] = None,
+    academic_year: Optional[str] = None,
 ) -> list:
     """Internal: shared query body for JSON, PDF, and Excel due-report endpoints."""
     ledger_query: dict = {"status": {"$in": ["pending", "overdue", "partially_paid"]}}
+    if academic_year:
+        ledger_query["academic_year"] = academic_year
+    # Duration narrows the report to fees whose due_date falls in the selected
+    # period (mirrors the Collection report's Search Duration). `as_of_date`
+    # tightens the upper bound when both are supplied.
+    due_filter: dict = {}
+    if duration and duration != "all_time":
+        rs, re_ = _duration_range(duration, start_date, end_date)
+        due_filter["$gte"] = rs
+        due_filter["$lte"] = re_
     if as_of_date:
-        ledger_query["due_date"] = {"$lte": as_of_date}
+        cur = due_filter.get("$lte")
+        due_filter["$lte"] = min(cur, as_of_date) if cur else as_of_date
+    if due_filter:
+        ledger_query["due_date"] = due_filter
     if student_id:
         ledger_query["student_id"] = student_id
     # Class / fee_type filters are applied in Python with normalized matching below
@@ -1868,8 +2276,11 @@ async def _due_report_rows(
     section_filter = norm(section)
     fee_filter     = norm(fee_type)
 
-    # Aggregate pending entries by student
-    per_student: dict = {}
+    # One row per (student, fee category) so each fee type shows separately with
+    # its own outstanding amount — mirrors the Collection report. `paid`/`balance`
+    # are the entry-level amounts for that category (paid is non-zero only for
+    # partially-paid fees; a fully-pending fee shows paid 0, balance = full).
+    per_row: dict = {}
     for e in entries:
         s = student_map.get(e["student_id"])
         if not s:
@@ -1878,28 +2289,33 @@ async def _due_report_rows(
             continue
         if section_filter and norm(s.get("section")) != section_filter:
             continue
-        if fee_filter and norm(e.get("fee_type")) != fee_filter:
+        # Specific fee-category filters take precedence over the legacy bucket.
+        if fee_component or fee_month:
+            if fee_component and e.get("fee_component") != fee_component:
+                continue
+            if fee_month and (e.get("due_date") or "")[5:7] != fee_month:
+                continue
+        elif fee_filter and norm(e.get("fee_type")) != fee_filter:
             continue
         net = float(e.get("net_amount", 0))
         paid = float(e.get("amount_paid", 0))
         remaining = float(e.get("remaining_balance", net - paid))
 
-        agg = per_student.setdefault(e["student_id"], {
+        cat = _report_category(e)
+        key = (e["student_id"], cat)
+        agg = per_row.setdefault(key, {
             "admission_number": s.get("admission_number", ""),
             "student_name":     f"{s.get('first_name','')} {s.get('last_name','')}".strip(),
             "mobile":           s.get("parent_phone") or s.get("phone") or "",
             "guardian":         s.get("parent_name", "") or "",
             "class_section":    f"{s.get('class_name','')}{(' (' + s.get('section') + ')') if s.get('section') else ''}",
-            "fee_types":        set(),
+            "fee_types":        cat,
             "amount":           0.0,
             "paid":             0.0,
             "balance":          0.0,
             "entries_pending":  0,
             "oldest_due":       None,
         })
-        ft = e.get("fee_type")
-        if ft:
-            agg["fee_types"].add(str(ft))
         agg["amount"]  += net
         agg["paid"]    += paid
         agg["balance"] += remaining
@@ -1908,30 +2324,14 @@ async def _due_report_rows(
         if d and (agg["oldest_due"] is None or d < agg["oldest_due"]):
             agg["oldest_due"] = d
 
-    # Overwrite "paid" with the student's actual total payments. The per-entry
-    # `amount_paid` is only non-zero for partially-paid rows (most entries are
-    # either fully paid (excluded) or fully unpaid), which made the column
-    # show 0 for everyone. Aggregate from fee_payments so it reflects what the
-    # student has actually paid in.
-    if per_student:
-        appearing_ids = list(per_student.keys())
-        pay_agg = await db.fee_payments.aggregate([
-            {"$match": {"student_id": {"$in": appearing_ids}}},
-            {"$group": {"_id": "$student_id", "total_paid": {"$sum": "$amount"}}},
-        ]).to_list(len(appearing_ids))
-        paid_by_student = {r["_id"]: float(r.get("total_paid", 0)) for r in pay_agg}
-        for sid, agg in per_student.items():
-            agg["paid"] = paid_by_student.get(sid, 0.0)
-
     rows = []
-    for sid, agg in per_student.items():
+    for agg in per_row.values():
         agg["amount"]  = round(agg["amount"], 2)
         agg["paid"]    = round(agg["paid"], 2)
         agg["balance"] = round(agg["balance"], 2)
-        agg["fee_types"] = ", ".join(sorted(agg["fee_types"]))
         rows.append(agg)
 
-    rows.sort(key=lambda r: r["balance"], reverse=True)
+    rows.sort(key=lambda r: (r["student_name"], r["fee_types"]))
     return rows
 
 
@@ -2186,6 +2586,8 @@ async def export_collection_excel(
     class_name: Optional[str] = None,
     section: Optional[str] = None,
     fee_type: Optional[str] = None,
+    fee_component: Optional[str] = None,
+    fee_month: Optional[str] = None,
     payment_method: Optional[str] = None,
     student_id: Optional[str] = None,
 ):
@@ -2193,6 +2595,7 @@ async def export_collection_excel(
     rows = await _collect_report_rows(
         duration=duration, start_date=start_date, end_date=end_date,
         class_name=class_name, section=section, fee_type=fee_type,
+        fee_component=fee_component, fee_month=fee_month,
         payment_method=payment_method, student_id=student_id,
     )
     buf = _build_excel("Fees Collection Report", COLLECTION_EXPORT_COLUMNS, rows)
@@ -2213,6 +2616,8 @@ async def export_collection_pdf(
     class_name: Optional[str] = None,
     section: Optional[str] = None,
     fee_type: Optional[str] = None,
+    fee_component: Optional[str] = None,
+    fee_month: Optional[str] = None,
     payment_method: Optional[str] = None,
     student_id: Optional[str] = None,
 ):
@@ -2220,6 +2625,7 @@ async def export_collection_pdf(
     rows = await _collect_report_rows(
         duration=duration, start_date=start_date, end_date=end_date,
         class_name=class_name, section=section, fee_type=fee_type,
+        fee_component=fee_component, fee_month=fee_month,
         payment_method=payment_method, student_id=student_id,
     )
     buf = _build_pdf("Fees Collection Report", COLLECTION_EXPORT_COLUMNS, rows)
@@ -2236,13 +2642,22 @@ async def export_due_excel(
     class_name: Optional[str] = None,
     section: Optional[str] = None,
     fee_type: Optional[str] = None,
+    fee_component: Optional[str] = None,
+    fee_month: Optional[str] = None,
     as_of_date: Optional[str] = None,
+    duration: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     student_id: Optional[str] = None,
+    academic_year: Optional[str] = None,
 ):
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     rows = await _due_report_rows(
         class_name=class_name, section=section, fee_type=fee_type,
-        as_of_date=as_of_date, student_id=student_id,
+        fee_component=fee_component, fee_month=fee_month,
+        as_of_date=as_of_date, duration=duration,
+        start_date=start_date, end_date=end_date,
+        student_id=student_id, academic_year=academic_year,
     )
     buf = _build_excel("Due Fees Report", DUE_EXPORT_COLUMNS, rows)
     filename = f"fees-due-{_today_str()}.xlsx"
@@ -2259,13 +2674,22 @@ async def export_due_pdf(
     class_name: Optional[str] = None,
     section: Optional[str] = None,
     fee_type: Optional[str] = None,
+    fee_component: Optional[str] = None,
+    fee_month: Optional[str] = None,
     as_of_date: Optional[str] = None,
+    duration: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     student_id: Optional[str] = None,
+    academic_year: Optional[str] = None,
 ):
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     rows = await _due_report_rows(
         class_name=class_name, section=section, fee_type=fee_type,
-        as_of_date=as_of_date, student_id=student_id,
+        fee_component=fee_component, fee_month=fee_month,
+        as_of_date=as_of_date, duration=duration,
+        start_date=start_date, end_date=end_date,
+        student_id=student_id, academic_year=academic_year,
     )
     buf = _build_pdf("Due Fees Report", DUE_EXPORT_COLUMNS, rows)
     filename = f"fees-due-{_today_str()}.pdf"

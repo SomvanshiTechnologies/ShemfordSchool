@@ -171,7 +171,7 @@ const LoginPage = () => {
             {/* ── Sign In ── */}
             <TabsContent value="login">
               <form onSubmit={handleLogin} className="space-y-4">
-                <Field label="Email Address" icon={Mail}  type="email"    placeholder="Enter your email"    value={loginData.email}    onChange={e => setLoginData({ ...loginData, email: e.target.value })}    required data-testid="login-email-input" />
+                <Field label="Email / ID" icon={Mail}  type="text"    placeholder="Email or ID"    value={loginData.email}    onChange={e => setLoginData({ ...loginData, email: e.target.value })}    required data-testid="login-email-input" />
                 <Field label="Password"      icon={Lock}  type="password" placeholder="Enter your password" value={loginData.password}  onChange={e => setLoginData({ ...loginData, password: e.target.value })} required data-testid="login-password-input" />
 
                 <Button

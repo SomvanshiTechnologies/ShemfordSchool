@@ -51,9 +51,9 @@ FEE_COMPONENT_FREQUENCY = {
 }
 
 REQUIRED_DOCUMENTS = [
-    {"type": "birth_certificate", "name": "Birth Certificate", "mandatory": True},
-    {"type": "aadhaar_card", "name": "Aadhaar Card", "mandatory": True},
-    {"type": "passport_photo", "name": "Passport Photo", "mandatory": True},
+    {"type": "birth_certificate", "name": "Birth Certificate", "mandatory": False},
+    {"type": "aadhaar_card", "name": "Aadhaar Card", "mandatory": False},
+    {"type": "passport_photo", "name": "Passport Photo", "mandatory": False},
     {"type": "previous_marksheet", "name": "Previous Class Marksheet", "mandatory": False},
     {"type": "transfer_certificate", "name": "Transfer Certificate (TC)", "mandatory": False},
     {"type": "caste_certificate", "name": "Caste Certificate", "mandatory": False},
@@ -97,7 +97,9 @@ class UserCreate(BaseModel):
 
 
 class UserLogin(BaseModel):
-    email: EmailStr
+    # Login identifier: an email, a student admission number, or an employee ID.
+    # Kept as a plain string (not EmailStr) so non-email identifiers validate.
+    email: str
     password: str
 
 
@@ -181,6 +183,7 @@ class EmployeeBase(BaseModel):
     designation: str
     department: str
     joining_date: str = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    date_left: Optional[str] = None  # YYYY-MM-DD when the employee left (None = still employed)
     # Salary
     salary: Optional[float] = None          # legacy field — kept for compat
     monthly_salary: float = 0.0             # canonical payroll salary
@@ -501,6 +504,7 @@ class Announcement(BaseModel):
     created_by: str
     is_active: bool = True
     voice_note_id: Optional[str] = None
+    academic_year: Optional[str] = None  # session this announcement belongs to
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -532,6 +536,7 @@ class Issue(BaseModel):
     assigned_to: Optional[str] = None
     resolution: Optional[str] = None
     resolved_at: Optional[datetime] = None
+    academic_year: Optional[str] = None  # session this issue belongs to
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -549,6 +554,7 @@ class Message(BaseModel):
     voice_url: Optional[str] = None
     voice_note_id: Optional[str] = None
     is_read: bool = False
+    academic_year: Optional[str] = None  # session this message belongs to
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -691,6 +697,7 @@ class AuditLog(BaseModel):
     restored_at: Optional[str] = None
     restored_by: Optional[str] = None
     restored_by_name: Optional[str] = None
+    academic_year: Optional[str] = None  # session this audit event belongs to
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import api from '../lib/api';
 import { getCached, setCached } from '../lib/pageCache';
 import { useAuth } from '../contexts/AuthContext';
+import { useSession } from '../contexts/SessionContext';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -30,6 +31,7 @@ import { formatDateTime } from '../lib/utils';
 
 const IssuesPage = () => {
   const { user, isAdmin, isTeacher } = useAuth();
+  const { viewSession } = useSession();
   const [issues, setIssues] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -48,7 +50,8 @@ const IssuesPage = () => {
 
   useEffect(() => {
     fetchIssues();
-  }, [filterStatus]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterStatus, viewSession]);
 
   const fetchIssues = async () => {
     const cacheKey = `issues:${filterStatus || 'all'}`;

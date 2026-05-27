@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useSession } from '../contexts/SessionContext';
 import api from '../lib/api';
 import { getCached, setCached } from '../lib/pageCache';
 
@@ -64,6 +65,7 @@ const SECTION_COLORS = {
 
 const ClassStructurePage = () => {
   const { user } = useAuth();
+  const { viewSession } = useSession();
   const isAdmin = user?.role === 'admin';
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -79,10 +81,14 @@ const ClassStructurePage = () => {
     name: '', display_name: '', sections: SHEMFORD_SECTIONS.map(s => ({ section_name: s, capacity: 45, class_teacher_id: null, class_teacher_name: null }))
   });
 
-  useEffect(() => { fetchClasses(); fetchTeachers(); }, []);
+  useEffect(() => { fetchClasses(); }, [viewSession]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchTeachers(); }, []);
 
   const fetchClasses = async () => {
-    const cached = getCached('classes:all');
+    // Counts are scoped to the viewed session server-side, so key the cache by
+    // session — otherwise switching sessions would show stale occupancy.
+    const cacheKey = `classes:${viewSession || 'all'}`;
+    const cached = getCached(cacheKey);
     if (cached) {
       setClasses(cached);
       setLoading(false);
@@ -91,7 +97,7 @@ const ClassStructurePage = () => {
     try {
       const res = await api.get('/classes');
       setClasses(res.data);
-      setCached('classes:all', res.data);
+      setCached(cacheKey, res.data);
     } catch { if (!cached) toast.error('Failed to load classes'); }
     finally { setLoading(false); setRefreshing(false); }
   };
@@ -273,7 +279,7 @@ const ClassStructurePage = () => {
                   )}
                 </div>
                 <div className="flex gap-1">
-                  <Badge variant="outline" className="text-xs">{cls.academic_year}</Badge>
+                  <Badge variant="outline" className="text-xs">{viewSession || cls.academic_year}</Badge>
                   {isAdmin && (
                     <Button variant="ghost" size="sm" onClick={() => { setEditData({...cls}); setShowEditDialog(true); }}>
                       <Edit className="h-3 w-3" />
@@ -323,20 +329,19 @@ const ClassStructurePage = () => {
                         </TableCell>
                         <TableCell className="text-xs">{sec.class_teacher_name || <span className="text-muted-foreground italic">Unassigned</span>}</TableCell>
                         <TableCell>
-                          {cls.has_streams ? (
-                            <div className="flex flex-col gap-0.5">
-                              {(cls.streams || []).map(st => (
-                                <Button key={st} variant="ghost" size="sm" className="h-5 text-xs justify-start px-1"
-                                  onClick={() => { setSelectedClass({ cls, section: sec.section_name, stream: st }); setSelectedStream(st); fetchClassStudents(cls, sec.section_name, st); }}>
-                                  <ChevronRight className="h-2.5 w-2.5 mr-0.5" />{st.charAt(0).toUpperCase() + st.slice(1)}
-                                </Button>
-                              ))}
-                            </div>
-                          ) : (
-                            <Button variant="ghost" size="sm" onClick={() => { setSelectedClass({ cls, section: sec.section_name, stream: null }); setSelectedStream(null); fetchClassStudents(cls, sec.section_name); }}>
-                              <ChevronRight className="h-3 w-3" />
-                            </Button>
-                          )}
+                          {/* For stream classes (11th/12th) the section name IS
+                              the stream, so a single chevron is enough — the
+                              per-stream sub-buttons were redundant. We still pass
+                              the stream (derived from the section) so the student
+                              filter stays correct for legacy rows. */}
+                          <Button variant="ghost" size="sm" onClick={() => {
+                            const st = cls.has_streams ? sec.section_name.toLowerCase() : null;
+                            setSelectedClass({ cls, section: sec.section_name, stream: st });
+                            setSelectedStream(st);
+                            fetchClassStudents(cls, sec.section_name, st);
+                          }}>
+                            <ChevronRight className="h-3 w-3" />
+                          </Button>
                         </TableCell>
                       </TableRow>
                     );

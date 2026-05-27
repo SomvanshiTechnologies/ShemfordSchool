@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useSession } from '../contexts/SessionContext';
+import { toast } from 'sonner';
 import api from '../lib/api';
 import { Progress } from './ui/progress';
+import { displaySection } from '../lib/utils';
 import {
   Users, GraduationCap, CreditCard, AlertTriangle, Calendar, Bell,
   ArrowRight, UserCog, BarChart3, FileText, BookOpen, CheckCircle,
   TrendingUp, UserX, Activity, Banknote, Smartphone, Building2, Landmark,
-  School, TicketCheck, MessageSquare,
+  School, TicketCheck, MessageSquare, ChevronDown, Check, Pencil, Loader2, X,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -355,8 +358,7 @@ const StudentDashboard = ({ stats }) => (
           <div>
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">My Class</p>
             <p className="text-lg font-bold text-slate-900">
-              Class {stats.class_name} — Section {stats.section}
-              {stats.stream && <span className="text-sm font-medium text-slate-500 ml-2 capitalize">({stats.stream})</span>}
+              Class {stats.class_name} — Section {displaySection(stats)}
             </p>
           </div>
         </div>
@@ -478,6 +480,7 @@ const AccountantDashboard = ({ stats }) => (
 ───────────────────────────────────────────── */
 const Dashboard = () => {
   const { user } = useAuth();
+  const { viewSession } = useSession();
   const [stats,            setStats]            = useState({});
   const [financial,        setFinancial]        = useState(null);
   const [attendanceAlerts, setAttendanceAlerts] = useState(null);
@@ -485,9 +488,11 @@ const Dashboard = () => {
   const [loading,          setLoading]          = useState(true);
 
   useEffect(() => {
+    // Scope dashboard data to the academic year the admin is viewing.
+    const ayParams = viewSession ? { academic_year: viewSession } : {};
     const fetchStats = async () => {
       try {
-        const response = await api.get('/reports/dashboard');
+        const response = await api.get('/reports/dashboard', { params: ayParams });
         setStats(response.data);
       } catch (error) {
         console.error('Failed to fetch dashboard stats:', error);
@@ -496,7 +501,7 @@ const Dashboard = () => {
 
     const fetchAdminExtras = async () => {
       const [fin, alerts, logs] = await Promise.allSettled([
-        api.get('/reports/financial'),
+        api.get('/reports/financial', { params: ayParams }),
         api.get('/attendance/alerts', { params: { threshold: 75 } }),
         api.get('/audit-logs', { params: { limit: 5 } }),
       ]);
@@ -515,7 +520,7 @@ const Dashboard = () => {
       }
     }, 60000);
     return () => clearInterval(intervalId);
-  }, [user?.role]);
+  }, [user?.role, viewSession]);
 
   if (loading) {
     return (

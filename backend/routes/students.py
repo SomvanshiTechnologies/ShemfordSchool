@@ -22,7 +22,7 @@ from database import db
 from models import UserRole, UserBase, StudentBase, StudentCreate, CLASSES_WITH_STREAMS
 from auth_utils import (
     get_current_user, require_roles, generate_admission_number, create_audit_log,
-    hash_password, get_teacher_assigned_classes
+    hash_password, get_teacher_assigned_classes, request_session, ensure_active_session
 )
 
 router = APIRouter()
@@ -153,11 +153,17 @@ async def create_student(student: StudentCreate, request: Request):
             )
 
     admission_number = await generate_admission_number()
-    from routes.fees import current_academic_year
+    from routes.fees import active_session, ensure_session_writable
+    payload = student.model_dump()
+    payload.pop("academic_year", None)
+    # Student is created in the session the admin is operating in. Past
+    # (archived) years are read-only.
+    academic_year = request_session(request) or await active_session()
+    await ensure_session_writable(academic_year)
     student_obj = StudentBase(
-        **student.model_dump(),
+        **payload,
         admission_number=admission_number,
-        academic_year=current_academic_year(),
+        academic_year=academic_year,
         roll_number=roll_number,
         parent_id=parent_id,
     )
@@ -184,6 +190,9 @@ async def get_students(
     section: Optional[str] = None,
     fee_status: Optional[str] = None,
     search: Optional[str] = None,
+    academic_year: Optional[str] = None,
+    all_sessions: bool = False,  # bypass session scoping (e.g. upgradation search)
+    name_only: bool = False,  # search only student name/admission, not parent fields
     status: Optional[str] = "active",  # active | inactive | all
     page: int = 1,
     limit: int = 50,
@@ -217,23 +226,52 @@ async def get_students(
         query["section"] = section
     if fee_status:
         query["fee_status"] = fee_status
+    # Default to the session the client is operating in (X-Academic-Year header)
+    # when no explicit academic_year is given, so every /students consumer is
+    # session-scoped. `all_sessions=true` bypasses this for cross-year flows like
+    # the Upgradation search (which promotes prior-year students forward).
+    ay = academic_year or (None if all_sessions else request_session(request))
+    if ay:
+        query["academic_year"] = ay
     if search:
-        s = search.strip()
-        # Search across full name (first + space + last), admission number, father, mother, and parent_name
-        query["$or"] = [
-            {"first_name": {"$regex": s, "$options": "i"}},
-            {"last_name": {"$regex": s, "$options": "i"}},
-            {"admission_number": {"$regex": s, "$options": "i"}},
-            {"father_name": {"$regex": s, "$options": "i"}},
-            {"mother_name": {"$regex": s, "$options": "i"}},
-            {"parent_name": {"$regex": s, "$options": "i"}},
-            # Match "first last" (full name) by using $expr + concat
-            {"$expr": {"$regexMatch": {
-                "input": {"$concat": [{"$ifNull": ["$first_name", ""]}, " ", {"$ifNull": ["$last_name", ""]}]},
-                "regex": s,
-                "options": "i"
-            }}},
+        term = search.strip()
+        # Escape regex special characters so a search like "S.K." doesn't
+        # accidentally turn dots into "any character".
+        s = re.escape(term)
+        # Anchor to the start of the field so MongoDB can use an index
+        # (^prefix regexes are index-friendly; an unanchored .*term.* on a
+        # 30k+ collection forces a full scan and is what made this slow).
+        prefix = f"^{s}"
+        parts = [re.escape(p) for p in term.split() if p]
+
+        ors = [
+            {"first_name": {"$regex": prefix, "$options": "i"}},
+            {"last_name": {"$regex": prefix, "$options": "i"}},
+            {"admission_number": {"$regex": prefix, "$options": "i"}},
+            {"email": {"$regex": prefix, "$options": "i"}},
         ]
+        # Full-name search ("Pooja Sharma") → first token on first_name AND
+        # second token on last_name. Index-friendly (no $expr/$concat scan).
+        if len(parts) >= 2:
+            ors.append({"$and": [
+                {"first_name": {"$regex": f"^{parts[0]}", "$options": "i"}},
+                {"last_name":  {"$regex": f"^{parts[1]}", "$options": "i"}},
+            ]})
+        # Parent fields only for longer terms, so typing a common first name
+        # doesn't surface every student whose parent shares that name. Skipped
+        # entirely when name_only is set (e.g. the upgradation student search,
+        # which should match the student's own name, not their parent's).
+        if not name_only and len(term) >= 4:
+            ors.extend([
+                {"father_name":  {"$regex": prefix, "$options": "i"}},
+                {"mother_name":  {"$regex": prefix, "$options": "i"}},
+                {"parent_name":  {"$regex": prefix, "$options": "i"}},
+                {"father_phone": {"$regex": prefix, "$options": "i"}},
+                {"mother_phone": {"$regex": prefix, "$options": "i"}},
+                {"parent_phone": {"$regex": prefix, "$options": "i"}},
+                {"parent_email": {"$regex": prefix, "$options": "i"}},
+            ])
+        query["$or"] = ors
 
     LIST_FIELDS = {
         "_id": 0, "student_id": 1, "admission_number": 1,
@@ -294,6 +332,10 @@ async def update_student(student_id: str, request: Request):
     old_student = await db.students.find_one({"student_id": student_id, "is_active": True}, {"_id": 0})
     if not old_student:
         raise HTTPException(status_code=404, detail="Student not found")
+
+    # Archive protection — can't edit a student belonging to an archived session.
+    from routes.fees import ensure_session_writable
+    await ensure_session_writable(old_student.get("academic_year"))
 
     # Never allow these to be changed via simple update
     IMMUTABLE = ["student_id", "admission_number", "created_at", "onboarding_id"]
@@ -510,18 +552,20 @@ async def get_parent_password_hint(student_id: str, request: Request):
 @router.post("/students/bulk-upload")
 async def bulk_upload_students(request: Request):
     user = await require_roles(UserRole.ADMIN)(request)
+    await ensure_active_session(request)  # previous sessions are read-only
     body = await request.json()
     students_data = body.get("students", [])
     if not students_data:
         raise HTTPException(status_code=400, detail="No student data provided")
 
-    from routes.fees import current_academic_year
+    from routes.fees import active_session
+    _ay = await active_session()
     results = {"success": 0, "failed": 0, "errors": [], "admission_numbers": []}
 
     for idx, s in enumerate(students_data):
         try:
             admission_number = await generate_admission_number()
-            student_obj = StudentBase(**s, admission_number=admission_number, academic_year=current_academic_year())
+            student_obj = StudentBase(**s, admission_number=admission_number, academic_year=_ay)
             student_dict = student_obj.model_dump()
             student_dict["created_at"] = student_dict["created_at"].isoformat()
             await db.students.insert_one(student_dict)
@@ -539,6 +583,7 @@ async def bulk_upload_students(request: Request):
 @router.post("/students/upload-csv")
 async def upload_students_csv(request: Request, file: UploadFile = File(...)):
     user = await require_roles(UserRole.ADMIN)(request)
+    await ensure_active_session(request)  # previous sessions are read-only
 
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are accepted")

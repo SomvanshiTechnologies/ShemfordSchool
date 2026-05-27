@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../lib/api';
 import { getCached, setCached } from '../lib/pageCache';
+import { copyText } from '../lib/clipboard';
+import { useSession } from '../contexts/SessionContext';
 
 const TopProgressBar = ({ active }) =>
   active ? (
@@ -52,9 +54,9 @@ const ONBOARDING_STEPS = [
 ];
 
 const REQUIRED_DOCUMENTS = [
-  { type: 'birth_certificate', name: 'Birth Certificate', mandatory: true },
-  { type: 'aadhaar_card', name: 'Aadhaar Card', mandatory: true },
-  { type: 'passport_photo', name: 'Passport Photo', mandatory: true },
+  { type: 'birth_certificate', name: 'Birth Certificate', mandatory: false },
+  { type: 'aadhaar_card', name: 'Aadhaar Card', mandatory: false },
+  { type: 'passport_photo', name: 'Passport Photo', mandatory: false },
   { type: 'previous_marksheet', name: 'Previous Class Marksheet', mandatory: false },
   { type: 'transfer_certificate', name: 'Transfer Certificate (TC)', mandatory: false },
   { type: 'caste_certificate', name: 'Caste Certificate', mandatory: false },
@@ -63,9 +65,17 @@ const REQUIRED_DOCUMENTS = [
 
 // Classes that require stream selection — must match backend CLASSES_WITH_STREAMS exactly
 const STREAMS_FOR_CLASS = ['11th', '12th'];
+// For 11th/12th the section IS the stream — we override the section options
+// to Science / Humanities instead of using the colour-named sections from
+// the class_structures collection.
+const STREAM_SECTIONS = [
+  { section_name: 'Science', capacity: 999, student_count: 0 },
+  { section_name: 'Humanities', capacity: 999, student_count: 0 },
+];
 
 const StudentsPage = () => {
   const { user, isAdmin, isAccountant } = useAuth();
+  const { viewSession } = useSession();
   const [searchParams] = useSearchParams();
   const [students, setStudents] = useState([]);
   const [totalStudents, setTotalStudents] = useState(0);
@@ -138,7 +148,7 @@ const StudentsPage = () => {
   const [onbPaymentLoading, setOnbPaymentLoading] = useState(false);
 
   const fetchStudents = useCallback(async (pg = 1, search = searchTerm, append = false) => {
-    const cacheKey = `students:${filterClass}:${filterSection}:${filterStatus}:${pg}:${search}`;
+    const cacheKey = `students:${viewSession}:${filterClass}:${filterSection}:${filterStatus}:${pg}:${search}`;
     const cached = getCached(cacheKey);
 
     if (!append) {
@@ -159,6 +169,7 @@ const StudentsPage = () => {
       if (filterSection) params.section = filterSection;
       if (filterStatus) params.status = filterStatus;
       if (search.trim()) params.search = search.trim();
+      if (viewSession) params.academic_year = viewSession;
       const res = await api.get('/students', { params });
       const arr = Array.isArray(res.data) ? res.data : (Array.isArray(res.data?.students) ? res.data.students : []);
       const total = parseInt(res.headers?.['x-total-count'] ?? res.data?.total ?? arr.length);
@@ -170,7 +181,7 @@ const StudentsPage = () => {
       setTotalPages(result.pages);
     } catch { if (!cached && !append) toast.error('Failed to fetch students'); }
     finally { setLoading(false); setRefreshing(false); setLoadingMore(false); }
-  }, [filterClass, filterSection, filterStatus]);
+  }, [filterClass, filterSection, filterStatus, viewSession]);
 
   // Infinite scroll: load next page when sentinel enters viewport
   useEffect(() => {
@@ -192,7 +203,38 @@ const StudentsPage = () => {
     return () => observer.disconnect();
   }, [loadingMore, loading, totalPages, searchTerm, fetchStudents]);
 
-  useEffect(() => { setPage(1); setStudents([]); fetchStudents(1, searchTerm); fetchClasses(); }, [filterClass, filterSection, filterStatus]);
+  useEffect(() => { setPage(1); setStudents([]); fetchStudents(1, searchTerm); fetchClasses(); }, [filterClass, filterSection, filterStatus, viewSession]);
+
+  // Header quick-search redirects here with ?focus=<student_id> — fetch
+  // that student directly and open the view dialog so admin lands on the
+  // record they were looking for, not just the (filtered) list page.
+  useEffect(() => {
+    const focusId = searchParams.get('focus');
+    if (!focusId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const calls = [api.get(`/students/${focusId}`)];
+        if (isAdmin) {
+          calls.push(api.get(`/students/${focusId}/password`));
+          calls.push(api.get(`/students/${focusId}/parent-password`));
+        }
+        const [r0, r1, r2] = await Promise.allSettled(calls);
+        if (cancelled) return;
+        if (r0.status === 'fulfilled') {
+          setSelectedStudent(r0.value.data);
+          setPwResult(null); setPwInput(''); setPwVisible(false);
+          setCurrentPw(null); setCurrentPwVisible(false);
+          setParentPw(null); setParentPwVisible(false);
+          if (r1?.status === 'fulfilled') setCurrentPw(r1.value.data.password);
+          if (r2?.status === 'fulfilled') setParentPw(r2.value.data.password);
+          setShowViewDialog(true);
+        }
+      } catch { /* student deleted / not accessible — silent */ }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const handleSearchChange = (e) => {
     const val = e.target.value;
@@ -238,6 +280,9 @@ const StudentsPage = () => {
     if (!onbData.last_name?.trim()) errors.last_name = 'Last Name is required';
     if (!onbData.gender) errors.gender = 'Gender is required';
     if (!onbData.date_of_birth) errors.date_of_birth = 'Date of Birth is required';
+    // Email is OPTIONAL — students log in with their admission number + the
+    // password generated against it, so an email isn't required.
+    if (!onbData.phone?.trim()) errors.phone = 'Phone is required';
     // Parent / guardian details are optional — admins can fill them in later
     setOnbErrors(errors);
     if (Object.keys(errors).length > 0) {
@@ -271,17 +316,16 @@ const StudentsPage = () => {
       toast.error('Please select class and section');
       return;
     }
+    // For 11th/12th the section IS the stream — derive lowercase stream
+    // from the selected section (Science → science, Humanities → humanities).
     const needsStream = STREAMS_FOR_CLASS.includes(onbClassData.class_name);
-    if (needsStream && !onbClassData.stream) {
-      toast.error('Please select a stream (Science or Humanities) for Class 11th / 12th');
-      return;
-    }
+    const derivedStream = needsStream ? (onbClassData.section || '').toLowerCase() : undefined;
     setOnbLoading(true);
     try {
       const res = await api.put(`/onboarding/${onbId}/class`, {
         class_name: onbClassData.class_name,
         section: onbClassData.section,
-        stream: onbClassData.stream || undefined,
+        stream: derivedStream,
       });
       setOnbFeeData(res.data);
       setOnbStep(3);
@@ -460,7 +504,6 @@ const StudentsPage = () => {
   };
 
   const handleSaveEdit = async () => {
-    if (!editData.email?.trim()) { toast.error('Email is required'); return; }
     if (!editData.phone?.trim()) { toast.error('Phone is required'); return; }
     if (!editData.address?.trim()) { toast.error('Address is required'); return; }
     try {
@@ -535,8 +578,9 @@ const StudentsPage = () => {
 
   const handleCsvPreview = async () => {
     if (!csvClass || !csvSection) { toast.error('Please select class and section'); return; }
+    // For 11th/12th, section IS the stream — derive lowercase value.
     const needsStream = STREAMS_FOR_CLASS.includes(csvClass);
-    if (needsStream && !csvStream) { toast.error('Please select a stream for Class 11th/12th'); return; }
+    const effectiveStream = needsStream ? (csvSection || '').toLowerCase() : csvStream;
     if (!csvFile) { toast.error('Please select a CSV file'); return; }
     setCsvPreviewing(true);
     try {
@@ -544,7 +588,7 @@ const StudentsPage = () => {
       fd.append('file', csvFile);
       fd.append('class_name', csvClass);
       fd.append('section', csvSection);
-      if (csvStream) fd.append('stream', csvStream);
+      if (effectiveStream) fd.append('stream', effectiveStream);
       const res = await api.post('/students/csv-preview', fd);
       setCsvPreview(res.data);
       setCsvStep(2);
@@ -590,6 +634,7 @@ const StudentsPage = () => {
   };
 
   const getSections = (className) => {
+    if (STREAMS_FOR_CLASS.includes(className)) return STREAM_SECTIONS;
     const cls = classes.find(c => c.name === className);
     return cls?.sections || [];
   };
@@ -648,18 +693,8 @@ const StudentsPage = () => {
                           </SelectContent>
                         </Select>
                       </div>
-                      {STREAMS_FOR_CLASS.includes(csvClass) && (
-                        <div className="space-y-1.5">
-                          <Label>Stream <span className="text-red-500">*</span></Label>
-                          <Select value={csvStream} onValueChange={setCsvStream}>
-                            <SelectTrigger><SelectValue placeholder="Select stream" /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="science">Science</SelectItem>
-                              <SelectItem value="humanities">Humanities</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      )}
+                      {/* For 11th/12th the section selector above already
+                          shows Science/Humanities — no separate stream field. */}
                     </div>
 
                     <div className="space-y-1.5">
@@ -917,7 +952,7 @@ const StudentsPage = () => {
               <TableBody>
                 {filteredStudents.map((student) => (
                   <TableRow key={student.student_id} data-testid={`student-row-${student.student_id}`} className={!student.is_active ? 'opacity-60 bg-slate-50' : ''}>
-                    <TableCell className="font-mono text-sm">{student.admission_number}</TableCell>
+                    <TableCell className="font-mono text-sm select-none" onCopy={e => e.preventDefault()} onContextMenu={e => e.preventDefault()}>{student.admission_number}</TableCell>
                     <TableCell>
                       <p className="font-medium text-foreground">{student.first_name} {student.last_name}</p>
                       <p className="text-sm text-muted-foreground">{student.email || ''}</p>
@@ -1092,8 +1127,16 @@ const StudentsPage = () => {
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1"><Label>Email</Label><Input type="email" value={onbData.email} onChange={(e) => setOnbData({...onbData, email: e.target.value})} data-testid="onb-email" /></div>
-                <div className="space-y-1"><Label>Phone</Label><Input value={onbData.phone} onChange={(e) => setOnbData({...onbData, phone: e.target.value})} data-testid="onb-phone" /></div>
+                <div className="space-y-1">
+                  <Label>Email</Label>
+                  <Input type="email" value={onbData.email} onChange={(e) => { setOnbData({...onbData, email: e.target.value}); setOnbErrors(p => ({...p, email: ''})); }} className={onbErrors.email ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-email" />
+                  {onbErrors.email && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.email}</p>}
+                </div>
+                <div className="space-y-1">
+                  <Label>Phone <span className="text-red-500">*</span></Label>
+                  <Input value={onbData.phone} onChange={(e) => { setOnbData({...onbData, phone: e.target.value}); setOnbErrors(p => ({...p, phone: ''})); }} className={onbErrors.phone ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-phone" />
+                  {onbErrors.phone && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.phone}</p>}
+                </div>
               </div>
               <div className="space-y-1"><Label>Address</Label><Input value={onbData.address} onChange={(e) => setOnbData({...onbData, address: e.target.value})} data-testid="onb-address" /></div>
               <div className="border-t pt-4">
@@ -1163,26 +1206,15 @@ const StudentsPage = () => {
                     <SelectContent>
                       {getSections(onbClassData.class_name).map(s => (
                         <SelectItem key={s.section_name} value={s.section_name}>
-                          Section {s.section_name} ({s.student_count || 0}/{s.capacity})
+                          {STREAMS_FOR_CLASS.includes(onbClassData.class_name)
+                            ? s.section_name
+                            : `Section ${s.section_name} (${s.student_count || 0}/${s.capacity})`}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
               </div>
-              {/* Stream — only for Class 11th and 12th */}
-              {STREAMS_FOR_CLASS.includes(onbClassData.class_name) && (
-                <div className="space-y-2">
-                  <Label>Stream *</Label>
-                  <Select value={onbClassData.stream} onValueChange={(v) => setOnbClassData({...onbClassData, stream: v})}>
-                    <SelectTrigger data-testid="onb-stream"><SelectValue placeholder="Select stream" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="science">Science</SelectItem>
-                      <SelectItem value="humanities">Humanities</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
               {/* Sibling */}
               <div className="flex items-center gap-3 p-3 bg-blue-50 rounded-xl border border-blue-200">
                 <input
@@ -1277,7 +1309,6 @@ const StudentsPage = () => {
                         )}
                         <div>
                           <span className="text-sm font-medium">{doc.name}</span>
-                          {doc.mandatory && <span className="ml-1 text-[10px] text-red-500 font-bold uppercase">Required</span>}
                           {uploaded && (
                             <div className="flex items-center gap-2 mt-0.5">
                               <span className="text-xs text-green-600">✓ {uploaded.file_name}</span>
@@ -1548,18 +1579,26 @@ const StudentsPage = () => {
           <DialogHeader><DialogTitle>Student Details</DialogTitle></DialogHeader>
           {selectedStudent && (
             <div className="grid gap-4">
-              <div className="flex items-center gap-4 p-4 bg-muted rounded-lg">
+              <div className="flex items-center gap-4 p-4 bg-muted rounded-lg select-none" onCopy={e => e.preventDefault()} onContextMenu={e => e.preventDefault()}>
                 <div className="h-16 w-16 rounded-full bg-slate-100 flex items-center justify-center"><GraduationCap className="h-8 w-8 text-slate-500" /></div>
                 <div>
                   <h3 className="text-xl font-semibold text-foreground">{selectedStudent.first_name} {selectedStudent.last_name}</h3>
                   <p className="text-muted-foreground flex items-center gap-2">
-                    <span>Admission No: <span className="font-mono font-semibold text-foreground">{selectedStudent.admission_number}</span></span>
+                    <span>Admission No: <span
+                      className="font-mono font-semibold text-foreground select-none"
+                      onCopy={e => e.preventDefault()}
+                      onContextMenu={e => e.preventDefault()}
+                    >{selectedStudent.admission_number}</span></span>
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-6 w-6"
                       title="Copy admission number"
-                      onClick={() => { navigator.clipboard.writeText(selectedStudent.admission_number || ''); toast.success('Admission number copied'); }}
+                      onClick={async () => {
+                        const ok = await copyText(selectedStudent.admission_number || '');
+                        if (ok) toast.success('Admission number copied');
+                        else toast.error('Copy failed');
+                      }}
                     >
                       <Copy className="h-3 w-3" />
                     </Button>
@@ -1586,7 +1625,7 @@ const StudentsPage = () => {
                           <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => setCurrentPwVisible(v => !v)}>
                             {currentPwVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => { navigator.clipboard.writeText(currentPw); toast.success('Copied'); }}>
+                          <Button variant="ghost" size="icon" className="h-5 w-5" onClick={async () => { const ok = await copyText(currentPw); toast[ok ? 'success' : 'error'](ok ? 'Copied' : 'Copy failed'); }}>
                             <Copy className="h-3 w-3" />
                           </Button>
                         </>
@@ -1635,7 +1674,7 @@ const StudentsPage = () => {
                             <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => setParentPwVisible(v => !v)}>
                               {parentPwVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                             </Button>
-                            <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => { navigator.clipboard.writeText(parentPw); toast.success('Copied'); }}>
+                            <Button variant="ghost" size="icon" className="h-5 w-5" onClick={async () => { const ok = await copyText(parentPw); toast[ok ? 'success' : 'error'](ok ? 'Copied' : 'Copy failed'); }}>
                               <Copy className="h-3 w-3" />
                             </Button>
                           </>
@@ -1659,7 +1698,7 @@ const StudentsPage = () => {
                         <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setPwVisible(v => !v)}>
                           {pwVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { navigator.clipboard.writeText(pwResult.password); toast.success('Copied'); }}>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={async () => { const ok = await copyText(pwResult.password); toast[ok ? 'success' : 'error'](ok ? 'Copied' : 'Copy failed'); }}>
                           <Copy className="h-3 w-3" />
                         </Button>
                       </div>
@@ -1715,31 +1754,34 @@ const StudentsPage = () => {
                 </div>
                 <div className="space-y-2">
                   <Label>Section</Label>
-                  <Select value={editData.section} onValueChange={(v) => setEditData({...editData, section: v})}>
+                  <Select
+                    value={editData.section}
+                    onValueChange={(v) => {
+                      const isStreamClass = STREAMS_FOR_CLASS.includes(editData.class_name);
+                      setEditData({
+                        ...editData,
+                        section: v,
+                        ...(isStreamClass ? { stream: (v || '').toLowerCase() } : {}),
+                      });
+                    }}
+                  >
                     <SelectTrigger data-testid="edit-section"><SelectValue /></SelectTrigger>
-                    <SelectContent>{getSections(editData.class_name).map(s => <SelectItem key={s.section_name} value={s.section_name}>Section {s.section_name}</SelectItem>)}</SelectContent>
+                    <SelectContent>
+                      {getSections(editData.class_name).map(s => (
+                        <SelectItem key={s.section_name} value={s.section_name}>
+                          {STREAMS_FOR_CLASS.includes(editData.class_name) ? s.section_name : `Section ${s.section_name}`}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
                   </Select>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2"><Label>Email <span className="text-red-500">*</span></Label><Input type="email" required value={editData.email} onChange={(e) => setEditData({...editData, email: e.target.value})} data-testid="edit-email" /></div>
+                <div className="space-y-2"><Label>Email</Label><Input type="email" value={editData.email} onChange={(e) => setEditData({...editData, email: e.target.value})} data-testid="edit-email" /></div>
                 <div className="space-y-2"><Label>Phone <span className="text-red-500">*</span></Label><Input required value={editData.phone} onChange={(e) => setEditData({...editData, phone: e.target.value})} data-testid="edit-phone" /></div>
               </div>
               <div className="space-y-2"><Label>Address <span className="text-red-500">*</span></Label><Input required value={editData.address} onChange={(e) => setEditData({...editData, address: e.target.value})} data-testid="edit-address" /></div>
               <div className="space-y-2"><Label>Roll Number</Label><Input value={editData.roll_number} onChange={(e) => setEditData({...editData, roll_number: e.target.value})} data-testid="edit-roll" /></div>
-              {/* (#9) Stream selector — only for Class 11th / 12th */}
-              {STREAMS_FOR_CLASS.includes(editData.class_name) && (
-                <div className="space-y-2">
-                  <Label>Stream</Label>
-                  <Select value={editData.stream} onValueChange={(v) => setEditData({...editData, stream: v})}>
-                    <SelectTrigger data-testid="edit-stream"><SelectValue placeholder="Select stream" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="science">Science</SelectItem>
-                      <SelectItem value="humanities">Humanities</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
               {/* (#30) Blood group and emergency contact */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2"><Label>Blood Group</Label><Input value={editData.blood_group} onChange={(e) => setEditData({...editData, blood_group: e.target.value})} placeholder="e.g. A+" data-testid="edit-blood-group" /></div>
@@ -1772,10 +1814,7 @@ const StudentsPage = () => {
                   {REQUIRED_DOCUMENTS.map(doc => (
                     <div key={doc.type} className="flex items-center justify-between p-2.5 rounded-xl border border-slate-200 bg-slate-50">
                       <div className="flex items-center gap-2 text-sm">
-                        {doc.mandatory
-                          ? <span className="text-[10px] font-bold text-red-500 uppercase">Req</span>
-                          : <span className="text-[10px] font-bold text-slate-400 uppercase">Opt</span>
-                        }
+                        <span className="text-[10px] font-bold text-slate-400 uppercase">Opt</span>
                         {doc.name}
                       </div>
                       <Button

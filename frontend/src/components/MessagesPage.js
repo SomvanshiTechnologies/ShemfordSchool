@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import api from '../lib/api';
 import { getCached, setCached } from '../lib/pageCache';
 import { useAuth } from '../contexts/AuthContext';
+import { useSession } from '../contexts/SessionContext';
 import { VoiceNotePlayer, VoiceNoteRecorder, useVoiceRecorder } from './VoiceNote';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -33,6 +34,7 @@ import { formatDateTime, getInitials } from '../lib/utils';
 
 const MessagesPage = () => {
   const { user } = useAuth();
+  const { viewSession } = useSession();
   const [messages, setMessages] = useState([]);
   const [sentMessages, setSentMessages] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -56,7 +58,8 @@ const MessagesPage = () => {
   useEffect(() => {
     fetchMessages();
     fetchClasses();
-  }, [activeTab]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, viewSession]);
 
   const fetchClasses = async () => {
     try {
@@ -66,7 +69,7 @@ const MessagesPage = () => {
   };
 
   const fetchMessages = async () => {
-    const cacheKey = `messages:${activeTab}`;
+    const cacheKey = `messages:${viewSession}:${activeTab}`;
     const cached = getCached(cacheKey);
     if (cached) {
       if (activeTab === 'inbox') setMessages(cached); else setSentMessages(cached);

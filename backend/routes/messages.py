@@ -5,7 +5,7 @@ import uuid
 
 from database import db
 from models import UserRole, Message, VoiceNote
-from auth_utils import get_current_user
+from auth_utils import get_current_user, session_year_filter, active_session_name, ensure_active_session
 
 VOICE_NOTES_DIR = Path(__file__).parent.parent / "uploads" / "voice_notes"
 VOICE_NOTES_DIR.mkdir(parents=True, exist_ok=True)
@@ -22,6 +22,7 @@ router = APIRouter()
 @router.post("/messages")
 async def send_message(request: Request):
     user = await get_current_user(request)
+    await ensure_active_session(request)  # previous sessions are read-only
     body = await request.json()
 
     recipient_type = body.get("recipient_type", "user")
@@ -66,7 +67,9 @@ async def send_message(request: Request):
             if name:
                 body["recipient_label"] = name
 
-    message = Message(**body, sender_id=user["user_id"], sender_name=user["name"])
+    body.pop("academic_year", None)
+    message = Message(**body, sender_id=user["user_id"], sender_name=user["name"],
+                      academic_year=await active_session_name())  # owning session
     msg_dict = message.model_dump()
     msg_dict["created_at"] = msg_dict["created_at"].isoformat()
 
@@ -219,6 +222,7 @@ async def get_messages(request: Request, sent: bool = False):
 
         query = {"$or": or_clauses}
 
+    query.update(session_year_filter(request))  # scope by owning session, not created_at
     messages = await db.messages.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
 
     # Enrich messages sent to specific users with the recipient's display

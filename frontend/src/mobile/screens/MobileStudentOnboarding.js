@@ -15,9 +15,9 @@ const STEPS = [
 ];
 
 const REQUIRED_DOCUMENTS = [
-  { type: 'birth_certificate', name: 'Birth Certificate', mandatory: true },
-  { type: 'aadhaar_card', name: 'Aadhaar Card', mandatory: true },
-  { type: 'passport_photo', name: 'Passport Photo', mandatory: true },
+  { type: 'birth_certificate', name: 'Birth Certificate', mandatory: false },
+  { type: 'aadhaar_card', name: 'Aadhaar Card', mandatory: false },
+  { type: 'passport_photo', name: 'Passport Photo', mandatory: false },
   { type: 'previous_marksheet', name: 'Previous Marksheet', mandatory: false },
   { type: 'transfer_certificate', name: 'Transfer Certificate (TC)', mandatory: false },
   { type: 'caste_certificate', name: 'Caste Certificate', mandatory: false },
@@ -25,6 +25,10 @@ const REQUIRED_DOCUMENTS = [
 ];
 
 const STREAMS_FOR_CLASS = ['11th', '12th'];
+const STREAM_SECTIONS = [
+  { section_name: 'Science', capacity: 999, student_count: 0 },
+  { section_name: 'Humanities', capacity: 999, student_count: 0 },
+];
 
 const sheet = {
   overlay: { position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:300, display:'flex', alignItems:'flex-end', justifyContent:'center' },
@@ -60,7 +64,10 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
 
   const docInputRef = useRef({});
 
-  const getSections = (cn) => (classes.find(c => c.name === cn)?.sections || []);
+  const getSections = (cn) => {
+    if (STREAMS_FOR_CLASS.includes(cn)) return STREAM_SECTIONS;
+    return classes.find(c => c.name === cn)?.sections || [];
+  };
 
   useEffect(() => {
     const h = (e) => { if (e.key === 'Escape') onClose(); };
@@ -74,6 +81,8 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
     if (!data.last_name?.trim()) err.last_name = 'Last Name is required';
     if (!data.gender) err.gender = 'Gender is required';
     if (!data.date_of_birth) err.date_of_birth = 'Date of Birth is required';
+    if (!data.email?.trim()) err.email = 'Email is required';
+    if (!data.phone?.trim()) err.phone = 'Phone is required';
     setErrors(err);
     if (Object.keys(err).length > 0) { toast.error('Please fill required fields'); return; }
     setLoading(true);
@@ -93,14 +102,15 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
 
   const doStep2 = async () => {
     if (!classData.class_name || !classData.section) { toast.error('Please select class and section'); return; }
+    // For 11th/12th the section IS the stream — derive lowercase value.
     const needsStream = STREAMS_FOR_CLASS.includes(classData.class_name);
-    if (needsStream && !classData.stream) { toast.error('Please select a stream for Class 11th/12th'); return; }
+    const effectiveStream = needsStream ? (classData.section || '').toLowerCase() : classData.stream;
     setLoading(true);
     try {
       const res = await api.put(`/onboarding/${onbId}/class`, {
         class_name: classData.class_name,
         section: classData.section,
-        stream: classData.stream || undefined,
+        stream: effectiveStream || undefined,
       });
       setFeeData(res.data);
       setStep(3);
@@ -217,8 +227,8 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
                 {errors.gender && <div style={sheet.err}><AlertCircle size={12} />{errors.gender}</div>}
               </div>
               <Input label="Date of Birth" required type="date" value={data.date_of_birth} onChange={(e) => { setData({...data, date_of_birth: e.target.value}); setErrors(p => ({...p, date_of_birth:''})); }} error={errors.date_of_birth} />
-              <Input label="Email" type="email" value={data.email} onChange={(e) => setData({...data, email: e.target.value})} />
-              <Input label="Phone" value={data.phone} onChange={(e) => setData({...data, phone: e.target.value})} />
+              <Input label="Email" required type="email" value={data.email} onChange={(e) => { setData({...data, email: e.target.value}); setErrors(p => ({...p, email:''})); }} error={errors.email} />
+              <Input label="Phone" required value={data.phone} onChange={(e) => { setData({...data, phone: e.target.value}); setErrors(p => ({...p, phone:''})); }} error={errors.phone} />
               <Input label="Address" value={data.address} onChange={(e) => setData({...data, address: e.target.value})} />
 
               <div style={{borderTop:'1px solid #F0F0F0',paddingTop:12,marginTop:8}}>
@@ -252,20 +262,14 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
                 <select className="m-input" value={classData.section} onChange={(e) => setClassData(p => ({...p, section: e.target.value}))} disabled={!classData.class_name}>
                   <option value="">Select section</option>
                   {getSections(classData.class_name).map(s => (
-                    <option key={s.section_name} value={s.section_name}>Section {s.section_name} ({s.student_count || 0}/{s.capacity})</option>
+                    <option key={s.section_name} value={s.section_name}>
+                      {STREAMS_FOR_CLASS.includes(classData.class_name)
+                        ? s.section_name
+                        : `Section ${s.section_name} (${s.student_count || 0}/${s.capacity})`}
+                    </option>
                   ))}
                 </select>
               </div>
-              {STREAMS_FOR_CLASS.includes(classData.class_name) && (
-                <div style={sheet.field}>
-                  <label style={sheet.label}>Stream <span style={{color:'#dc2626'}}>*</span></label>
-                  <select className="m-input" value={classData.stream} onChange={(e) => setClassData(p => ({...p, stream: e.target.value}))}>
-                    <option value="">Select stream</option>
-                    <option value="science">Science</option>
-                    <option value="humanities">Humanities</option>
-                  </select>
-                </div>
-              )}
               <label style={{display:'flex',alignItems:'flex-start',gap:8,padding:12,background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:12,cursor:'pointer'}}>
                 <input type="checkbox" checked={data.is_sibling} onChange={(e) => setData({...data, is_sibling: e.target.checked})} style={{marginTop:2}} />
                 <div>

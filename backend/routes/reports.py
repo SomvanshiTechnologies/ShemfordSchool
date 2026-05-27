@@ -27,28 +27,61 @@ logger = logging.getLogger(__name__)
 # ==================== DASHBOARD ====================
 
 @router.get("/reports/dashboard")
-async def get_dashboard_stats(request: Request):
+async def get_dashboard_stats(request: Request, academic_year: Optional[str] = None):
     user = await get_current_user(request)
     stats = {}
 
     if user["role"] in [UserRole.ADMIN, UserRole.ACCOUNTANT]:
-        stats["total_students"] = await db.students.count_documents({"is_active": True})
+        # Session scoping: when an academic_year is selected, student & fee
+        # figures reflect that session only. Employees/issues are global.
+        stu_q = {"is_active": True}
+        if academic_year:
+            stu_q["academic_year"] = academic_year
+        stats["total_students"] = await db.students.count_documents(stu_q)
         stats["total_employees"] = await db.employees.count_documents({"is_active": True})
-        stats["fee_overdue_count"] = await db.students.count_documents({"fee_status": "overdue"})
+        stats["fee_overdue_count"] = await db.students.count_documents(
+            {**stu_q, "fee_status": "overdue"}
+        )
         stats["open_issues"] = await db.issues.count_documents({"status": "open"})
 
+        # "Today's present" must reflect the selected session, not the live
+        # clock — otherwise every session shows the same number. Use real today
+        # for the active session (whose window extends to today); for a past
+        # session there is no "today", so anchor to its last day.
         today = datetime.now().strftime("%Y-%m-%d")
+        ref_date = today
+        if academic_year:
+            active = await db.sessions.find_one({"is_active": True}, {"_id": 0, "session_name": 1})
+            active_ay = active.get("session_name") if active else None
+            try:
+                sy = int(academic_year.split("-")[0])
+                s_start, s_end = f"{sy}-04-01", f"{sy + 1}-03-31"
+                if academic_year == active_ay:
+                    ref_date = today if today >= s_start else s_start
+                else:
+                    ref_date = today if s_start <= today <= s_end else s_end
+            except (ValueError, IndexError):
+                ref_date = today
         present_count = await db.attendance.count_documents({
-            "entity_type": "student", "date": today, "status": "present"
+            "entity_type": "student", "date": ref_date, "status": "present"
         })
         stats["today_present"] = present_count
 
-        current_month = datetime.now().strftime("%Y-%m")
-        month_agg = await db.fee_payments.aggregate([
-            {"$match": {"payment_date": {"$regex": f"^{current_month}"}}},
-            {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
-        ]).to_list(1)
-        stats["month_collection"] = month_agg[0]["total"] if month_agg else 0
+        # For a selected session, show that session's total collection; for the
+        # live/active session keep the current-month figure.
+        if academic_year:
+            coll_agg = await db.fee_payments.aggregate([
+                {"$match": {"academic_year": academic_year}},
+                {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
+            ]).to_list(1)
+            stats["month_collection"] = coll_agg[0]["total"] if coll_agg else 0
+        else:
+            current_month = datetime.now().strftime("%Y-%m")
+            month_agg = await db.fee_payments.aggregate([
+                {"$match": {"payment_date": {"$regex": f"^{current_month}"}}},
+                {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
+            ]).to_list(1)
+            stats["month_collection"] = month_agg[0]["total"] if month_agg else 0
 
     if user["role"] == UserRole.TEACHER:
         today = datetime.now().strftime("%Y-%m-%d")
@@ -99,13 +132,21 @@ async def get_dashboard_stats(request: Request):
 # ==================== FINANCIAL REPORT ====================
 
 @router.get("/reports/financial")
-async def get_financial_report(request: Request, start_date: Optional[str] = None, end_date: Optional[str] = None):
+async def get_financial_report(request: Request, start_date: Optional[str] = None, end_date: Optional[str] = None, academic_year: Optional[str] = None):
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     import asyncio as _asyncio
 
+    # Scope every figure to the selected session so each academic year shows
+    # only its own collection/pending totals (not the same global numbers).
     match = {}
+    if academic_year:
+        match["academic_year"] = academic_year
     if start_date and end_date:
         match["payment_date"] = {"$gte": start_date, "$lte": end_date}
+
+    pending_match = {"status": {"$in": ["pending", "overdue"]}}
+    if academic_year:
+        pending_match["academic_year"] = academic_year
 
     # All aggregations run in parallel — no full collection scan needed
     total_agg, method_agg, month_agg, pending_agg, count = await _asyncio.gather(
@@ -123,7 +164,7 @@ async def get_financial_report(request: Request, start_date: Optional[str] = Non
             {"$sort": {"_id": 1}},
         ]).to_list(36),
         db.student_ledger.aggregate([
-            {"$match": {"status": {"$in": ["pending", "overdue"]}}},
+            {"$match": pending_match},
             {"$group": {"_id": None, "total": {"$sum": "$net_amount"}}}
         ]).to_list(1),
         db.fee_payments.count_documents(match),
@@ -139,12 +180,18 @@ async def get_financial_report(request: Request, start_date: Optional[str] = Non
 
 
 @router.get("/reports/financial/export")
-async def export_financial_report(request: Request, format: str = "pdf", start_date: Optional[str] = None, end_date: Optional[str] = None):
+async def export_financial_report(request: Request, format: str = "pdf", start_date: Optional[str] = None, end_date: Optional[str] = None, academic_year: Optional[str] = None):
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
 
     query = {}
+    if academic_year:
+        query["academic_year"] = academic_year
     if start_date and end_date:
         query["payment_date"] = {"$gte": start_date, "$lte": end_date}
+
+    pending_match = {"status": {"$in": ["pending", "overdue"]}}
+    if academic_year:
+        pending_match["academic_year"] = academic_year
 
     import asyncio as _asyncio
     payments, total_agg, pending_agg = await _asyncio.gather(
@@ -154,7 +201,7 @@ async def export_financial_report(request: Request, format: str = "pdf", start_d
             {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
         ]).to_list(1),
         db.student_ledger.aggregate([
-            {"$match": {"status": {"$in": ["pending", "overdue"]}}},
+            {"$match": pending_match},
             {"$group": {"_id": None, "total": {"$sum": "$net_amount"}}}
         ]).to_list(1),
     )

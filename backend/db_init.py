@@ -21,10 +21,13 @@ async def create_indexes(db):
         db.students.create_index([("admission_number", ASCENDING)], unique=True, sparse=True, background=True),
         db.students.create_index([("class_name", ASCENDING), ("section", ASCENDING), ("is_active", ASCENDING)], background=True),
         db.students.create_index([("class_name", ASCENDING), ("stream", ASCENDING), ("section", ASCENDING), ("is_active", ASCENDING)], background=True),
-        # Roll number uniqueness: scoped to class + section + stream (stream=None for non-senior classes)
+        # Roll number uniqueness: scoped to academic_year + class + section + stream.
+        # Roll numbers reset every academic year, so the same roll may recur in the
+        # same class across different sessions (stream=None for non-senior classes).
         db.students.create_index([
-            ("class_name", ASCENDING), ("section", ASCENDING), ("stream", ASCENDING), ("roll_number", ASCENDING)
-        ], unique=True, sparse=True, background=True),
+            ("academic_year", ASCENDING), ("class_name", ASCENDING), ("section", ASCENDING),
+            ("stream", ASCENDING), ("roll_number", ASCENDING)
+        ], unique=True, sparse=True, background=True, name="ay_class_section_stream_roll_uniq"),
         db.students.create_index([("parent_id", ASCENDING), ("is_active", ASCENDING)], background=True),
         db.students.create_index([("parent_email", ASCENDING), ("is_active", ASCENDING)], background=True),
         db.students.create_index([("user_id", ASCENDING)], sparse=True, background=True),
@@ -105,6 +108,19 @@ async def create_indexes(db):
         ], unique=True, background=True),
         db.mark_records.create_index([
             ("class_name", ASCENDING), ("exam_id", ASCENDING)
+        ], background=True),
+        # Session-scoped marks lookups (Phase 5)
+        db.mark_records.create_index([
+            ("student_id", ASCENDING), ("academic_year", ASCENDING)
+        ], background=True),
+
+        # ── sessions (academic-year lifecycle) ────────────────────────────────
+        db.sessions.create_index([("session_id", ASCENDING)], unique=True, background=True),
+        db.sessions.create_index([("session_name", ASCENDING)], unique=True, background=True),
+        db.sessions.create_index([("is_active", ASCENDING)], background=True),
+        # Session-scoped promotion history (Phase 5)
+        db.student_session_history.create_index([
+            ("student_id", ASCENDING), ("academic_year", ASCENDING)
         ], background=True),
 
         # ── onboarding / admissions ───────────────────────────────────────────

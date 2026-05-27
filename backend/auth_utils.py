@@ -219,6 +219,135 @@ def require_roles(*roles):
     return role_checker
 
 
+# ─── Session scoping ───────────────────────────────────────────────────────────
+
+import re as _re
+
+
+def request_session(request: Request):
+    """The academic session the client is operating in.
+
+    The frontend attaches the session the admin is currently viewing as the
+    `X-Academic-Year` header on every request (see lib/api.js). This is the
+    single source of truth for "which session are we in" — endpoints use it to
+    scope reads and to tag writes, so selecting a session makes the whole
+    platform operate in that academic year.
+
+    Returns the YYYY-YYYY string, or None when absent/invalid so callers can
+    fall back to the server-side active session.
+    """
+    val = (request.headers.get("X-Academic-Year") or "").strip()
+    return val if _re.match(r"^\d{4}-\d{4}$", val) else None
+
+
+def session_date_bounds(academic_year):
+    """(start, end) YYYY-MM-DD for an academic year (Indian: Apr 1 → Mar 31).
+    Used to scope time-stamped collections that have no academic_year field
+    (announcements, issues, messages, audit logs) by their created_at date."""
+    m = _re.match(r"^(\d{4})-(\d{4})$", academic_year or "")
+    if not m:
+        return None, None
+    return f"{m.group(1)}-04-01", f"{m.group(2)}-03-31"
+
+
+async def active_session_name():
+    """The school's current active session name — used to stamp new writes with
+    their owning session (`academic_year`). Reads the sessions collection first,
+    then the legacy school_settings doc."""
+    try:
+        s = await db.sessions.find_one({"is_active": True}, {"_id": 0, "session_name": 1})
+        if s and s.get("session_name"):
+            return s["session_name"]
+    except Exception:
+        pass
+    try:
+        d = await db.school_settings.find_one({"_id": "session"}, {"_id": 0, "active_session": 1})
+        if d and d.get("active_session"):
+            return d["active_session"]
+    except Exception:
+        pass
+    return None
+
+
+def session_year_filter(request):
+    """Filter scoping a session-tagged collection (issues, messages, audit) to
+    the session the client is operating in, by `academic_year` — TRUE session
+    ownership, not created_at. Returns {} when no session is selected."""
+    ay = request_session(request)
+    return {"academic_year": ay} if ay else {}
+
+
+async def session_window(request):
+    """(start, end) YYYY-MM-DD for the session the client is operating in, with
+    the active session extended to today. Used to scope entities by an active
+    period (e.g. employees by joining/left dates, users by created/deactivated).
+    Returns (None, None) when no session is selected."""
+    from datetime import datetime as _dt
+    ay = request_session(request)
+    if not ay:
+        return None, None
+    start, end = session_date_bounds(ay)
+    if not start:
+        return None, None
+    today = _dt.now().strftime("%Y-%m-%d")
+    try:
+        active = await db.sessions.find_one({"is_active": True}, {"_id": 0, "session_name": 1})
+        if active and active.get("session_name") == ay and today > end:
+            end = today
+    except Exception:
+        pass
+    return start, end
+
+
+async def ensure_active_session(request):
+    """Backend-level read-only enforcement. Any write (create/update/delete,
+    bulk import, etc.) is allowed ONLY when the client is operating in the
+    current active session. Previous/upcoming sessions are read-only.
+
+    Independent of the frontend — call this at the START of every write endpoint
+    that mutates session-owned data (attendance, marks, fees, announcements,
+    issues, messages, promotions, payroll runs, admissions, …). Returns the
+    active session name for convenience.
+    """
+    from fastapi import HTTPException
+    ay = request_session(request)
+    active = await active_session_name()
+    if ay and active and ay != active:
+        raise HTTPException(
+            status_code=403,
+            detail="This academic session is closed and available in read-only mode.",
+        )
+    return active
+
+
+async def session_created_at_filter(request):
+    """Mongo filter on `created_at` scoping a time-stamped collection (issues,
+    messages, audit) to the session the client is operating in.
+
+    Session time rules:
+    - The CURRENT ACTIVE session is the live workspace, so it extends to today()
+      (its academic year nominally ends Mar 31, but the present month must show).
+    - PREVIOUS sessions are frozen historical snapshots — hard-bounded at their
+      end_date, so no current-year/future activity leaks into history.
+
+    Returns {} when no session is selected."""
+    from datetime import datetime as _dt, timedelta as _td
+    ay = request_session(request)
+    if not ay:
+        return {}
+    start, end = session_date_bounds(ay)
+    if not start:
+        return {}
+    end_d = _dt.strptime(end, "%Y-%m-%d").date()
+    today = _dt.now().date()
+    # ONLY the actual current active session gets live-date extension.
+    active = await db.sessions.find_one({"is_active": True}, {"_id": 0, "session_name": 1})
+    if active and active.get("session_name") == ay and today > end_d:
+        end_d = today
+    end_excl = (end_d + _td(days=1)).isoformat()
+    return {"created_at": {"$gte": start, "$lt": end_excl}}
+
+
 # ─── Academic utilities ────────────────────────────────────────────────────────
 
 def calculate_grade(percentage: float) -> str:
@@ -275,6 +404,7 @@ async def create_audit_log(
             performed_by=user["user_id"],
             performed_by_name=user.get("name", ""),
             performed_by_role=user.get("role"),
+            academic_year=await active_session_name(),  # owning session
         )
         log_dict = log.model_dump()
         log_dict["created_at"] = log_dict["created_at"].isoformat()

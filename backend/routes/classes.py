@@ -1,11 +1,12 @@
 from fastapi import APIRouter, HTTPException, Request
 from typing import Optional
 from datetime import datetime
+import re
 
 from database import db
 from models import UserRole, ClassStructure, SHEMFORD_CLASSES, SHEMFORD_SECTIONS
-from auth_utils import get_current_user, require_roles, create_audit_log
-from routes.fees import current_academic_year
+from auth_utils import get_current_user, require_roles, create_audit_log, request_session
+from routes.fees import current_academic_year, active_session
 
 router = APIRouter()
 
@@ -99,7 +100,11 @@ async def get_classes(request: Request):
 
         classes = await db.class_structures.find({"is_active": True}, {"_id": 0}).sort("sort_order", 1).to_list(100)
 
-    # Attach live student counts per section (stream-aware for 11th/12th)
+    # Attach live student counts per section, scoped to the session the admin
+    # is operating in — otherwise counts would aggregate students across every
+    # session. (stream-aware for 11th/12th)
+    ay = request_session(request) or await active_session()
+    ay_q = {"academic_year": ay} if ay else {}
     for cls in classes:
         for section in cls.get("sections", []):
             if cls.get("has_streams"):
@@ -107,8 +112,11 @@ async def get_classes(request: Request):
                 stream_counts = {}
                 for stream in cls.get("streams", []):
                     count = await db.students.count_documents({
+                        **ay_q,
                         "class_name": cls["name"],
-                        "stream": stream,
+                        # Students store stream lowercase ("science"); structure
+                        # uses "Science" — match case-insensitively.
+                        "stream": {"$regex": f"^{re.escape(stream)}$", "$options": "i"},
                         "section": section["section_name"],
                         "is_active": True,
                     })
@@ -117,6 +125,7 @@ async def get_classes(request: Request):
                 section["student_count"] = sum(stream_counts.values())
             else:
                 count = await db.students.count_documents({
+                    **ay_q,
                     "class_name": cls["name"],
                     "section": section["section_name"],
                     "is_active": True,
@@ -219,10 +228,13 @@ async def get_class_students(class_id: str, request: Request,
         raise HTTPException(status_code=404, detail="Class not found")
 
     query = {"class_name": cls["name"], "is_active": True}
+    ay = request_session(request) or await active_session()
+    if ay:
+        query["academic_year"] = ay
     if section:
         query["section"] = section
     if stream:
-        query["stream"] = stream
+        query["stream"] = {"$regex": f"^{re.escape(stream)}$", "$options": "i"}
 
     students = await db.students.find(query, {"_id": 0}).sort("roll_number", 1).to_list(2000)
     return students
@@ -239,6 +251,10 @@ async def get_class_hierarchy(class_id: str, request: Request):
     if not cls:
         raise HTTPException(status_code=404, detail="Class not found")
 
+    # Scope the drill-down to the session the admin is operating in.
+    ay = request_session(request) or await active_session()
+    ay_q = {"academic_year": ay} if ay else {}
+
     result = {
         "class_id": cls["class_id"],
         "name": cls["name"],
@@ -253,8 +269,9 @@ async def get_class_hierarchy(class_id: str, request: Request):
             stream_entry = {"stream": stream, "sections": []}
             for sec in cls.get("sections", []):
                 students = await db.students.find({
+                    **ay_q,
                     "class_name": cls["name"],
-                    "stream": stream,
+                    "stream": {"$regex": f"^{re.escape(stream)}$", "$options": "i"},
                     "section": sec["section_name"],
                     "is_active": True,
                 }, {"_id": 0}).sort("roll_number", 1).to_list(200)
@@ -271,6 +288,7 @@ async def get_class_hierarchy(class_id: str, request: Request):
     else:
         for sec in cls.get("sections", []):
             students = await db.students.find({
+                **ay_q,
                 "class_name": cls["name"],
                 "section": sec["section_name"],
                 "is_active": True,

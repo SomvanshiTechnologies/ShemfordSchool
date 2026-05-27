@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useSession } from '../contexts/SessionContext';
 import api from '../lib/api';
 import { previewInTab } from '../lib/preview';
 import { getCached, setCached } from '../lib/pageCache';
@@ -37,6 +38,7 @@ const GRADE_MAP = (pct) => {
 
 const MarksPage = () => {
   const { user } = useAuth();
+  const { viewSession } = useSession();
   const isAdmin = user?.role === 'admin';
   const isTeacher = user?.role === 'teacher';
   // Only admins and teachers can enter / save marks. Students & parents view only.
@@ -78,8 +80,9 @@ const MarksPage = () => {
   const [marksheetYear, setMarksheetYear] = useState('all');
 
   useEffect(() => {
+    const examParams = viewSession ? { academic_year: viewSession } : {};
     // SWR: show cached data immediately, then refresh in background
-    const cached = getCached('marks:init');
+    const cached = getCached(`marks:init:${viewSession || 'all'}`);
     if (cached) {
       setClasses(cached.classes);
       setSubjects(cached.subjects);
@@ -88,14 +91,14 @@ const MarksPage = () => {
     Promise.all([
       api.get('/classes'),
       api.get('/subjects'),
-      api.get('/exams'),
+      api.get('/exams', { params: examParams }),
     ]).then(([c, s, e]) => {
       setClasses(c.data);
       setSubjects(s.data);
       setExams(e.data);
-      setCached('marks:init', { classes: c.data, subjects: s.data, exams: e.data });
+      setCached(`marks:init:${viewSession || 'all'}`, { classes: c.data, subjects: s.data, exams: e.data });
     }).catch(() => {});
-  }, []);
+  }, [viewSession]);
 
   // Debounced server-side search for the marksheet student picker
   useEffect(() => {
@@ -115,7 +118,7 @@ const MarksPage = () => {
 
   const refreshExams = async () => {
     try {
-      const res = await api.get('/exams');
+      const res = await api.get('/exams', { params: viewSession ? { academic_year: viewSession } : {} });
       setExams(res.data);
     } catch (e) {}
   };

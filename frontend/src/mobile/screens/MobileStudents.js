@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../../lib/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { getCached, setCached, invalidatePrefix } from '../../lib/pageCache';
+import { copyText } from '../../lib/clipboard';
 import { toast } from 'sonner';
 import {
   Users, Search, X, Copy, Eye, EyeOff, GraduationCap,
@@ -12,9 +13,9 @@ import MobileStudentOnboarding from './MobileStudentOnboarding';
 import MobileStudentCsvImport from './MobileStudentCsvImport';
 
 const REQUIRED_DOCUMENTS = [
-  { type: 'birth_certificate', name: 'Birth Certificate', mandatory: true },
-  { type: 'aadhaar_card', name: 'Aadhaar Card', mandatory: true },
-  { type: 'passport_photo', name: 'Passport Photo', mandatory: true },
+  { type: 'birth_certificate', name: 'Birth Certificate', mandatory: false },
+  { type: 'aadhaar_card', name: 'Aadhaar Card', mandatory: false },
+  { type: 'passport_photo', name: 'Passport Photo', mandatory: false },
   { type: 'previous_marksheet', name: 'Previous Marksheet', mandatory: false },
   { type: 'transfer_certificate', name: 'Transfer Certificate (TC)', mandatory: false },
   { type: 'caste_certificate', name: 'Caste Certificate', mandatory: false },
@@ -23,6 +24,7 @@ const REQUIRED_DOCUMENTS = [
 
 const PAGE_SIZE = 20;
 const STREAMS_FOR_CLASS = ['11th', '12th'];
+const STREAM_SECTIONS = [{ section_name: 'Science' }, { section_name: 'Humanities' }];
 
 const MobileStudents = () => {
   const { isAdmin, isAccountant } = useAuth();
@@ -159,10 +161,10 @@ const MobileStudents = () => {
     setParentPw(null); setParentPwVisible(false);
   };
 
-  const copy = (val, label) => {
+  const copy = async (val, label) => {
     if (!val) return;
-    navigator.clipboard.writeText(val);
-    toast.success(`${label} copied`);
+    const ok = await copyText(val);
+    toast[ok ? 'success' : 'error'](ok ? `${label} copied` : `Copy failed`);
   };
 
   const handleDeactivate = async () => {
@@ -422,7 +424,11 @@ const StudentDetailSheet = ({
               </p>
               <div style={{display:'flex',alignItems:'center',gap:6,marginTop:4,flexWrap:'wrap'}}>
                 <span style={{fontSize:11,color:'#888'}}>Adm:</span>
-                <span style={{fontSize:11,fontWeight:700,color:'#1A1A1A',fontFamily:'ui-monospace, SFMono-Regular, Menlo, monospace',wordBreak:'break-all'}}>
+                <span
+                  style={{fontSize:11,fontWeight:700,color:'#1A1A1A',fontFamily:'ui-monospace, SFMono-Regular, Menlo, monospace',wordBreak:'break-all',userSelect:'none',WebkitUserSelect:'none'}}
+                  onCopy={e => e.preventDefault()}
+                  onContextMenu={e => e.preventDefault()}
+                >
                   {student.admission_number}
                 </span>
                 <button onClick={() => onCopy(student.admission_number, 'Admission number')} style={{background:'none',border:'none',padding:2,cursor:'pointer',color:'#888',display:'inline-flex',alignItems:'center'}} aria-label="Copy admission number">
@@ -643,7 +649,10 @@ const StudentEditSheet = ({ student, classes, onClose, onSaved }) => {
 
   const update = (k, v) => setForm(p => ({ ...p, [k]: v }));
 
-  const getSections = (cn) => (classes.find(c => c.name === cn)?.sections || []);
+  const getSections = (cn) => {
+    if (STREAMS_FOR_CLASS.includes(cn)) return STREAM_SECTIONS;
+    return classes.find(c => c.name === cn)?.sections || [];
+  };
 
   const save = async () => {
     if (!form.email?.trim()) { toast.error('Email is required'); return; }
@@ -687,23 +696,20 @@ const StudentEditSheet = ({ student, classes, onClose, onSaved }) => {
             </div>
             <div>
               <label style={formLabel}>Section</label>
-              <select className="m-input" value={form.section} onChange={(e) => update('section', e.target.value)}>
+              <select
+                className="m-input"
+                value={form.section}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  const isStreamClass = STREAMS_FOR_CLASS.includes(form.class_name);
+                  setForm(p => ({ ...p, section: v, ...(isStreamClass ? { stream: v.toLowerCase() } : {}) }));
+                }}
+              >
                 <option value="">Select</option>
                 {getSections(form.class_name).map(s => <option key={s.section_name} value={s.section_name}>{s.section_name}</option>)}
               </select>
             </div>
           </div>
-
-          {STREAMS_FOR_CLASS.includes(form.class_name) && (
-            <div style={{marginTop:10}}>
-              <label style={formLabel}>Stream</label>
-              <select className="m-input" value={form.stream} onChange={(e) => update('stream', e.target.value)}>
-                <option value="">Select stream</option>
-                <option value="science">Science</option>
-                <option value="humanities">Humanities</option>
-              </select>
-            </div>
-          )}
 
           <div style={{marginTop:10,display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
             <FormField label="Email *" type="email" value={form.email} onChange={(v) => update('email', v)} />

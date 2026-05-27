@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useSession } from '../contexts/SessionContext';
+import SessionDatePicker from './SessionDatePicker';
 import api from '../lib/api';
 import { getCached, setCached } from '../lib/pageCache';
 import { Card, CardContent } from './ui/card';
@@ -15,7 +17,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from './ui/table';
 import { toast } from 'sonner';
-import { Calendar, CheckCircle, XCircle, Clock, Lock, Unlock, Save, Loader2, AlertTriangle, Users, Plus, Trash2, Download } from 'lucide-react';
+import { Calendar, CheckCircle, XCircle, Clock, Lock, Unlock, Save, Loader2, AlertTriangle, Users, Plus, Trash2, Download, FileText } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -97,6 +99,7 @@ const StudentAttendanceView = () => {
 // ====== TEACHER/ADMIN VIEW ======
 const MarkAttendanceView = () => {
   const { user } = useAuth();
+  const { sessionBounds, sessionToday, viewSession } = useSession();
   const isAdmin = user?.role === 'admin';
 
   const [activeTab, setActiveTab] = useState('mark');
@@ -146,6 +149,16 @@ const MarkAttendanceView = () => {
   // Holiday delete confirmation
   const [deleteHolidayTarget, setDeleteHolidayTarget] = useState(null);
 
+  // Keep the working dates inside the viewed session: when a past/future
+  // session is selected, a date defaulted to the real "today" would fall
+  // outside it, so clamp to the session-aware today.
+  useEffect(() => {
+    const outOfRange = (d) => d && sessionBounds.start && (d < sessionBounds.start || d > sessionBounds.end);
+    setSelectedDate((d) => (outOfRange(d) ? sessionToday : d));
+    setEmpAttDate((d) => (outOfRange(d) ? sessionToday : d));
+    setReportDate((d) => (outOfRange(d) ? '' : d));
+  }, [sessionBounds, sessionToday]);
+
   useEffect(() => {
     Promise.all([
       api.get('/classes').catch(() => ({ data: [] })),
@@ -156,11 +169,13 @@ const MarkAttendanceView = () => {
       setEmployees(e.data);
       setHolidays(h.data);
     });
-  }, [isAdmin]);
+    // Refetch on session change so holidays (and class counts) reflect the
+    // selected session.
+  }, [isAdmin, viewSession]);
 
   useEffect(() => {
     if (selectedClass && selectedSection && selectedDate) {
-      const cacheKey = `attendance:${selectedClass}:${selectedSection}:${selectedDate}`;
+      const cacheKey = `attendance:${viewSession}:${selectedClass}:${selectedSection}:${selectedDate}`;
       const cached = getCached(cacheKey);
       if (cached) {
         setStudents(cached.students);
@@ -184,7 +199,7 @@ const MarkAttendanceView = () => {
         setCached(cacheKey, { students: studentList, sessionStatus: sess.data, attMap });
       }).catch(() => { if (!cached) toast.error('Failed to fetch data'); }).finally(() => setLoading(false));
     }
-  }, [selectedClass, selectedSection, selectedDate]);
+  }, [selectedClass, selectedSection, selectedDate, viewSession]);
 
   const isLocked = sessionStatus?.is_locked && sessionStatus?.submitted;
   const isHoliday = sessionStatus?.is_holiday;
@@ -258,6 +273,46 @@ const MarkAttendanceView = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // Open a clean, printable preview of a report in a new window. The browser's
+  // print dialog lets the admin review it on screen and Save-as-PDF / print —
+  // a preview rather than a forced CSV download.
+  const previewReport = ({ title, subtitle, summary = [], columns, rows }) => {
+    const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const cards = summary.map(s => `<div class="card"><span class="lbl">${esc(s.label)}</span><span class="val">${esc(s.value)}</span></div>`).join('');
+    const head = columns.map(c => `<th>${esc(c)}</th>`).join('');
+    const body = rows.length
+      ? rows.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')
+      : `<tr><td colspan="${columns.length}" style="text-align:center;padding:24px;color:#888">No records</td></tr>`;
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+      <style>
+        *{font-family:Arial,Helvetica,sans-serif;box-sizing:border-box}
+        body{margin:24px;color:#1a1a1a}
+        h1{font-size:18px;margin:0}
+        .sub{color:#666;font-size:12px;margin:2px 0 16px}
+        .cards{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+        .card{border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px;min-width:110px}
+        .card .lbl{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#888}
+        .card .val{font-size:20px;font-weight:700}
+        table{width:100%;border-collapse:collapse;font-size:12px}
+        th,td{border:1px solid #cbd5e1;padding:6px 8px;text-align:left}
+        th{background:#f1f5f9;font-size:10px;text-transform:uppercase;letter-spacing:.04em}
+        tr:nth-child(even) td{background:#f8fafc}
+        .toolbar{margin-bottom:14px}
+        .toolbar button{padding:8px 16px;border:none;border-radius:8px;background:#E88A1A;color:#fff;font-weight:700;cursor:pointer}
+        @media print{.toolbar{display:none}}
+      </style></head>
+      <body>
+        <div class="toolbar"><button onclick="window.print()">Print / Save as PDF</button></div>
+        <h1>${esc(title)}</h1>
+        <div class="sub">${esc(subtitle || '')} &middot; Generated ${new Date().toLocaleString('en-IN')}</div>
+        <div class="cards">${cards}</div>
+        <table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
+      </body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) { toast.error('Allow pop-ups to preview the report.'); return; }
+    w.document.open(); w.document.write(html); w.document.close();
   };
 
   const fetchEmployeeReport = async () => {
@@ -360,7 +415,7 @@ const MarkAttendanceView = () => {
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-bold uppercase tracking-wider text-slate-900">Date</label>
-                <input type="date" className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} data-testid="att-date" />
+                <SessionDatePicker value={selectedDate} onChange={setSelectedDate} data-testid="att-date" />
               </div>
               {canEdit && students.length > 0 && !isHoliday && (
                 <>
@@ -464,7 +519,7 @@ const MarkAttendanceView = () => {
               <div className="flex flex-col sm:flex-row gap-4 items-end flex-wrap">
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold uppercase tracking-wider text-slate-900">Date</label>
-                  <input type="date" className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={empAttDate} onChange={e => setEmpAttDate(e.target.value)} data-testid="emp-att-date" />
+                  <SessionDatePicker value={empAttDate} onChange={setEmpAttDate} data-testid="emp-att-date" />
                 </div>
                 <Button variant="outline" className="rounded-xl text-xs" onClick={() => {
                   const n = {};
@@ -567,20 +622,34 @@ const MarkAttendanceView = () => {
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-bold uppercase tracking-wider text-slate-900">Date</label>
-                <input type="date" className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={reportDate} onChange={e => setReportDate(e.target.value)} data-testid="report-date" />
+                <SessionDatePicker value={reportDate} onChange={setReportDate} data-testid="report-date" />
               </div>
               <Button onClick={fetchReport} disabled={reportLoading} className="bg-[#E88A1A] hover:bg-[#C97516] text-white rounded-xl text-xs" data-testid="generate-report-btn">
                 {reportLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null} Generate Report
               </Button>
-              {reportData && (
-                <Button variant="outline" className="rounded-xl text-xs border-[#E88A1A] text-[#E88A1A] hover:bg-orange-50" onClick={() => {
-                  const header = ['Student ID', 'Class', 'Section', 'Date', 'Status'];
-                  const rows = reportData.records?.map(r => [r.entity_id, r.class_name, r.section, r.date, r.status]) || [];
-                  downloadCSV([header, ...rows], `class-attendance-report-${reportDate || 'all'}.csv`);
-                }} data-testid="download-student-report">
-                  <Download className="h-4 w-4 mr-2" strokeWidth={1.5} /> Download CSV
-                </Button>
-              )}
+              {reportData && (() => {
+                const header = ['Student ID', 'Class', 'Section', 'Date', 'Status'];
+                const rows = reportData.records?.map(r => [r.entity_id, r.class_name, r.section, r.date, r.status]) || [];
+                return (
+                  <>
+                    <Button variant="outline" className="rounded-xl text-xs border-[#E88A1A] text-[#E88A1A] hover:bg-orange-50" onClick={() => {
+                      previewReport({
+                        title: 'Class Attendance Report',
+                        subtitle: `${reportClass ? 'Class ' + reportClass : 'All classes'}${reportDate ? ' · ' + reportDate : ''}`,
+                        summary: [
+                          { label: 'Total', value: reportData.total_records },
+                          { label: 'Present', value: reportData.present },
+                          { label: 'Absent', value: reportData.absent },
+                          { label: 'Attendance %', value: `${reportData.percentage}%` },
+                        ],
+                        columns: header, rows,
+                      });
+                    }} data-testid="preview-student-report">
+                      <FileText className="h-4 w-4 mr-2" strokeWidth={1.5} /> Preview
+                    </Button>
+                  </>
+                );
+              })()}
             </div>
           </CardContent></Card>
           {reportData && (
@@ -637,20 +706,35 @@ const MarkAttendanceView = () => {
                 <Button onClick={fetchEmployeeReport} disabled={empReportLoading} className="bg-slate-900 text-white hover:bg-slate-800 rounded-xl text-xs" data-testid="generate-emp-report-btn">
                   {empReportLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null} Generate Report
                 </Button>
-                {empReportData && (
-                  <Button variant="outline" className="rounded-xl text-xs border-slate-900 text-slate-900" onClick={() => {
-                    const header = ['Emp. ID', 'Name', 'Total Days', 'Present', 'Absent', 'Leave', 'Attendance %'];
-                    const rows = Object.entries(empReportData.summary).map(([empId, s]) => {
-                      const emp = employees.find(e => e.employee_id === empId);
-                      const name = emp ? `${emp.first_name} ${emp.last_name}` : empId;
-                      const pct = s.total > 0 ? Math.round((s.present / s.total) * 100) : 0;
-                      return [empId, name, s.total, s.present || 0, s.absent || 0, s.leave || 0, `${pct}%`];
-                    });
-                    downloadCSV([header, ...rows], `employee-attendance-report-${empReportMonth}.csv`);
-                  }} data-testid="download-emp-report">
-                    <Download className="h-4 w-4 mr-2" strokeWidth={1.5} /> Download CSV
-                  </Button>
-                )}
+                {empReportData && (() => {
+                  const header = ['Emp. ID', 'Name', 'Total Days', 'Present', 'Absent', 'Leave', 'Attendance %'];
+                  const rows = Object.entries(empReportData.summary).map(([empId, s]) => {
+                    const emp = employees.find(e => e.employee_id === empId);
+                    const name = emp ? `${emp.first_name} ${emp.last_name}` : empId;
+                    const pct = s.total > 0 ? Math.round((s.present / s.total) * 100) : 0;
+                    return [empId, name, s.total, s.present || 0, s.absent || 0, s.leave || 0, `${pct}%`];
+                  });
+                  const tot = (k) => Object.values(empReportData.summary).reduce((a, e) => a + (e[k] || 0), 0);
+                  return (
+                    <>
+                      <Button variant="outline" className="rounded-xl text-xs border-slate-900 text-slate-900" onClick={() => {
+                        previewReport({
+                          title: 'Employee Attendance Report',
+                          subtitle: empReportMonth,
+                          summary: [
+                            { label: 'Total Days', value: tot('total') },
+                            { label: 'Present', value: tot('present') },
+                            { label: 'Absent', value: tot('absent') },
+                            { label: 'Leave', value: tot('leave') },
+                          ],
+                          columns: header, rows,
+                        });
+                      }} data-testid="preview-emp-report">
+                        <FileText className="h-4 w-4 mr-2" strokeWidth={1.5} /> Preview
+                      </Button>
+                    </>
+                  );
+                })()}
               </div>
             </CardContent></Card>
             {empReportData && (
@@ -792,7 +876,7 @@ const MarkAttendanceView = () => {
                 <div className="space-y-4 py-2">
                   <div className="space-y-1.5">
                     <Label className="text-xs font-bold uppercase tracking-wider">Date</Label>
-                    <input type="date" className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={holidayForm.date} onChange={e => setHolidayForm({ ...holidayForm, date: e.target.value })} data-testid="holiday-date" />
+                    <SessionDatePicker value={holidayForm.date} onChange={v => setHolidayForm({ ...holidayForm, date: v })} data-testid="holiday-date" />
                   </div>
                   <div className="space-y-1.5">
                     <Label className="text-xs font-bold uppercase tracking-wider">Name</Label>
@@ -849,9 +933,9 @@ const MarkAttendanceView = () => {
                       </div>
                       <div className="space-y-1 flex-1 min-w-[140px]">
                         <Label className="text-xs">Date</Label>
-                        <Input type="date" value={s.date} onChange={e => {
-                          const updated = [...bulkUnlockSessions]; updated[i] = { ...s, date: e.target.value }; setBulkUnlockSessions(updated);
-                        }} className="h-9 text-xs" />
+                        <SessionDatePicker value={s.date} onChange={v => {
+                          const updated = [...bulkUnlockSessions]; updated[i] = { ...s, date: v }; setBulkUnlockSessions(updated);
+                        }} />
                       </div>
                       <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-700 mb-0.5" onClick={() => setBulkUnlockSessions(bulkUnlockSessions.filter((_, j) => j !== i))}>
                         <Trash2 className="h-4 w-4" />

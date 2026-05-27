@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from database import db
 from models import UserRole, AttendanceRecord, AttendanceSession, Holiday
-from auth_utils import get_current_user, require_roles, create_audit_log, get_teacher_assigned_classes
+from auth_utils import get_current_user, require_roles, create_audit_log, get_teacher_assigned_classes, request_session, active_session_name, session_date_bounds, ensure_active_session
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -73,6 +73,16 @@ async def submit_attendance(request: Request):
         raise HTTPException(status_code=400, detail="class_name and section are required")
     if not records:
         raise HTTPException(status_code=400, detail="No attendance records provided")
+
+    # Archive protection — derive the academic year from the attendance date
+    # and block writes into an archived session.
+    from routes.fees import ensure_session_writable
+    try:
+        _y, _m = int(date[:4]), int(date[5:7])
+        _ay = f"{_y}-{_y + 1}" if _m >= 4 else f"{_y - 1}-{_y}"
+        await ensure_session_writable(_ay)
+    except (ValueError, IndexError):
+        pass
 
     # Teachers can only mark attendance for their assigned class/section
     if user["role"] == UserRole.TEACHER:
@@ -275,6 +285,7 @@ async def unlock_attendance(request: Request):
 async def bulk_unlock_attendance(request: Request):
     """Admin: unlock multiple attendance sessions at once. (#8)"""
     user = await require_roles(UserRole.ADMIN)(request)
+    await ensure_active_session(request)  # previous sessions are read-only
     body = await request.json()
     sessions = body.get("sessions", [])  # [{class_name, section, date}, ...]
     if not sessions:
@@ -357,9 +368,37 @@ async def get_attendance_alerts(request: Request, threshold: float = 75.0):
     """Get students below attendance threshold (default 75%)."""
     user = await require_roles(UserRole.ADMIN, UserRole.TEACHER)(request)
 
+    # Scope to the session the client is operating in: only that session's
+    # students, and only attendance dates within the session's window (the
+    # active session extends to today). Otherwise the alert is identical across
+    # every session.
+    ay = request_session(request) or await active_session_name()
+    student_query = {"is_active": True}
+    if ay:
+        student_query["academic_year"] = ay
+    students = await db.students.find(
+        student_query,
+        {"_id": 0, "student_id": 1, "first_name": 1, "last_name": 1,
+         "class_name": 1, "section": 1, "admission_number": 1}
+    ).to_list(5000)
+    sids = [s["student_id"] for s in students]
+
+    att_match = {"entity_type": "student"}
+    if sids:
+        att_match["entity_id"] = {"$in": sids}
+    if ay:
+        start, end = session_date_bounds(ay)
+        if start:
+            end_eff = end
+            active = await db.sessions.find_one({"is_active": True}, {"_id": 0, "session_name": 1})
+            today = datetime.now().strftime("%Y-%m-%d")
+            if active and active.get("session_name") == ay and today > end:
+                end_eff = today
+            att_match["date"] = {"$gte": start, "$lte": end_eff}
+
     # Single aggregation — count total and present days per student in one query
     pipeline = [
-        {"$match": {"entity_type": "student"}},
+        {"$match": att_match},
         {"$group": {
             "_id": "$entity_id",
             "total": {"$sum": 1},
@@ -368,13 +407,6 @@ async def get_attendance_alerts(request: Request, threshold: float = 75.0):
     ]
     stats_list = await db.attendance.aggregate(pipeline).to_list(10000)
     stats_map = {s["_id"]: s for s in stats_list}
-
-    # Fetch only the fields we need from students
-    students = await db.students.find(
-        {"is_active": True},
-        {"_id": 0, "student_id": 1, "first_name": 1, "last_name": 1,
-         "class_name": 1, "section": 1, "admission_number": 1}
-    ).to_list(5000)
 
     alerts = []
     for student in students:
@@ -406,6 +438,7 @@ async def get_attendance_alerts(request: Request, threshold: float = 75.0):
 async def submit_employee_attendance(request: Request):
     """Mark attendance for employees/teachers."""
     user = await require_roles(UserRole.ADMIN)(request)
+    await ensure_active_session(request)  # previous sessions are read-only
     body = await request.json()
 
     date = body.get("date", datetime.now().strftime("%Y-%m-%d"))
@@ -463,6 +496,20 @@ async def get_holidays(request: Request, year: Optional[str] = None):
     query = {"is_active": True}
     if year:
         query["date"] = {"$regex": f"^{year}"}
+    else:
+        # Scope holidays to the session being viewed (they're date-based and
+        # dates don't repeat across academic years). The active session extends
+        # to today.
+        ay = request_session(request) or await active_session_name()
+        if ay:
+            start, end = session_date_bounds(ay)
+            if start:
+                end_eff = end
+                active = await db.sessions.find_one({"is_active": True}, {"_id": 0, "session_name": 1})
+                today = datetime.now().strftime("%Y-%m-%d")
+                if active and active.get("session_name") == ay and today > end:
+                    end_eff = today
+                query["date"] = {"$gte": start, "$lte": end_eff}
     holidays = await db.holidays.find(query, {"_id": 0}).sort("date", 1).to_list(500)
     return holidays
 
@@ -470,6 +517,7 @@ async def get_holidays(request: Request, year: Optional[str] = None):
 @router.post("/holidays")
 async def create_holiday(request: Request):
     user = await require_roles(UserRole.ADMIN)(request)
+    await ensure_active_session(request)  # previous sessions are read-only
     body = await request.json()
 
     date = body.get("date")

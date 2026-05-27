@@ -7,7 +7,8 @@ import uuid
 
 from database import db
 from models import UserRole, Announcement, VoiceNote
-from auth_utils import get_current_user, require_roles, create_audit_log
+from auth_utils import get_current_user, require_roles, create_audit_log, request_session, session_date_bounds
+from routes.fees import active_session, ensure_session_writable
 
 VOICE_NOTES_DIR = Path(__file__).parent.parent / "uploads" / "voice_notes"
 VOICE_NOTES_DIR.mkdir(parents=True, exist_ok=True)
@@ -26,7 +27,13 @@ async def create_announcement(request: Request):
     user = await require_roles(UserRole.ADMIN, UserRole.TEACHER)(request)
     body = await request.json()
 
-    announcement = Announcement(**body, created_by=user["user_id"])
+    # Tag the announcement with the session the admin is operating in, so it
+    # belongs to (and shows under) that academic year. Past (archived) years are
+    # read-only — block creating data while viewing them.
+    body.pop("academic_year", None)
+    academic_year = request_session(request) or await active_session()
+    await ensure_session_writable(academic_year)
+    announcement = Announcement(**body, created_by=user["user_id"], academic_year=academic_year)
     ann_dict = announcement.model_dump()
     ann_dict["created_at"] = ann_dict["created_at"].isoformat()
 

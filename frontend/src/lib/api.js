@@ -28,12 +28,19 @@ async function refreshAccessToken() {
   return token;
 }
 
-// Request interceptor — attach JWT token when present
+// Request interceptor — attach JWT token + the selected academic session.
+// The session header makes the whole platform session-aware centrally: the
+// backend reads X-Academic-Year to scope reads, and tags writes, to the
+// session the admin is currently viewing — without every call site passing it.
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('auth_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
+    }
+    const session = localStorage.getItem('view_session');
+    if (session) {
+      config.headers['X-Academic-Year'] = session;
     }
     return config;
   },
