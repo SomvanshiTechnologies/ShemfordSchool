@@ -61,7 +61,15 @@ export function useScreenshotPrevention() {
       else if (!showWarning) removeBlur();
     };
 
-    const handleContextMenu = (e) => e.preventDefault();
+    const handleContextMenu = (e) => {
+      // Allow the native copy/paste menu inside editable fields so admins can
+      // copy/paste values like an admission number. Block it elsewhere
+      // (e.g. "save image as" on media).
+      const t = e.target;
+      const tag = t?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || t?.isContentEditable) return;
+      e.preventDefault();
+    };
 
     // Prevent long-press save on media elements (mobile)
     const handleTouchStart = (e) => {
