@@ -18,21 +18,33 @@ export async function copyText(text) {
     }
   }
 
+  // The textarea must be FOCUSED and on-screen for the copy to actually land.
+  // If it's off-screen or never focused, the browser copies whatever was
+  // selected before (usually nothing) — execCommand still returns true, so the
+  // UI says "copied" while the clipboard stays empty.
   try {
     const ta = document.createElement('textarea');
     ta.value = value;
-    ta.setAttribute('readonly', '');
     ta.style.position = 'fixed';
     ta.style.top = '0';
-    ta.style.left = '-9999px';
+    ta.style.left = '0';
+    ta.style.width = '1px';
+    ta.style.height = '1px';
+    ta.style.padding = '0';
+    ta.style.border = 'none';
     ta.style.opacity = '0';
+    ta.setAttribute('aria-hidden', 'true');
     document.body.appendChild(ta);
     const prevActive = document.activeElement;
+    ta.focus();
     ta.select();
     ta.setSelectionRange(0, value.length);
-    const ok = document.execCommand('copy');
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
     document.body.removeChild(ta);
-    if (prevActive && typeof prevActive.focus === 'function') prevActive.focus();
+    if (prevActive && typeof prevActive.focus === 'function') {
+      try { prevActive.focus(); } catch { /* ignore */ }
+    }
     return ok;
   } catch {
     return false;

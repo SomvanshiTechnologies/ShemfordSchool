@@ -108,9 +108,15 @@ async def _ensure_sessions_seeded():
             if y and _SESSION_RE.match(str(y)):
                 found.add(str(y))
     legacy = await db.school_settings.find_one({"_id": "session"}, {"_id": 0})
-    active = (legacy or {}).get("active_session") or _computed_session()
+    # Active session: the explicitly-stored value, else the latest year that has
+    # real data, else (only for a truly empty DB) the calendar year. We do NOT
+    # auto-create the calendar/future year as a session — sessions should come
+    # from actual data or be created explicitly by the admin. Otherwise a fresh
+    # deploy in (say) May would wrongly spawn next year's session and activate it.
+    active = (legacy or {}).get("active_session")
+    if not active:
+        active = sorted(found)[-1] if found else _computed_session()
     found.add(active)
-    found.add(_computed_session())
 
     now_iso = _dt.now(_tz.utc).isoformat()
     docs = []
