@@ -81,17 +81,6 @@ const ClassStructurePage = () => {
     name: '', display_name: '', sections: SHEMFORD_SECTIONS.map(s => ({ section_name: s, capacity: 45, class_teacher_id: null, class_teacher_name: null }))
   });
 
-  // Stream classes (11th/12th) use stream names (Science/Humanities) as their
-  // sections instead of colours. Derive both the stream-class names and the
-  // stream option list from the loaded classes (DB-backed) so nothing about
-  // which classes have streams — or what the streams are — is hardcoded here.
-  const streamClassNames = classes.filter(c => c.has_streams).map(c => c.name);
-  const streamOptionsAny = classes.find(c => c.has_streams && c.streams?.length)?.streams || [];
-  const isStreamClass = (data) =>
-    !!data?.has_streams || streamClassNames.includes((data?.name || '').trim());
-  const streamOptionsFor = (data) =>
-    (data?.streams && data.streams.length ? data.streams : streamOptionsAny);
-
   useEffect(() => { fetchClasses(); }, [viewSession]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { fetchTeachers(); }, []);
 
@@ -151,13 +140,9 @@ const ClassStructurePage = () => {
   };
 
   const addSection = (target, setter) => {
-    const existing = new Set(target.sections.map(s => s.section_name));
-    // Stream classes (11th/12th) can only add an unused stream; everyone else
-    // gets the next unused rainbow colour.
-    const pool = isStreamClass(target) ? streamOptionsFor(target) : SHEMFORD_SECTIONS;
-    const next = pool.find(s => !existing.has(s));
-    if (!next) return; // all available sections already added
-    setter({ ...target, sections: [...target.sections, { section_name: next, capacity: 45, class_teacher_id: null, class_teacher_name: null }] });
+    // Add a blank section — the admin fills in the name (and adjusts capacity).
+    // 45 is just the default capacity, editable like any field.
+    setter({ ...target, sections: [...target.sections, { section_name: '', capacity: 45, class_teacher_id: null, class_teacher_name: null }] });
   };
 
   const removeSection = (target, setter, idx) => {
@@ -175,40 +160,19 @@ const ClassStructurePage = () => {
   // element makes React treat it as a new type every render, remounting the
   // subtree — which drops input focus and makes section edits feel like they
   // "don't update". Inlining keeps the inputs mounted across re-renders.
-  const renderSectionEditor = (data, setData) => {
-    const streamMode = isStreamClass(data);
-    const streamOpts = streamOptionsFor(data);
-    const allStreamsUsed = streamMode && streamOpts.every(s => data.sections.some(x => x.section_name === s));
-    return (
+  const renderSectionEditor = (data, setData) => (
     <div className="space-y-3">
       <div className="flex justify-between items-center">
         <Label>Sections</Label>
-        <Button type="button" variant="outline" size="sm" disabled={allStreamsUsed} onClick={() => addSection(data, setData)}>
+        <Button type="button" variant="outline" size="sm" onClick={() => addSection(data, setData)}>
           <Plus className="h-3 w-3 mr-1" />Add Section
         </Button>
       </div>
-      {streamMode && (
-        <p className="text-xs text-muted-foreground">
-          Class 11th & 12th use streams as sections — only {streamOpts.join(' and ')} are allowed.
-        </p>
-      )}
       {data.sections.map((sec, idx) => (
         <div key={idx} className="grid grid-cols-12 gap-2 items-end">
           <div className="col-span-3">
             <Label className="text-xs">Name</Label>
-            {streamMode ? (
-              <Select
-                value={streamOpts.includes(sec.section_name) ? sec.section_name : undefined}
-                onValueChange={(v) => updateSection(data, setData, idx, 'section_name', v)}
-              >
-                <SelectTrigger><SelectValue placeholder="Select stream" /></SelectTrigger>
-                <SelectContent>
-                  {streamOpts.map(opt => <SelectItem key={opt} value={opt}>{opt}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            ) : (
-              <Input value={sec.section_name} onChange={(e) => updateSection(data, setData, idx, 'section_name', e.target.value)} />
-            )}
+            <Input value={sec.section_name} onChange={(e) => updateSection(data, setData, idx, 'section_name', e.target.value)} />
           </div>
           <div className="col-span-3">
             <Label className="text-xs">Capacity</Label>
@@ -237,8 +201,7 @@ const ClassStructurePage = () => {
         </div>
       ))}
     </div>
-    );
-  };
+  );
 
   if (loading && classes.length === 0) return <div className="flex items-center justify-center h-64"><div className="animate-spin h-8 w-8 border-4 border-slate-900 border-t-transparent rounded-full" /></div>;
 

@@ -209,6 +209,33 @@ async def request_upgrade(student_id: str, request: Request):
     )
     upg_dict = upg.model_dump()
     upg_dict["created_at"] = upg_dict["created_at"].isoformat()
+
+    # Clean account (no pending dues) → upgrade immediately WITHOUT recording it
+    # in Upgradation History. History is the approval queue for dues-driven
+    # upgrades only — a direct promotion shouldn't appear there. The move is
+    # still captured in the audit log.
+    if not has_pending_dues and not body.get("force_upgrade", False):
+        upg_dict.pop("_id", None)
+        await create_audit_log("upgradation", upg.upgradation_id, "direct-upgrade", {
+            "student_id": student_id,
+            "to": f"{to_class}/{to_section}/{to_stream}",
+            "academic_year": academic_year,
+        }, user)
+        approval = await _perform_upgrade_approval(upg_dict, user, auto=True)
+        return {
+            "upgradation": {**upg_dict, **approval},
+            "status": "approved",
+            "auto_approved": True,
+            "message": f"Student upgraded to {to_class}." +
+                       (f" Upgrade fee ₹{approval['upgradation_fee']:,.2f} added to pending fees."
+                        if approval['upgradation_fee'] > 0 else ""),
+            "upgradation_fee": approval["upgradation_fee"],
+            "upgradation_fee_paid": False,
+            "ledger_entries_created": approval["ledger_entries_created"],
+        }
+
+    # Has dues / forced → persist a pending-approval record (this is what shows
+    # in Upgradation History) and wait for the admin to approve it.
     await db.upgradation_records.insert_one(upg_dict)
     upg_dict.pop("_id", None)
 
@@ -217,22 +244,6 @@ async def request_upgrade(student_id: str, request: Request):
         "to": f"{to_class}/{to_section}/{to_stream}",
         "academic_year": academic_year,
     }, user)
-
-    # Auto-approve when the student has no pending dues — no point making
-    # admin click "approve" again on a clean account.
-    if not has_pending_dues and not body.get("force_upgrade", False):
-        approval = await _perform_upgrade_approval(upg_dict, user, auto=True)
-        return {
-            "upgradation": {**upg_dict, **approval},
-            "status": "approved",
-            "auto_approved": True,
-            "message": f"Upgrade auto-approved (no pending dues). Student moved to {to_class}." +
-                       (f" Upgrade fee ₹{approval['upgradation_fee']:,.2f} added to pending fees."
-                        if approval['upgradation_fee'] > 0 else ""),
-            "upgradation_fee": approval["upgradation_fee"],
-            "upgradation_fee_paid": False,
-            "ledger_entries_created": approval["ledger_entries_created"],
-        }
 
     return {
         "upgradation": upg_dict,

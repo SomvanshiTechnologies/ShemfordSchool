@@ -27,7 +27,7 @@ import {
   Search, CreditCard, FileText, AlertTriangle, Loader2, Mail,
   Settings, TrendingUp, ChevronDown, ChevronRight, CheckCircle2,
   Clock, XCircle, Download, Plus, Edit2, RefreshCw, BookOpen,
-  Smartphone, Wifi, WifiOff, X
+  Smartphone, Wifi, WifiOff, X, Trash2
 } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { RazorpayCheckout } from './RazorpayCheckout';
@@ -121,7 +121,7 @@ const FeesPage = () => {
   // Fee component config state
   const [feeConfigs, setFeeConfigs] = useState([]);
   const [classes, setClasses] = useState([]);
-  const [selectedYear, setSelectedYear] = useState(CURRENT_YEAR);
+  const [selectedYear, setSelectedYear] = useState(viewSession || CURRENT_YEAR);
   const [showConfigDialog, setShowConfigDialog] = useState(false);
   const [editingConfig, setEditingConfig] = useState(null);
   const [configForm, setConfigForm] = useState({});
@@ -311,7 +311,10 @@ const FeesPage = () => {
 
   // When the admin switches academic session, clear the selected student so a
   // previous session's student/ledger doesn't linger under the new session.
+  // Also follow the session for the fee-config year, so configs default to the
+  // selected session rather than the calendar year.
   useEffect(() => {
+    if (viewSession) setSelectedYear(viewSession);
     setSelectedStudentId('');
     setStudentLedger(null);
     setStudentSearch('');
@@ -330,7 +333,7 @@ const FeesPage = () => {
       setEditingConfig(null);
       setConfigForm({
         class_name: classDefault,
-        stream: '',
+        stream: null,
         academic_year: selectedYear,
         registration_fee: 0, admission_fee: 0, caution_deposit: 0,
         annual_charge: 0, activity_fee: 0, exam_fee: 0, lab_fee: 0,
@@ -359,6 +362,19 @@ const FeesPage = () => {
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Failed to save configuration');
     } finally { setSavingConfig(false); }
+  };
+
+  const deleteConfig = async (cfg) => {
+    if (!cfg?.config_id) return;
+    const label = `${cfg.class_name}${cfg.stream ? ` (${cfg.stream})` : ''} — ${cfg.academic_year}`;
+    if (!window.confirm(`Remove the fee configuration for ${label}? This cannot be undone.`)) return;
+    try {
+      await api.delete(`/fees/components/${cfg.config_id}`);
+      toast.success('Fee configuration removed');
+      fetchConfigs();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Failed to remove configuration');
+    }
   };
 
   const applyAnnualIncrease = async () => {
@@ -854,13 +870,22 @@ const FeesPage = () => {
                           ) : <span className="text-[#CCC]">Off</span>}
                         </TableCell>
                         <TableCell>
-                          <Button
-                            variant="ghost" size="sm"
-                            className="text-xs h-7 px-2"
-                            onClick={() => openConfigDialog(cfg)}
-                          >
-                            <Edit2 className="h-3 w-3 mr-1" /> Edit
-                          </Button>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="ghost" size="sm"
+                              className="text-xs h-7 px-2"
+                              onClick={() => openConfigDialog(cfg)}
+                            >
+                              <Edit2 className="h-3 w-3 mr-1" /> Edit
+                            </Button>
+                            <Button
+                              variant="ghost" size="sm"
+                              className="text-xs h-7 px-2 text-red-600 hover:text-red-700 hover:bg-red-50"
+                              onClick={() => deleteConfig(cfg)}
+                            >
+                              <Trash2 className="h-3 w-3 mr-1" /> Remove
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -1425,7 +1450,6 @@ const FeesPage = () => {
                 <Select
                   value={configForm.class_name || ''}
                   onValueChange={v => setConfigForm(f => ({ ...f, class_name: v, stream: null }))}
-                  disabled={!!editingConfig}
                 >
                   <SelectTrigger className="mt-1 h-9">
                     <SelectValue placeholder="Select class" />
@@ -1447,12 +1471,20 @@ const FeesPage = () => {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    {/* "None" applies the config to the whole class. 11th/12th
+                        expose their streams (Science/Humanities); other classes
+                        expose their sections (Violet/Indigo/…) so the admin can
+                        make a config specific to one group. All DB-backed. */}
                     <SelectItem value="none">None (applies to all)</SelectItem>
-                    {/* Stream options come from the selected class's DB-backed
-                        streams — only 11th/12th carry Science/Humanities. */}
-                    {(classes.find(c => c.name === configForm.class_name)?.streams || []).map(st => (
-                      <SelectItem key={st} value={String(st).toLowerCase()}>{st}</SelectItem>
-                    ))}
+                    {(() => {
+                      const cls = classes.find(c => c.name === configForm.class_name);
+                      const opts = (cls?.streams?.length
+                        ? cls.streams
+                        : (cls?.sections || []).map(s => s.section_name));
+                      return opts.map(opt => (
+                        <SelectItem key={opt} value={String(opt).toLowerCase()}>{opt}</SelectItem>
+                      ));
+                    })()}
                   </SelectContent>
                 </Select>
               </div>

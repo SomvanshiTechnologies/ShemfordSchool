@@ -223,7 +223,13 @@ async def get_students(
     if class_name:
         query["class_name"] = class_name
     if section:
-        query["section"] = section
+        # For 11th/12th the "section" passed is really the stream (the section
+        # IS the stream). Students carry legacy colour sections, so match the
+        # student's stream (case-insensitive) instead of the section field.
+        if class_name and _class_needs_stream(class_name):
+            query["stream"] = {"$regex": f"^{re.escape(section)}$", "$options": "i"}
+        else:
+            query["section"] = section
     if fee_status:
         query["fee_status"] = fee_status
     # Default to the session the client is operating in (X-Academic-Year header)

@@ -130,32 +130,19 @@ async def get_classes(request: Request):
     ay = request_session(request) or await active_session()
     ay_q = {"academic_year": ay} if ay else {}
     for cls in classes:
-        # 11th/12th must carry exactly their streams as sections — heal any
-        # legacy colour sections left on the record (one-time, idempotent).
-        if cls.get("has_streams") and cls.get("streams"):
-            normalized = _stream_sections_from(cls["streams"], cls.get("sections"))
-            if [s.get("section_name") for s in cls.get("sections", [])] != [s["section_name"] for s in normalized]:
-                cls["sections"] = normalized
-                await db.class_structures.update_one(
-                    {"class_id": cls["class_id"]}, {"$set": {"sections": normalized}}
-                )
         for section in cls.get("sections", []):
             if cls.get("has_streams"):
-                # Count per stream-section combination
-                stream_counts = {}
-                for stream in cls.get("streams", []):
-                    count = await db.students.count_documents({
-                        **ay_q,
-                        "class_name": cls["name"],
-                        # Students store stream lowercase ("science"); structure
-                        # uses "Science" — match case-insensitively.
-                        "stream": {"$regex": f"^{re.escape(stream)}$", "$options": "i"},
-                        "section": section["section_name"],
-                        "is_active": True,
-                    })
-                    stream_counts[stream] = count
-                section["stream_student_counts"] = stream_counts
-                section["student_count"] = sum(stream_counts.values())
+                # For 11th/12th the section IS the stream — match by the student's
+                # stream (case-insensitive), NOT the section field. Students were
+                # created with legacy colour sections (Violet, Indigo, …) but the
+                # correct stream, so a section match would always return 0.
+                count = await db.students.count_documents({
+                    **ay_q,
+                    "class_name": cls["name"],
+                    "stream": {"$regex": f"^{re.escape(section['section_name'])}$", "$options": "i"},
+                    "is_active": True,
+                })
+                section["student_count"] = count
             else:
                 count = await db.students.count_documents({
                     **ay_q,
@@ -215,13 +202,6 @@ async def update_class(class_id: str, request: Request):
             detail=f"Streams can only be assigned to Class 11th or 12th, not '{old['name']}'"
         )
 
-    # 11th/12th sections must be exactly the streams — coerce on save so legacy
-    # colour sections can't be reintroduced.
-    eff_streams = body.get("streams") or old.get("streams") or []
-    eff_has_streams = body.get("has_streams", old.get("has_streams"))
-    if eff_has_streams and eff_streams and "sections" in body:
-        body["sections"] = _stream_sections_from(eff_streams, body.get("sections"))
-
     body.pop("class_id", None)
     await db.class_structures.update_one({"class_id": class_id}, {"$set": body})
     updated = await db.class_structures.find_one({"class_id": class_id}, {"_id": 0})
@@ -271,10 +251,18 @@ async def get_class_students(class_id: str, request: Request,
     ay = request_session(request) or await active_session()
     if ay:
         query["academic_year"] = ay
-    if section:
-        query["section"] = section
-    if stream:
-        query["stream"] = {"$regex": f"^{re.escape(stream)}$", "$options": "i"}
+    if cls.get("has_streams"):
+        # For 11th/12th the section IS the stream — match by the student's stream
+        # (case-insensitive) and ignore the section field, which holds legacy
+        # colour values that don't identify the stream.
+        eff_stream = stream or section
+        if eff_stream:
+            query["stream"] = {"$regex": f"^{re.escape(eff_stream)}$", "$options": "i"}
+    else:
+        if section:
+            query["section"] = section
+        if stream:
+            query["stream"] = {"$regex": f"^{re.escape(stream)}$", "$options": "i"}
 
     students = await db.students.find(query, {"_id": 0}).sort("roll_number", 1).to_list(2000)
     return students

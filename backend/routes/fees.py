@@ -570,7 +570,10 @@ async def create_fee_component_config(request: Request):
 
     academic_year = body.get("academic_year", current_academic_year())
     class_name = body.get("class_name")
-    stream = body.get("stream")  # None for non-11/12 classes
+    # Normalize empty string / falsy to None so the de-dupe match below treats
+    # "no stream" consistently — otherwise stream="" and stream=null are seen as
+    # two different configs and duplicates pile up.
+    stream = body.get("stream") or None
 
     if not class_name:
         raise HTTPException(status_code=400, detail="class_name is required")
@@ -628,6 +631,20 @@ async def update_fee_component_config(config_id: str, request: Request):
 
     validate_fee_amounts(body)  # #13
 
+    # Identity fields (class / stream / year) are editable from the dialog too —
+    # previously they were dropped, so changing the stream silently did nothing.
+    # Normalize stream ("" -> None) and de-dupe: deactivate any OTHER active
+    # config that would collide with the new class+stream+year.
+    new_class = body.get("class_name") or cfg["class_name"]
+    new_stream = (body.get("stream") if "stream" in body else cfg.get("stream")) or None
+    new_year = body.get("academic_year") or cfg["academic_year"]
+    validate_academic_year(new_year)  # #14
+    await db.fee_component_configs.update_many(
+        {"class_name": new_class, "stream": new_stream, "academic_year": new_year,
+         "config_id": {"$ne": config_id}, "is_active": True},
+        {"$set": {"is_active": False}}
+    )
+
     allowed_fields = [
         "registration_fee", "admission_fee", "caution_deposit",
         "annual_charge", "activity_fee", "exam_fee", "lab_fee", "ai_robotics_fee",
@@ -636,12 +653,30 @@ async def update_fee_component_config(config_id: str, request: Request):
         "sibling_admission_discount_amount", "sibling_tuition_discount_amount", "notes"
     ]
     update = {k: body[k] for k in allowed_fields if k in body}
+    update["class_name"] = new_class
+    update["stream"] = new_stream
+    update["academic_year"] = new_year
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.fee_component_configs.update_one({"config_id": config_id}, {"$set": update})
 
     updated = await db.fee_component_configs.find_one({"config_id": config_id}, {"_id": 0})
     await create_audit_log("fee_component_config", config_id, "update", update, user)
     return updated
+
+
+@router.delete("/fees/components/{config_id}")
+async def delete_fee_component_config(config_id: str, request: Request):
+    """Permanently remove a fee component config (admin 'Remove' action)."""
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    cfg = await db.fee_component_configs.find_one({"config_id": config_id}, {"_id": 0})
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Fee config not found")
+    await db.fee_component_configs.delete_one({"config_id": config_id})
+    await create_audit_log("fee_component_config", config_id, "delete", {
+        "class_name": cfg.get("class_name"), "stream": cfg.get("stream"),
+        "academic_year": cfg.get("academic_year"),
+    }, user)
+    return {"message": "Fee configuration deleted", "config_id": config_id}
 
 
 @router.post("/fees/components/increase")
