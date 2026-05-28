@@ -2045,17 +2045,8 @@ const LedgerView = ({
   onPaySelected, onPayAdmission, onDownloadReceipt, onDownloadEntryReceipt, onRazorpaySuccess, readOnly = false
 }) => {
   const [expandedSections, setExpandedSections] = useState({ one_time: true, yearly: true, monthly: true });
-  const [showMonthlyDropdown, setShowMonthlyDropdown] = useState(false);
-  const monthlyDropdownRef = React.useRef(null);
 
   const toggleSection = (sec) => setExpandedSections(s => ({ ...s, [sec]: !s[sec] }));
-
-  // Close monthly dropdown on outside click
-  React.useEffect(() => {
-    const handler = (e) => { if (monthlyDropdownRef.current && !monthlyDropdownRef.current.contains(e.target)) setShowMonthlyDropdown(false); };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
 
   const { student, summary, ledger: grouped, payments } = ledger;
 
@@ -2197,7 +2188,7 @@ const LedgerView = ({
                     </button>
                     <FeeTypeDropdown label="One-Time" entries={(grouped.one_time || []).filter(e => ['pending','overdue','partially_paid'].includes(e.status))} payLedgerIds={payLedgerIds} setPayLedgerIds={setPayLedgerIds} />
                     <FeeTypeDropdown label="Yearly"   entries={(grouped.yearly   || []).filter(e => ['pending','overdue','partially_paid'].includes(e.status))} payLedgerIds={payLedgerIds} setPayLedgerIds={setPayLedgerIds} />
-                    <MonthlyDropdown monthlyDue={(grouped.monthly || []).filter(e => ['pending','overdue','partially_paid'].includes(e.status))} payLedgerIds={payLedgerIds} setPayLedgerIds={setPayLedgerIds} />
+                    <FeeTypeDropdown label="Monthly" entries={(grouped.monthly || []).filter(e => ['pending','overdue','partially_paid'].includes(e.status))} payLedgerIds={payLedgerIds} setPayLedgerIds={setPayLedgerIds} />
                     {payLedgerIds.length > 0 && (
                       <button onClick={clearAll} className="text-xs text-slate-400 underline ml-1">Clear</button>
                     )}
