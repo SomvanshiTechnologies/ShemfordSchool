@@ -539,12 +539,10 @@ async def get_parent_password_hint(student_id: str, request: Request):
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
     parent_email = student.get("parent_email")
-    if not parent_email:
-        raise HTTPException(status_code=404, detail="No parent email on record")
     return {
         "password": student.get("parent_temp_password") or None,
-        "email": parent_email,
-        "has_account": True,
+        "email": parent_email or None,
+        "has_account": bool(parent_email),
         "parent_name": student.get("parent_name", "")
     }
 

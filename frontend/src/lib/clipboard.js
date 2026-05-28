@@ -34,14 +34,22 @@ export async function copyText(text) {
     ta.style.border = 'none';
     ta.style.opacity = '0';
     ta.setAttribute('aria-hidden', 'true');
-    document.body.appendChild(ta);
+    // Mount the textarea INSIDE the open dialog when there is one. Radix dialogs
+    // trap focus: a textarea on document.body gets focus yanked back the instant
+    // we focus it, so execCommand copies an empty selection (returns true while
+    // the clipboard stays empty). Keeping it inside the focus scope avoids that.
+    const host =
+      document.querySelector(
+        '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]'
+      ) || document.body;
+    host.appendChild(ta);
     const prevActive = document.activeElement;
     ta.focus();
     ta.select();
     ta.setSelectionRange(0, value.length);
     let ok = false;
     try { ok = document.execCommand('copy'); } catch { ok = false; }
-    document.body.removeChild(ta);
+    host.removeChild(ta);
     if (prevActive && typeof prevActive.focus === 'function') {
       try { prevActive.focus(); } catch { /* ignore */ }
     }

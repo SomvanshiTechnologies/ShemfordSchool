@@ -1575,7 +1575,7 @@ const StudentsPage = () => {
 
       {/* ===== VIEW STUDENT DIALOG ===== */}
       <Dialog open={showViewDialog} onOpenChange={setShowViewDialog}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl" aria-describedby={undefined}>
           <DialogHeader><DialogTitle>Student Details</DialogTitle></DialogHeader>
           {selectedStudent && (
             <div className="grid gap-4">
