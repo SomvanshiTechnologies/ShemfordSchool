@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Mic, MicOff, Play, Pause, Trash2, Upload } from 'lucide-react';
+import { Mic, MicOff, Play, Pause, Trash2 } from 'lucide-react';
 import { Button } from './ui/button';
 import api from '../lib/api';
 
@@ -138,10 +138,14 @@ export function useVoiceRecorder() {
 
   const start = useCallback(async () => {
     setMicError(null);
-    // The recorder UI only calls start() when CAN_RECORD_IN_BROWSER is
-    // true — but guard anyway in case a caller forces it.
+    // Browsers expose navigator.mediaDevices only in secure contexts
+    // (https://, localhost, 127.0.0.1). On plain http://<ip> the API is
+    // undefined and getUserMedia throws — surface that explicitly so admins
+    // on LAN HTTP know to switch to HTTPS to record.
     if (!CAN_RECORD_IN_BROWSER) {
-      setMicError('In-browser recording needs HTTPS. Use the upload option instead.');
+      setMicError(
+        `Microphone needs a secure connection (HTTPS or localhost). This page is served over ${window.location.protocol}//${window.location.host} — switch to HTTPS to record.`
+      );
       return;
     }
     try {
@@ -198,39 +202,11 @@ export function useVoiceRecorder() {
     setDuration(0);
   }, []);
 
-  // Fallback path for non-secure origins (no getUserMedia). Accepts a File
-  // from <input type="file" accept="audio/*" capture> and surfaces it as
-  // the same audioBlob the recorder would produce, so all downstream
-  // upload code is unchanged.
-  const acceptFile = useCallback((file) => {
-    setMicError(null);
-    if (!file) return;
-    if (!file.type.startsWith('audio/')) {
-      setMicError('Please choose an audio file.');
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      setMicError('Audio file exceeds the 5 MB limit.');
-      return;
-    }
-    setAudioBlob(file);
-    setAudioURL(URL.createObjectURL(file));
-    // Duration is unknown until the audio element loads metadata — the
-    // player computes it on the fly, so 0 here is fine.
-    setDuration(0);
-  }, []);
-
-  return {
-    recording, audioBlob, audioURL, duration, micError,
-    start, stop, discard, acceptFile,
-    canRecord: CAN_RECORD_IN_BROWSER,
-  };
+  return { recording, audioBlob, audioURL, duration, micError, start, stop, discard };
 }
 
 // ─── Recorder UI widget (reusable in compose forms) ──────────────────────────
-export const VoiceNoteRecorder = ({ voice }) => {
-  const fileInputRef = useRef(null);
-  return (
+export const VoiceNoteRecorder = ({ voice }) => (
   <div className="space-y-2">
     <label className="text-sm font-medium flex items-center gap-1">
       <Mic className="h-3.5 w-3.5" /> Voice Note (optional)
@@ -238,36 +214,11 @@ export const VoiceNoteRecorder = ({ voice }) => {
     {voice.micError && (
       <p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg">{voice.micError}</p>
     )}
-    {!voice.audioBlob && !voice.recording && voice.canRecord && (
+    {!voice.audioBlob && !voice.recording && (
       <Button type="button" variant="outline" size="sm" onClick={voice.start} className="text-xs">
         <Mic className="h-3.5 w-3.5 mr-1.5 text-red-500" />
         Record voice note
       </Button>
-    )}
-    {!voice.canRecord && (
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="audio/*"
-        capture="environment"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) voice.acceptFile(f);
-          e.target.value = '';
-        }}
-      />
-    )}
-    {!voice.audioBlob && !voice.recording && !voice.canRecord && (
-      <div className="space-y-1">
-        <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => fileInputRef.current?.click()}>
-          <Upload className="h-3.5 w-3.5 mr-1.5 text-red-500" />
-          Upload voice note
-        </Button>
-        <p className="text-[11px] text-muted-foreground">
-          In-browser recording needs HTTPS. On mobile this opens your device's recorder; on desktop, pick a pre-recorded audio file.
-        </p>
-      </div>
     )}
     {voice.recording && (
       <div className="flex items-center gap-3 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
@@ -291,17 +242,10 @@ export const VoiceNoteRecorder = ({ voice }) => {
       <div className="space-y-2">
         <VoiceNotePlayer url={voice.audioURL} />
         <div className="flex gap-2">
-          {voice.canRecord ? (
-            <Button type="button" size="sm" variant="outline" className="text-xs h-7"
-              onClick={() => { voice.discard(); voice.start(); }}>
-              <Mic className="h-3.5 w-3.5 mr-1" /> Re-record
-            </Button>
-          ) : (
-            <Button type="button" size="sm" variant="outline" className="text-xs h-7"
-              onClick={() => { voice.discard(); fileInputRef.current?.click(); }}>
-              <Upload className="h-3.5 w-3.5 mr-1" /> Replace
-            </Button>
-          )}
+          <Button type="button" size="sm" variant="outline" className="text-xs h-7"
+            onClick={() => { voice.discard(); voice.start(); }}>
+            <Mic className="h-3.5 w-3.5 mr-1" /> Re-record
+          </Button>
           <Button type="button" size="sm" variant="ghost" className="text-xs h-7 text-red-500 hover:text-red-700"
             onClick={voice.discard}>
             <Trash2 className="h-3.5 w-3.5 mr-1" /> Discard
@@ -310,5 +254,4 @@ export const VoiceNoteRecorder = ({ voice }) => {
       </div>
     )}
   </div>
-  );
-};
+);
