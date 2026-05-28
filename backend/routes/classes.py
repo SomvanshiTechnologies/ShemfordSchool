@@ -4,7 +4,7 @@ from datetime import datetime
 import re
 
 from database import db
-from models import UserRole, ClassStructure, SHEMFORD_CLASSES, SHEMFORD_SECTIONS
+from models import UserRole, ClassStructure, SHEMFORD_CLASSES, SHEMFORD_SECTIONS, CLASSES_WITH_STREAMS
 from auth_utils import get_current_user, require_roles, create_audit_log, request_session
 from routes.fees import current_academic_year, active_session
 
@@ -29,6 +29,23 @@ def _senior_sections(capacity: int = 45) -> list:
         {"section_name": s, "capacity": capacity, "class_teacher_id": None, "class_teacher_name": None}
         for s in SENIOR_STREAMS
     ]
+
+
+def _stream_sections_from(streams: list, existing: list) -> list:
+    """For stream classes (11th/12th) the sections must be exactly the streams.
+    Preserve capacity / class-teacher from any existing section whose name
+    matches a stream (case-insensitive); drop legacy colour sections."""
+    by_name = {(s.get("section_name") or "").strip().lower(): s for s in (existing or [])}
+    out = []
+    for st in streams:
+        prev = by_name.get(st.strip().lower(), {})
+        out.append({
+            "section_name": st,
+            "capacity": prev.get("capacity", 45),
+            "class_teacher_id": prev.get("class_teacher_id"),
+            "class_teacher_name": prev.get("class_teacher_name"),
+        })
+    return out
 
 
 def _build_shemford_defaults() -> list:
@@ -74,6 +91,13 @@ async def create_class(request: Request):
     if existing:
         raise HTTPException(status_code=400, detail=f"Class '{body['name']}' already exists for this academic year")
 
+    # Senior classes (11th/12th) are stream-based — force Science/Humanities
+    # sections regardless of what the form submitted.
+    if body.get("name") in CLASSES_WITH_STREAMS:
+        body["has_streams"] = True
+        body["streams"] = SENIOR_STREAMS
+        body["sections"] = _stream_sections_from(SENIOR_STREAMS, body.get("sections"))
+
     cls = ClassStructure(**body)
     cls_dict = cls.model_dump()
     cls_dict["created_at"] = cls_dict["created_at"].isoformat()
@@ -106,6 +130,15 @@ async def get_classes(request: Request):
     ay = request_session(request) or await active_session()
     ay_q = {"academic_year": ay} if ay else {}
     for cls in classes:
+        # 11th/12th must carry exactly their streams as sections — heal any
+        # legacy colour sections left on the record (one-time, idempotent).
+        if cls.get("has_streams") and cls.get("streams"):
+            normalized = _stream_sections_from(cls["streams"], cls.get("sections"))
+            if [s.get("section_name") for s in cls.get("sections", [])] != [s["section_name"] for s in normalized]:
+                cls["sections"] = normalized
+                await db.class_structures.update_one(
+                    {"class_id": cls["class_id"]}, {"$set": {"sections": normalized}}
+                )
         for section in cls.get("sections", []):
             if cls.get("has_streams"):
                 # Count per stream-section combination
@@ -181,6 +214,13 @@ async def update_class(class_id: str, request: Request):
             status_code=400,
             detail=f"Streams can only be assigned to Class 11th or 12th, not '{old['name']}'"
         )
+
+    # 11th/12th sections must be exactly the streams — coerce on save so legacy
+    # colour sections can't be reintroduced.
+    eff_streams = body.get("streams") or old.get("streams") or []
+    eff_has_streams = body.get("has_streams", old.get("has_streams"))
+    if eff_has_streams and eff_streams and "sections" in body:
+        body["sections"] = _stream_sections_from(eff_streams, body.get("sections"))
 
     body.pop("class_id", None)
     await db.class_structures.update_one({"class_id": class_id}, {"$set": body})
