@@ -341,10 +341,18 @@ export default function UpgradationPage() {
       setSelected(updatedStudent);
       if (updatedStudent.fee_status === 'paid') {
         setFeeBlockMsg(null);
-        toast.success(
-          'All fees cleared. Now select the target class below and click "Upgrade Student" to submit the request.',
-          { duration: 6000 }
-        );
+        // Dues cleared → if a target class & section are already chosen, queue
+        // the upgrade for approval right away (matches the collect → history →
+        // approve flow). Otherwise prompt to pick the target first.
+        if (toClass && toSection) {
+          toast.success('Fees cleared — sending to Upgradation History for approval.');
+          doUpgrade();
+        } else {
+          toast.success(
+            'All fees cleared. Pick the target class & section, then click "Send for Approval".',
+            { duration: 6000 }
+          );
+        }
       }
     } catch (e) {
       if (!e._handled) toast.error(e.response?.data?.detail || 'Payment failed');
@@ -642,9 +650,14 @@ export default function UpgradationPage() {
             </div>
           )}
 
-          {selected && selected.class_name !== '12th' && !feeBlockMsg && (
+          {selected && selected.class_name !== '12th' && (
             <div className="border border-slate-200 rounded-2xl p-5 space-y-4">
               <h2 className="font-semibold text-base">Step 2 — Target Class & Academic Year</h2>
+              {feeBlockMsg && (
+                <p className="text-xs text-amber-600">
+                  Pick the target class &amp; section, then collect the fee above — the student will be sent to Upgradation History for approval.
+                </p>
+              )}
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <Label>New Class</Label>
@@ -714,7 +727,9 @@ export default function UpgradationPage() {
                 disabled={upgrading}
                 className="bg-orange-500 hover:bg-orange-600 text-white"
               >
-                {upgrading ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Upgrading...</> : 'Confirm Upgrade'}
+                {upgrading
+                  ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Processing...</>
+                  : (requiresApproval ? 'Send for Approval' : 'Confirm Upgrade')}
               </Button>
             </div>
           )}
