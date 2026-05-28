@@ -424,9 +424,11 @@ export default function UpgradationPage() {
     setHistoryLoading(true);
     try {
       const params = {};
-      // Explicit year filter wins; otherwise scope to the selected session.
-      const ay = historyYear || viewSession;
-      if (ay) params.academic_year = ay;
+      // Only filter when the admin explicitly types a year. Upgrade records are
+      // tagged with the TARGET year (what you promote INTO), so scoping to the
+      // viewed (from) session would hide records you just created — e.g. a
+      // 2025-2026 student queued for approval lives under 2026-2027.
+      if (historyYear) params.academic_year = historyYear;
       const res = await api.get('/upgradation/history', { params });
       // Show every upgrade regardless of fee status; the Fee Status column will
       // reflect the current ledger state (Paid / Pending / Overdue).
