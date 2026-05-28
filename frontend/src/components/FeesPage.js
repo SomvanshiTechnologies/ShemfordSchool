@@ -1424,7 +1424,7 @@ const FeesPage = () => {
                 <Label className="text-xs font-bold uppercase tracking-wider">Class *</Label>
                 <Select
                   value={configForm.class_name || ''}
-                  onValueChange={v => setConfigForm(f => ({ ...f, class_name: v }))}
+                  onValueChange={v => setConfigForm(f => ({ ...f, class_name: v, stream: null }))}
                   disabled={!!editingConfig}
                 >
                   <SelectTrigger className="mt-1 h-9">
@@ -1448,9 +1448,11 @@ const FeesPage = () => {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">None (applies to all)</SelectItem>
-                    <SelectItem value="science">Science</SelectItem>
-                    <SelectItem value="arts">Arts</SelectItem>
-                    <SelectItem value="commerce">Commerce</SelectItem>
+                    {/* Stream options come from the selected class's DB-backed
+                        streams — only 11th/12th carry Science/Humanities. */}
+                    {(classes.find(c => c.name === configForm.class_name)?.streams || []).map(st => (
+                      <SelectItem key={st} value={String(st).toLowerCase()}>{st}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

@@ -170,7 +170,12 @@ const ClassStructurePage = () => {
     setter({ ...target, sections: updated });
   };
 
-  const SectionEditor = ({ data, setData }) => {
+  // Rendered by calling it inline ({renderSectionEditor(...)}) rather than as
+  // <SectionEditor/>. Defining a component inside another and mounting it as an
+  // element makes React treat it as a new type every render, remounting the
+  // subtree — which drops input focus and makes section edits feel like they
+  // "don't update". Inlining keeps the inputs mounted across re-renders.
+  const renderSectionEditor = (data, setData) => {
     const streamMode = isStreamClass(data);
     const streamOpts = streamOptionsFor(data);
     const allStreamsUsed = streamMode && streamOpts.every(s => data.sections.some(x => x.section_name === s));
@@ -269,7 +274,7 @@ const ClassStructurePage = () => {
                       <Input value={newClass.display_name} onChange={(e) => setNewClass({...newClass, display_name: e.target.value})} placeholder="e.g., Class 1" required data-testid="class-display-name" />
                     </div>
                   </div>
-                  <SectionEditor data={newClass} setData={setNewClass} />
+                  {renderSectionEditor(newClass, setNewClass)}
                 </div>
                 <DialogFooter>
                   <Button type="button" variant="outline" onClick={() => setShowAddDialog(false)}>Cancel</Button>
@@ -409,7 +414,7 @@ const ClassStructurePage = () => {
                     <Input value={editData.display_name} onChange={(e) => setEditData({...editData, display_name: e.target.value})} />
                   </div>
                 </div>
-                <SectionEditor data={editData} setData={setEditData} />
+                {renderSectionEditor(editData, setEditData)}
               </div>
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setShowEditDialog(false)}>Cancel</Button>

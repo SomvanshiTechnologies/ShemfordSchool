@@ -41,15 +41,22 @@ async def _validate_upgrade_target(student: dict, to_class: str, to_section: str
     if not cls:
         raise HTTPException(status_code=400, detail=f"Class '{to_class}' not found")
 
-    section_info = next((s for s in cls.get("sections", []) if s["section_name"] == to_section), None)
-    if not section_info:
-        raise HTTPException(status_code=400, detail=f"Section '{to_section}' not in {to_class}")
-
-    # Stream sections (Science/Humanities for 11th/12th) are not capacity-limited
-    # like colour sections — they're streams holding many students. Only enforce
-    # capacity for non-stream classes.
     is_stream = bool(_re.match(r"^(class\s*)?(11|12)(th)?$", (to_class or "").strip(), _re.I))
-    if not is_stream:
+
+    if is_stream:
+        # For 11th/12th the section IS the stream. Validate against the class's
+        # configured streams (case-insensitive) rather than the literal sections
+        # list — that list may still carry legacy colour sections or differ in
+        # case ("Science" vs "science"). Streams aren't capacity-limited like
+        # colour sections, so no capacity check.
+        valid = {str(s).strip().lower() for s in (cls.get("streams") or [])} \
+            or {(s.get("section_name") or "").strip().lower() for s in cls.get("sections", [])}
+        if (to_section or "").strip().lower() not in valid:
+            raise HTTPException(status_code=400, detail=f"Section '{to_section}' not in {to_class}")
+    else:
+        section_info = next((s for s in cls.get("sections", []) if s["section_name"] == to_section), None)
+        if not section_info:
+            raise HTTPException(status_code=400, detail=f"Section '{to_section}' not in {to_class}")
         current_count = await db.students.count_documents(
             {"class_name": to_class, "section": to_section, "is_active": True}
         )
