@@ -328,6 +328,81 @@ async def set_active_session(request: Request):
     return {"active_session": name}
 
 
+# ─── Payment methods (admin-configurable) ─────────────────────────────────────
+# Single source of truth for the fee collection method list. Stored in the DB so
+# admins can add/rename/disable methods without a code change. `value` is what the
+# backend/reports persist; `label` is what the UI shows. Two values carry special
+# UI behaviour and must keep their value string if present: "split" (cash + online
+# inputs) and "pos_terminal" (Ezetap POS flow, only wired in Fees Management).
+_DEFAULT_PAYMENT_METHODS = [
+    {"value": "cash", "label": "Cash", "requires_reference": False, "active": True},
+    {"value": "cheque", "label": "Cheque", "requires_reference": True, "active": True},
+    {"value": "bank_transfer", "label": "Bank Transfer", "requires_reference": True, "active": True},
+    {"value": "online", "label": "Online / UPI", "requires_reference": True, "active": True},
+    {"value": "split", "label": "Split (Cash + Online)", "requires_reference": False, "active": True},
+    {"value": "pos_terminal", "label": "POS Terminal (Ezetap)", "requires_reference": False, "active": True},
+]
+
+
+async def _get_payment_methods() -> list:
+    doc = await db.school_settings.find_one({"_id": "payment_methods"}, {"_id": 0})
+    methods = (doc or {}).get("methods")
+    if not methods:
+        # Seed defaults on first read so the collection is editable from the UI.
+        await db.school_settings.update_one(
+            {"_id": "payment_methods"},
+            {"$set": {"methods": _DEFAULT_PAYMENT_METHODS}},
+            upsert=True,
+        )
+        methods = _DEFAULT_PAYMENT_METHODS
+    return methods
+
+
+@router.get("/settings/payment-methods")
+async def get_payment_methods(request: Request):
+    """Fee collection methods. Any logged-in user may read (collect dialogs need it)."""
+    await get_current_user(request)
+    return {"methods": await _get_payment_methods()}
+
+
+@router.put("/settings/payment-methods")
+async def update_payment_methods(request: Request):
+    """Admin: replace the full payment-method list. Body: {methods: [{value,label,active,requires_reference}]}"""
+    admin = await require_roles(UserRole.ADMIN)(request)
+    body = await request.json()
+    raw = body.get("methods")
+    if not isinstance(raw, list) or not raw:
+        raise HTTPException(status_code=400, detail="methods must be a non-empty list")
+
+    cleaned, seen = [], set()
+    for m in raw:
+        if not isinstance(m, dict):
+            raise HTTPException(status_code=400, detail="Each method must be an object")
+        label = str(m.get("label") or "").strip()
+        # Derive a stable machine value from the label when one isn't supplied.
+        value = str(m.get("value") or "").strip().lower().replace(" ", "_")
+        if not value:
+            value = _re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+        if not label or not value:
+            raise HTTPException(status_code=400, detail="Each method needs a label")
+        if value in seen:
+            raise HTTPException(status_code=400, detail=f"Duplicate payment method: {value}")
+        seen.add(value)
+        cleaned.append({
+            "value": value,
+            "label": label,
+            "requires_reference": bool(m.get("requires_reference", value not in ("cash", "split"))),
+            "active": bool(m.get("active", True)),
+        })
+
+    await db.school_settings.update_one(
+        {"_id": "payment_methods"}, {"$set": {"methods": cleaned}}, upsert=True
+    )
+    await create_audit_log("school_settings", "payment_methods", "update",
+                           {"count": len(cleaned)}, admin)
+    return {"methods": cleaned}
+
+
 @router.get("/settings/system")
 async def get_system_status(request: Request):
     await require_roles(UserRole.ADMIN)(request)

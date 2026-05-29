@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Mail, Lock, User, Phone, ArrowLeft, KeyRound, CheckCircle, GraduationCap, Shield, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import api from '../lib/api';
+import { clampISODate, todayISO } from '../lib/dateBounds';
 
 const LOGO_URL = "/logo.webp";
 
@@ -39,6 +40,9 @@ const LoginPage = () => {
   const [newPassword, setNewPassword]         = useState('');
   const [confirmNewPassword, setConfirmNew]   = useState('');
   const [resetStep, setResetStep]             = useState('email');
+  // Student self-service reset (verify by admission number + date of birth)
+  const [studentAdm, setStudentAdm]           = useState('');
+  const [studentDob, setStudentDob]           = useState('');
   const [loginData, setLoginData]             = useState({ email: '', password: '' });
   const [registerData, setRegisterData]       = useState({ name: '', email: '', password: '', confirmPassword: '', phone: '' });
 
@@ -93,7 +97,24 @@ const LoginPage = () => {
     } finally { setIsLoading(false); }
   };
 
-  const closeReset = () => { setShowForgot(false); setResetStep('email'); setForgotEmail(''); setNewPassword(''); setConfirmNew(''); setResetToken(''); };
+  const handleStudentReset = async (e) => {
+    e.preventDefault();
+    if (newPassword !== confirmNewPassword) { toast.error('Passwords do not match'); return; }
+    if (newPassword.length < 8) { toast.error('Password must be at least 8 characters'); return; }
+    setIsLoading(true);
+    try {
+      await api.post('/auth/student-reset-password', {
+        admission_number: studentAdm.trim(),
+        date_of_birth: studentDob,
+        new_password: newPassword,
+      });
+      setResetStep('success');
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to reset password');
+    } finally { setIsLoading(false); }
+  };
+
+  const closeReset = () => { setShowForgot(false); setResetStep('email'); setForgotEmail(''); setNewPassword(''); setConfirmNew(''); setResetToken(''); setStudentAdm(''); setStudentDob(''); };
 
   return (
     <div className="min-h-screen flex" data-testid="login-page">
@@ -282,7 +303,7 @@ const LoginPage = () => {
                 <CardTitle className="text-lg font-bold text-slate-900">Reset Password</CardTitle>
               </div>
 
-              {resetStep !== 'success' && (
+              {(resetStep === 'email' || resetStep === 'reset') && (
                 <div className="flex items-center gap-2 mb-1">
                   <div className="h-1.5 flex-1 rounded-full bg-[#E88A1A]" />
                   <div className={`h-1.5 flex-1 rounded-full ${resetStep === 'reset' ? 'bg-[#E88A1A]' : 'bg-slate-200'}`} />
@@ -295,6 +316,7 @@ const LoginPage = () => {
               <CardDescription className="text-xs text-slate-500 mt-1">
                 {resetStep === 'email'   ? 'Enter your registered email address' :
                  resetStep === 'reset'   ? 'Enter the token from your email and set a new password' :
+                 resetStep === 'student' ? 'Verify your identity to set a new password' :
                                            'Your password has been reset successfully'}
               </CardDescription>
             </CardHeader>
@@ -326,6 +348,42 @@ const LoginPage = () => {
                   >
                     {isLoading ? 'Processing…' : 'Send Reset Token'}
                   </Button>
+                  <button
+                    type="button"
+                    onClick={() => setResetStep('student')}
+                    className="w-full text-center text-xs text-slate-500 hover:text-[#E88A1A] font-medium"
+                    data-testid="switch-to-student-reset"
+                  >
+                    Student? Reset with admission number
+                  </button>
+                </form>
+
+              ) : resetStep === 'student' ? (
+                <form onSubmit={handleStudentReset} className="space-y-4">
+                  <div className="flex items-center gap-3 p-3 bg-orange-50 border border-orange-200 rounded-xl">
+                    <GraduationCap className="h-4 w-4 text-[#E88A1A] shrink-0" strokeWidth={1.5} />
+                    <p className="text-xs text-slate-600">Verify with your admission number and date of birth, then set a new password.</p>
+                  </div>
+                  <Field label="Admission Number" icon={User} placeholder="e.g. SHM/2025/42817" value={studentAdm} onChange={e => setStudentAdm(e.target.value)} required data-testid="student-adm-input" />
+                  <Field label="Date of Birth" type="date" max={todayISO()} value={studentDob} onChange={e => setStudentDob(clampISODate(e.target.value, { max: todayISO() }))} required data-testid="student-dob-input" />
+                  <Field label="New Password"  icon={Lock} type="password" placeholder="Enter new password"   value={newPassword}        onChange={e => setNewPassword(e.target.value)} required data-testid="student-new-password-input" />
+                  <Field label="Confirm"       icon={Lock} type="password" placeholder="Confirm new password" value={confirmNewPassword} onChange={e => setConfirmNew(e.target.value)}  required data-testid="student-confirm-password-input" />
+                  <Button
+                    type="submit"
+                    className="w-full bg-[#E88A1A] hover:bg-[#C97516] text-white rounded-xl h-11 font-bold text-sm"
+                    disabled={isLoading}
+                    data-testid="student-reset-submit-btn"
+                  >
+                    {isLoading ? 'Resetting…' : 'Reset Password'}
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => setResetStep('email')}
+                    className="w-full text-center text-xs text-slate-500 hover:text-[#E88A1A] font-medium"
+                    data-testid="switch-to-email-reset"
+                  >
+                    Reset using email instead
+                  </button>
                 </form>
 
               ) : (

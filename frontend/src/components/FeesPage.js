@@ -3,7 +3,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSession } from '../contexts/SessionContext';
 import api from '../lib/api';
 import { getCached, setCached } from '../lib/pageCache';
-import { PAYMENT_METHODS, PAYMENT_METHODS_WITH_POS } from '../lib/paymentMethods';
+import { PAYMENT_METHODS_WITH_POS, fetchPaymentMethods } from '../lib/paymentMethods';
+import { clampISODate } from '../lib/dateBounds';
 
 const TopProgressBar = ({ active }) =>
   active ? (
@@ -35,14 +36,14 @@ import FeesReports from './FeesReports';
 
 const FEE_COMPONENTS = [
   { key: 'registration_fee', label: 'Registration Fee', type: 'one_time', tip: 'One-time fee at time of inquiry/registration' },
-  { key: 'admission_fee', label: 'Admission Fee', type: 'one_time', tip: 'One-time fee at time of admission (50% sibling discount applies)' },
+  { key: 'admission_fee', label: 'Admission Fee', type: 'one_time', tip: 'One-time fee at time of admission (sibling discount applies, per Fee Config)' },
   { key: 'caution_deposit', label: 'Caution Deposit', type: 'one_time', tip: 'Refundable security deposit' },
   { key: 'annual_charge', label: 'Annual Charge', type: 'yearly', tip: 'Charged once per academic year' },
   { key: 'activity_fee', label: 'Activity Fee', type: 'yearly', tip: 'Charged once per academic year' },
   { key: 'exam_fee', label: 'Exam Fee', type: 'yearly', tip: 'Charged once per academic year' },
   { key: 'lab_fee', label: 'Lab Fee', type: 'yearly', tip: 'For science/computer streams and classes 9–12' },
   { key: 'ai_robotics_fee', label: 'AI & Robotics Fee', type: 'yearly', tip: 'Yearly AI & Robotics fee (Class IX & X only)' },
-  { key: 'monthly_tuition', label: 'Monthly Tuition', type: 'monthly', tip: '1st month collected at admission; 15% sibling discount applies' },
+  { key: 'monthly_tuition', label: 'Monthly Tuition', type: 'monthly', tip: '1st month collected at admission; sibling discount applies, per Fee Config' },
   { key: 'upgradation_fee', label: 'Upgradation Fee', type: 'one_time', tip: 'Charged when student is promoted to next class' },
   { key: 'late_fee', label: 'Late Fee (per month)', type: 'monthly', tip: 'Penalty applied after due date if enabled' },
 ];
@@ -140,6 +141,8 @@ const FeesPage = () => {
   const [myChildren, setMyChildren] = useState([]);
   const [collectClassFilter, setCollectClassFilter] = useState('all');
   const [collectSectionFilter, setCollectSectionFilter] = useState('all');
+  const COLLECT_PAGE_SIZE = 10;
+  const [collectPage, setCollectPage] = useState(1);
 
   // Payment dialog
   const [showPayDialog, setShowPayDialog] = useState(false);
@@ -167,6 +170,10 @@ const FeesPage = () => {
 
   // Receipt preview shown immediately after a successful Collect Fee
   const [receiptPreview, setReceiptPreview] = useState(null); // { url, paymentId, receiptNumber }
+
+  // Payment methods (admin-configurable; DB-backed with a static fallback)
+  const [paymentMethods, setPaymentMethods] = useState(PAYMENT_METHODS_WITH_POS);
+  useEffect(() => { fetchPaymentMethods({ withPos: true }).then(setPaymentMethods); }, []);
 
   // Concessions
   const [concessions, setConcessions] = useState([]);
@@ -477,9 +484,12 @@ const FeesPage = () => {
     } finally { setProcessingAdmissionPay(false); }
   };
 
-  const downloadReceipt = async (paymentId) => {
+  // `ledgerId` scopes the receipt to a single fee row so the PDF shows exactly
+  // that fee (not the other fees that shared the payment).
+  const downloadReceipt = async (paymentId, ledgerId) => {
     try {
-      const res = await api.get(`/fees/receipt/${paymentId}/pdf`, { responseType: 'blob' });
+      const qs = ledgerId ? `?ledger_id=${encodeURIComponent(ledgerId)}` : '';
+      const res = await api.get(`/fees/receipt/${paymentId}/pdf${qs}`, { responseType: 'blob' });
       const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
       window.open(url, '_blank');
       setTimeout(() => URL.revokeObjectURL(url), 60000);
@@ -488,16 +498,16 @@ const FeesPage = () => {
     }
   };
 
-  // Receipt for a ledger entry — uses the stamped payment_id when present,
-  // otherwise looks up the payment that covers this entry. Handles seeded
-  // partial rows that have amount_paid but no linked payment record.
+  // Receipt for a ledger entry — always scoped to that entry so the PDF matches
+  // the fee row the admin clicked. Uses the stamped payment_id when present,
+  // otherwise looks up the payment that covers this entry.
   const downloadEntryReceipt = async (entry, studentId) => {
-    if (entry?.payment_id) return downloadReceipt(entry.payment_id);
+    if (entry?.payment_id) return downloadReceipt(entry.payment_id, entry.ledger_id);
     try {
       const res = await api.get('/fees/payments', { params: { student_id: studentId } });
       const all = Array.isArray(res.data) ? res.data : [];
       const p = all.find(x => (x.installment_ids || []).includes(entry.ledger_id));
-      if (p?.payment_id) return downloadReceipt(p.payment_id);
+      if (p?.payment_id) return downloadReceipt(p.payment_id, entry.ledger_id);
       toast.error('No receipt on record for this partial payment.');
     } catch {
       toast.error('Could not load receipt.');
@@ -950,7 +960,7 @@ const FeesPage = () => {
 
               <div>
                 <Label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Class</Label>
-                <Select value={collectClassFilter} onValueChange={v => { setCollectClassFilter(v); setCollectSectionFilter('all'); }}>
+                <Select value={collectClassFilter} onValueChange={v => { setCollectClassFilter(v); setCollectSectionFilter('all'); setCollectPage(1); }}>
                   <SelectTrigger className="h-10 w-[160px] text-sm mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Classes</SelectItem>
@@ -960,7 +970,7 @@ const FeesPage = () => {
               </div>
               <div>
                 <Label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Section</Label>
-                <Select value={collectSectionFilter} onValueChange={setCollectSectionFilter}>
+                <Select value={collectSectionFilter} onValueChange={v => { setCollectSectionFilter(v); setCollectPage(1); }}>
                   <SelectTrigger className="h-10 w-[140px] text-sm mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Sections</SelectItem>
@@ -1013,7 +1023,7 @@ const FeesPage = () => {
                     <div className="grid grid-cols-7 gap-4 px-4 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
                       <span>Admission No.</span><span>Student</span><span>Class</span><span>Section</span><span>Academic Year</span><span>Mobile</span><span className="text-right">Pending</span>
                     </div>
-                    {filteredCollect.slice(0, 50).map(s => (
+                    {filteredCollect.slice((collectPage - 1) * COLLECT_PAGE_SIZE, collectPage * COLLECT_PAGE_SIZE).map(s => (
                       <button
                         key={s.student_id}
                         onClick={() => selectSearchResult({ student_id: s.student_id, name: s.name, admission_number: s.admission_number, class_name: s.class_name, section: s.section, stream: s.stream })}
@@ -1031,9 +1041,20 @@ const FeesPage = () => {
                         </div>
                       </button>
                     ))}
-                    {filteredCollect.length > 50 && (
-                      <div className="px-4 py-2 text-xs text-slate-400 text-center bg-slate-50">
-                        Showing 50 of {filteredCollect.length} — use search to find others
+                    {filteredCollect.length > COLLECT_PAGE_SIZE && (
+                      <div className="flex items-center justify-between gap-3 px-4 py-2 bg-slate-50 border-t border-slate-200">
+                        <span className="text-xs text-slate-500">
+                          Showing {(collectPage - 1) * COLLECT_PAGE_SIZE + 1}–{Math.min(collectPage * COLLECT_PAGE_SIZE, filteredCollect.length)} of {filteredCollect.length}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <Button variant="outline" size="sm" className="h-8 px-3"
+                            disabled={collectPage <= 1}
+                            onClick={() => setCollectPage(p => Math.max(1, p - 1))}>Prev</Button>
+                          <span className="text-xs px-2">Page {collectPage} of {Math.ceil(filteredCollect.length / COLLECT_PAGE_SIZE)}</span>
+                          <Button variant="outline" size="sm" className="h-8 px-3"
+                            disabled={collectPage >= Math.ceil(filteredCollect.length / COLLECT_PAGE_SIZE)}
+                            onClick={() => setCollectPage(p => Math.min(Math.ceil(filteredCollect.length / COLLECT_PAGE_SIZE), p + 1))}>Next</Button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1640,7 +1661,7 @@ const FeesPage = () => {
                 min={sessionBounds?.start || undefined}
                 max={sessionBounds?.end || undefined}
                 value={payForm.payment_date ? ddmmyyyyToIso(payForm.payment_date) : ''}
-                onChange={e => setPayForm(f => ({ ...f, payment_date: e.target.value ? isoToDDMMYYYY(e.target.value) : '' }))}
+                onChange={e => { const iso = clampISODate(e.target.value, { min: sessionBounds?.start, max: sessionBounds?.end }); setPayForm(f => ({ ...f, payment_date: iso ? isoToDDMMYYYY(iso) : '' })); }}
               />
               <p className="text-[10px] text-slate-400 mt-1">Pick the date from the calendar. Back-dated payments allowed within this session.</p>
             </div>
@@ -1682,7 +1703,7 @@ const FeesPage = () => {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {PAYMENT_METHODS_WITH_POS.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
+                  {paymentMethods.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -1890,7 +1911,7 @@ const FeesPage = () => {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {PAYMENT_METHODS_WITH_POS.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
+                  {paymentMethods.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -2269,6 +2290,7 @@ const LedgerView = ({
                   <TableRow className="bg-white border-b border-slate-100">
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Description</TableHead>
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Gross</TableHead>
+                    <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Discount</TableHead>
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Late Fee</TableHead>
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Net Due</TableHead>
                     <TableHead className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Due Date</TableHead>
@@ -2286,6 +2308,16 @@ const LedgerView = ({
                         {entry.description}
                       </TableCell>
                       <TableCell className="text-sm">{fmt(entry.gross_amount)}</TableCell>
+                      <TableCell className="text-sm">
+                        {entry.concession_amount > 0 ? (
+                          <span className="text-green-700" title={entry.concession_reason || 'Discount applied'}>
+                            -{fmt(entry.concession_amount)}
+                            <span className="block text-[10px] font-normal text-green-600 leading-tight">
+                              {entry.concession_reason || 'Discount'}
+                            </span>
+                          </span>
+                        ) : '—'}
+                      </TableCell>
                       <TableCell className="text-sm text-red-600">
                         {entry.late_fee_applied > 0 ? `+${fmt(entry.late_fee_applied)}` : '—'}
                       </TableCell>
@@ -2304,7 +2336,7 @@ const LedgerView = ({
                       <TableCell className="w-[150px]">
                         {entry.status === 'paid' ? (
                           <Button variant="ghost" size="sm" className="h-7 px-2 text-xs"
-                            onClick={() => (onDownloadEntryReceipt ? onDownloadEntryReceipt(entry, studentId) : onDownloadReceipt(entry.payment_id))}>
+                            onClick={() => (onDownloadEntryReceipt ? onDownloadEntryReceipt(entry, studentId) : onDownloadReceipt(entry.payment_id, entry.ledger_id))}>
                             <Download className="h-3 w-3 mr-1" />PDF
                           </Button>
                         ) : entry.status === 'waived' ? (
@@ -2324,7 +2356,7 @@ const LedgerView = ({
                             {entry.amount_paid > 0 && (
                               <Button variant="ghost" size="sm" className="h-7 px-2 text-xs"
                                 title="Preview latest receipt"
-                                onClick={() => (onDownloadEntryReceipt ? onDownloadEntryReceipt(entry, studentId) : onDownloadReceipt(entry.payment_id))}>
+                                onClick={() => (onDownloadEntryReceipt ? onDownloadEntryReceipt(entry, studentId) : onDownloadReceipt(entry.payment_id, entry.ledger_id))}>
                                 <Download className="h-3 w-3 mr-1" />PDF
                               </Button>
                             )}

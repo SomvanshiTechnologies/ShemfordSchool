@@ -52,23 +52,44 @@ async def start_onboarding(request: Request):
             detail="Invalid request format. Please check the submitted data."
         )
 
+    # Normalize optional email fields: an empty string fails EmailStr validation
+    # (which would surface as an uncaught 500), so treat "" / whitespace as None.
+    for _ef in ("email", "parent_email", "mother_email"):
+        if not (str(body.get(_ef) or "")).strip():
+            body[_ef] = None
+
     # ── Required field validation ───────────────────────────────────────────
+    # Only the fields marked mandatory (*) in the admission form are required.
+    # Parent / mother details are optional — the admin can fill them in later.
     REQUIRED_FIELDS = {
         "first_name": "First Name",
         "last_name": "Last Name",
         "gender": "Gender",
         "date_of_birth": "Date of Birth",
-        "parent_name": "Father / Guardian Name",
-        "parent_phone": "Contact Number",
-        "mother_name": "Mother Name",
-        "mother_phone": "Mother Contact Number",
+        "phone": "Phone",
+        "address": "Address",
     }
     validation_errors = {}
     for field, label in REQUIRED_FIELDS.items():
         val = body.get(field)
         if not val or (isinstance(val, str) and not val.strip()):
             validation_errors[field] = f"{label} is required"
-    
+
+    # Phone numbers must be exactly 10 digits. Normalize accepted values to
+    # digits-only so the DB always stores a clean 10-digit number.
+    import re as _re
+    for _pf, _plabel in (("phone", "Phone"),
+                         ("parent_phone", "Contact number"),
+                         ("mother_phone", "Mother contact")):
+        _val = (str(body.get(_pf) or "")).strip()
+        if not _val:
+            continue  # required-ness (student phone) handled by REQUIRED_FIELDS above
+        _digits = _re.sub(r"\D", "", _val)
+        if len(_digits) != 10:
+            validation_errors[_pf] = f"{_plabel} must be exactly 10 digits"
+        else:
+            body[_pf] = _digits
+
     if validation_errors:
         error_messages = " | ".join([f"{k}: {v}" for k, v in validation_errors.items()])
         raise HTTPException(
@@ -114,12 +135,13 @@ async def start_onboarding(request: Request):
         if not sibling:
             raise HTTPException(status_code=400, detail="Sibling student not found")
     elif is_sibling and not sibling_student_id and body.get("parent_email"):
-        # Auto-detect sibling by parent email
+        # Best-effort: auto-link to an existing sibling by parent email.
         sibling = await db.students.find_one({"parent_email": body["parent_email"], "is_active": True}, {"_id": 0})
         if sibling:
             sibling_student_id = sibling["student_id"]
-        else:
-            is_sibling = False
+        # Do NOT reset is_sibling when no match is found. The admin explicitly
+        # marked this student as a sibling (the ID is optional / auto-detected),
+        # so honor the discount even when we can't link a specific record.
 
     app_obj = OnboardingApplication(
         **{k: v for k, v in body.items() if k not in ("is_sibling", "sibling_student_id")},
@@ -438,7 +460,7 @@ async def complete_onboarding(onboarding_id: str, request: Request):
     student_obj = StudentBase(
         first_name=app["first_name"],
         last_name=app["last_name"],
-        email=app.get("email"),
+        email=(app.get("email") or None),
         phone=app.get("phone"),
         date_of_birth=app.get("date_of_birth"),
         gender=app.get("gender", "male"),
@@ -448,7 +470,10 @@ async def complete_onboarding(onboarding_id: str, request: Request):
         stream=app.get("stream"),
         parent_name=app.get("parent_name"),
         parent_phone=app.get("parent_phone"),
-        parent_email=app.get("parent_email"),
+        parent_email=(app.get("parent_email") or None),
+        mother_name=app.get("mother_name"),
+        mother_phone=app.get("mother_phone"),
+        mother_email=(app.get("mother_email") or None),
         admission_number=admission_number,
         academic_year=academic_year,
         roll_number=roll_number,

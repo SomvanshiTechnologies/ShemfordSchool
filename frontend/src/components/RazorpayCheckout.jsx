@@ -75,7 +75,9 @@ export function RazorpayCheckout({ studentId, ledgerIds = [], onSuccess, onCance
       orderRef.current = internalOrderId;
 
       // ── Step 2: Mark INITIATED (pre-modal) ───────────────────────────────
-      await api.post('/payments/razorpay/initiate', { internal_order_id: internalOrderId });
+      // Fire-and-forget: this only records status for tracking, so don't make
+      // the user wait a full extra round-trip before the checkout modal opens.
+      api.post('/payments/razorpay/initiate', { internal_order_id: internalOrderId }).catch(() => {});
 
       // ── Step 3: Open Razorpay checkout ───────────────────────────────────
       await new Promise((resolve, reject) => {

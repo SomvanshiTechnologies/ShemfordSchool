@@ -17,3 +17,27 @@ export const PAYMENT_METHODS_WITH_POS = [
   ...PAYMENT_METHODS,
   { value: 'pos_terminal', label: 'POS Terminal (Ezetap)' },
 ];
+
+import api from './api';
+
+// Payment methods are admin-configurable in the DB (Settings → Payment Methods).
+// This fetches the live list; the static arrays above are the seeded defaults
+// and the fallback if the request fails. Only active methods are returned.
+// `value` strings 'split' and 'pos_terminal' keep their special UI behaviour.
+export async function fetchPaymentMethods({ withPos = true } = {}) {
+  const fallback = withPos ? PAYMENT_METHODS_WITH_POS : PAYMENT_METHODS;
+  try {
+    const res = await api.get('/settings/payment-methods');
+    const list = Array.isArray(res.data?.methods) ? res.data.methods : null;
+    if (list && list.length) {
+      let methods = list
+        .filter(m => m && m.value && m.active !== false)
+        .map(m => ({ value: m.value, label: m.label || m.value, requires_reference: m.requires_reference }));
+      if (!withPos) methods = methods.filter(m => m.value !== 'pos_terminal');
+      if (methods.length) return methods;
+    }
+  } catch {
+    /* fall back to the static defaults below */
+  }
+  return fallback;
+}

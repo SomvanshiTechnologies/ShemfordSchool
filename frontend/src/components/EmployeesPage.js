@@ -3,6 +3,7 @@ import api from '../lib/api';
 import { getCached, setCached } from '../lib/pageCache';
 import { copyText } from '../lib/clipboard';
 import { useSession } from '../contexts/SessionContext';
+import { clampISODate, todayISO } from '../lib/dateBounds';
 
 const TopProgressBar = ({ active }) =>
   active ? (
@@ -504,8 +505,9 @@ const EmployeesPage = () => {
                     <Input
                       id="dob"
                       type="date"
+                      max={todayISO()}
                       value={formData.date_of_birth}
-                      onChange={(e) => setFormData({...formData, date_of_birth: e.target.value})}
+                      onChange={(e) => setFormData({...formData, date_of_birth: clampISODate(e.target.value, { max: todayISO() })})}
                       data-testid="emp-dob"
                     />
                   </div>
@@ -807,8 +809,9 @@ const EmployeesPage = () => {
                   id="edit_dob"
                   type="date"
                   className="w-44"
+                  max={todayISO()}
                   value={editData.date_of_birth}
-                  onChange={(e) => setEditData({...editData, date_of_birth: e.target.value})}
+                  onChange={(e) => setEditData({...editData, date_of_birth: clampISODate(e.target.value, { max: todayISO() })})}
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">

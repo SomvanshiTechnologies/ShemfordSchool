@@ -1018,13 +1018,64 @@ async def record_admission_payment(request: Request):
     if not pending_entries:
         raise HTTPException(status_code=400, detail="No pending admission fees found")
 
+    # Oldest-first, so a partial amount clears the earliest dues first.
+    pending_entries.sort(key=lambda e: (e.get("due_date") or "", e.get("fee_type") or ""))
     total_amount = round(sum(e["net_amount"] for e in pending_entries), 2)
+
+    # Optional partial collection: an `amount` smaller than the full admission
+    # total is spread across the pending entries oldest-first — fully-covered
+    # entries become 'paid', the boundary entry is left partially paid, and the
+    # remainder stay pending. Omit `amount` to collect the full total.
+    partial_amount = body.get("amount")
+    if partial_amount is not None:
+        try:
+            partial_amount = round(float(partial_amount), 2)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid amount")
+        if partial_amount <= 0:
+            raise HTTPException(status_code=400, detail="Amount must be greater than 0")
+        if partial_amount > total_amount + 0.01:
+            raise HTTPException(status_code=400,
+                detail=f"Amount Rs.{partial_amount:,.2f} exceeds total due Rs.{total_amount:,.2f}")
+        collect_total = partial_amount
+    else:
+        collect_total = total_amount
+    is_partial = collect_total < total_amount - 0.01
+
+    today = datetime.now().strftime("%Y-%m-%d")
     receipt_number = await get_next_receipt_number()
+
+    # Spread the collected amount across entries, oldest first.
+    pending_updates = []   # (ledger_id, set_doc) — payment_id stamped after FeePayment
+    covered_entries = []
+    remaining_to_apply = collect_total
+    for entry in pending_entries:
+        if remaining_to_apply <= 0.005:
+            break
+        net = float(entry["net_amount"])
+        prev_paid = float(entry.get("amount_paid") or 0)
+        entry_remaining = round(net - prev_paid, 2)
+        if entry_remaining <= 0:
+            continue
+        pay_here = min(remaining_to_apply, entry_remaining)
+        new_paid = round(prev_paid + pay_here, 2)
+        new_remaining = round(net - new_paid, 2)
+        covered_entries.append(entry)
+        if new_remaining < 0.005:
+            set_doc = {"status": "paid", "amount_paid": new_paid, "remaining_balance": 0,
+                       "paid_date": today, "receipt_number": receipt_number}
+        else:
+            past_due = bool(entry.get("due_date") and entry["due_date"] < today)
+            set_doc = {"status": "overdue" if past_due else "pending",
+                       "amount_paid": new_paid, "remaining_balance": new_remaining,
+                       "paid_date": today, "receipt_number": receipt_number}
+        pending_updates.append((entry["ledger_id"], set_doc))
+        remaining_to_apply = round(remaining_to_apply - pay_here, 2)
 
     payment = FeePayment(
         student_id=student_id,
-        installment_ids=[e["ledger_id"] for e in pending_entries],
-        amount=total_amount,
+        installment_ids=[e["ledger_id"] for e in covered_entries],
+        amount=collect_total,
         payment_method=payment_method,
         transaction_id=transaction_id,
         collected_by=user["user_id"],
@@ -1035,29 +1086,20 @@ async def record_admission_payment(request: Request):
     pay_dict["receipt_number"] = receipt_number
     pay_dict["created_at"] = pay_dict["created_at"].isoformat()
 
-    # Split-payment breakdown — sums must equal the admission total.
+    # Split-payment breakdown — sums must equal the amount actually collected.
     if split_payments and isinstance(split_payments, dict):
         try:
             split_total = round(sum(float(v) for v in split_payments.values()), 2)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid split_payments format")
-        if abs(split_total - total_amount) > 0.01:
+        if abs(split_total - collect_total) > 0.01:
             raise HTTPException(status_code=400,
-                detail=f"Split payment total ({split_total}) does not match admission total ({total_amount})")
+                detail=f"Split payment total ({split_total}) does not match collected amount ({collect_total})")
         pay_dict["split_payments"] = {k: float(v) for k, v in split_payments.items() if float(v) > 0}
 
-    today = datetime.now().strftime("%Y-%m-%d")
     ledger_updates = [
-        UpdateOne(
-            {"ledger_id": entry["ledger_id"]},
-            {"$set": {
-                "status": "paid",
-                "paid_date": today,
-                "payment_id": payment.payment_id,
-                "receipt_number": receipt_number,
-            }}
-        )
-        for entry in pending_entries
+        UpdateOne({"ledger_id": lid}, {"$set": {**doc, "payment_id": payment.payment_id}})
+        for lid, doc in pending_updates
     ]
 
     try:
@@ -1070,11 +1112,12 @@ async def record_admission_payment(request: Request):
         await db.fee_payments.insert_one(pay_dict)
         await db.student_ledger.bulk_write(ledger_updates)
 
-    # Update onboarding record if exists
+    # Update onboarding record if exists. Only flag as fully paid when the whole
+    # admission total was collected (partial collections leave a balance due).
     await db.onboarding.update_many(
         {"student_id": student_id},
         {"$set": {
-            "admission_fee_paid": True,
+            "admission_fee_paid": not is_partial,
             "admission_fee_receipt": receipt_number,
             "admission_fee_payment_id": payment.payment_id,
         }}
@@ -1082,16 +1125,26 @@ async def record_admission_payment(request: Request):
 
     await refresh_overdue_for_student(student_id)
     await create_audit_log("fee_payment", payment.payment_id, "admission_payment", {
-        "student_id": student_id, "amount": total_amount, "method": payment_method
+        "student_id": student_id, "amount": collect_total, "method": payment_method,
+        "partial": is_partial,
     }, user)
 
     pay_dict.pop("_id", None)
+    balance_due = round(total_amount - collect_total, 2)
+    if is_partial:
+        msg = (f"Partial admission payment of ₹{collect_total:,.2f} recorded. "
+               f"₹{balance_due:,.2f} still due. Receipt: {receipt_number}")
+    else:
+        msg = f"Admission fee of ₹{collect_total:,.2f} recorded. Receipt: {receipt_number}"
     return {
         "payment": pay_dict,
         "receipt_number": receipt_number,
-        "amount": total_amount,
-        "entries_paid": len(pending_entries),
-        "message": f"Admission fee of ₹{total_amount:,.2f} recorded. Receipt: {receipt_number}"
+        "amount": collect_total,
+        "total_due": total_amount,
+        "balance_due": balance_due,
+        "is_partial": is_partial,
+        "entries_paid": len(covered_entries),
+        "message": msg,
     }
 
 
@@ -1275,8 +1328,12 @@ async def pay_fee(request: Request):
         rb = e.get("remaining_balance")
         return float(rb) if rb is not None and rb > 0 else float(e.get("net_amount", 0))
 
-    # Compute how much of `total` this payment will apply to each entry.
-    # Single-entry path supports partial; multi-entry must be full-clear.
+    # Compute how much of this payment applies to each selected entry.
+    # A partial `amount` is spread across the selected entries oldest-first:
+    # the earliest dues are covered in full and the boundary entry is left
+    # partially paid. Omit `amount` to pay every selected entry in full. This
+    # works whether one fee or several are selected.
+    total_due = round(sum(_entry_remaining(e) for e in entries_to_pay), 2)
     is_partial = False
     per_entry_paid = {}  # ledger_id -> amount paid in THIS payment
     if partial_amount is not None:
@@ -1284,30 +1341,37 @@ async def pay_fee(request: Request):
             partial_amount = round(float(partial_amount), 2)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid amount")
-        if len(entries_to_pay) != 1:
-            raise HTTPException(status_code=400,
-                detail="Partial payment supports exactly one ledger entry. Pick a single fee to pay partially.")
         if partial_amount <= 0:
             raise HTTPException(status_code=400, detail="Amount must be greater than 0")
-        entry = entries_to_pay[0]
-        remaining = _entry_remaining(entry)
-        if partial_amount > remaining + 0.001:
+        if partial_amount > total_due + 0.01:
             raise HTTPException(status_code=400,
-                detail=f"Amount ₹{partial_amount:,.2f} exceeds remaining ₹{remaining:,.2f} on this entry.")
-        per_entry_paid[entry["ledger_id"]] = partial_amount
+                detail=f"Amount Rs.{partial_amount:,.2f} exceeds total due Rs.{total_due:,.2f}.")
+        remaining_to_apply = partial_amount
+        for e in entries_to_pay:  # already sorted oldest-first by due_date
+            if remaining_to_apply <= 0.005:
+                break
+            rem = _entry_remaining(e)
+            if rem <= 0:
+                continue
+            pay_here = round(min(remaining_to_apply, rem), 2)
+            per_entry_paid[e["ledger_id"]] = pay_here
+            remaining_to_apply = round(remaining_to_apply - pay_here, 2)
         total = partial_amount
-        is_partial = partial_amount < remaining - 0.001
+        is_partial = partial_amount < total_due - 0.01
     else:
         # Full payment of every selected entry (using remaining_balance to
         # support entries already partially paid via earlier transactions).
         for e in entries_to_pay:
             per_entry_paid[e["ledger_id"]] = round(_entry_remaining(e), 2)
         total = round(sum(per_entry_paid.values()), 2)
+
+    # Only the entries this payment actually touched go on the receipt/record.
+    covered_entries = [e for e in entries_to_pay if per_entry_paid.get(e["ledger_id"], 0) > 0]
     receipt_number = await get_next_receipt_number()
 
     payment = FeePayment(
         student_id=student_id,
-        installment_ids=[e["ledger_id"] for e in entries_to_pay],
+        installment_ids=[e["ledger_id"] for e in covered_entries],
         amount=total,
         payment_method=payment_method,
         transaction_id=transaction_id,
@@ -1345,7 +1409,7 @@ async def pay_fee(request: Request):
     # Per-entry ledger update: increment amount_paid, recompute remaining,
     # flip status to 'partially_paid' or 'paid' accordingly.
     ledger_updates = []
-    for entry in entries_to_pay:
+    for entry in covered_entries:
         paid_now = per_entry_paid[entry["ledger_id"]]
         prev_paid = float(entry.get("amount_paid") or 0)
         new_paid = round(prev_paid + paid_now, 2)
@@ -1401,8 +1465,8 @@ async def pay_fee(request: Request):
     pay_dict.pop("_id", None)
     msg = f"Payment of ₹{total:,.2f} recorded. Receipt: {receipt_number}"
     if is_partial:
-        entry = entries_to_pay[0]
-        new_remaining = round(float(entry.get("net_amount", 0)) - (float(entry.get("amount_paid") or 0) + total), 2)
+        # Balance still owed across the entries that were selected for this payment.
+        new_remaining = round(total_due - total, 2)
         if new_remaining < 0: new_remaining = 0
         msg = (f"Partial payment of ₹{total:,.2f} recorded. "
                f"₹{new_remaining:,.2f} still due. Receipt: {receipt_number}")
@@ -1410,7 +1474,7 @@ async def pay_fee(request: Request):
         "payment": pay_dict,
         "receipt_number": receipt_number,
         "amount": total,
-        "entries_paid": len(entries_to_pay),
+        "entries_paid": len(covered_entries),
         "is_partial": is_partial,
         "message": msg,
     }
@@ -1712,7 +1776,7 @@ async def list_concessions(request: Request):
 # ─── Receipt PDF ──────────────────────────────────────────────────────────────
 
 @router.get("/fees/receipt/{payment_id}/pdf")
-async def download_receipt_pdf(payment_id: str, request: Request):
+async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Optional[str] = None):
     await get_current_user(request)
 
     payment = await db.fee_payments.find_one({"payment_id": payment_id}, {"_id": 0})
@@ -1723,11 +1787,32 @@ async def download_receipt_pdf(payment_id: str, request: Request):
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    # Fetch ledger entries paid in this payment
-    ledger_ids = payment.get("installment_ids", [])
-    entries = await db.student_ledger.find(
-        {"ledger_id": {"$in": ledger_ids}}, {"_id": 0}
-    ).to_list(100)
+    # Per-fee receipt: when a specific ledger entry is requested (the receipt
+    # button next to a single fee row), scope the receipt to THAT fee only —
+    # showing its own stamped receipt number / paid date / amount. This avoids
+    # showing unrelated fees when a payment_id link is shared or imprecise.
+    if ledger_id:
+        scoped = await db.student_ledger.find_one({"ledger_id": ledger_id}, {"_id": 0})
+        if scoped:
+            entries = [scoped]
+            payment = {
+                **payment,
+                "receipt_number": scoped.get("receipt_number") or payment.get("receipt_number"),
+                "payment_date": scoped.get("paid_date") or payment.get("payment_date"),
+                # The amount receipted for this fee = what's been paid on it.
+                "amount": round(float(scoped.get("amount_paid") or scoped.get("net_amount", 0)), 2),
+            }
+        else:
+            ledger_ids = payment.get("installment_ids", [])
+            entries = await db.student_ledger.find(
+                {"ledger_id": {"$in": ledger_ids}}, {"_id": 0}
+            ).to_list(100)
+    else:
+        # Fetch ledger entries paid in this payment
+        ledger_ids = payment.get("installment_ids", [])
+        entries = await db.student_ledger.find(
+            {"ledger_id": {"$in": ledger_ids}}, {"_id": 0}
+        ).to_list(100)
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4,
@@ -1774,12 +1859,25 @@ async def download_receipt_pdf(payment_id: str, request: Request):
         class_label = f"{_cls} – {_section}" if _section else _cls
         stream_label = _stream.title() if _stream else "—"
 
+    # Show the split breakdown inline on the method line when present. The
+    # breakdown can be long, so render it as a wrapping Paragraph instead of a
+    # plain string — otherwise it overflows the cell and overlaps the Txn ID
+    # column.
+    _method_label = (payment.get("payment_method", "") or "").upper()
+    _split = payment.get("split_payments")
+    if _split and isinstance(_split, dict):
+        _parts = " + ".join(f"{k.title()} Rs.{float(v):,.2f}" for k, v in _split.items() if float(v) > 0)
+        if _parts:
+            _method_label = f"SPLIT ({_parts})"
+    _info_val_style = ParagraphStyle("InfoVal", parent=styles["Normal"], fontSize=9, leading=11)
+    _method_cell = Paragraph(_method_label, _info_val_style)
+
     info_data = [
         ["Receipt No.", payment.get("receipt_number", ""), "Date", payment.get("payment_date", "")],
         ["Student Name", f"{student['first_name']} {student['last_name']}",
          "Admission No.", student.get("admission_number", "")],
         ["Class", class_label, "Stream", stream_label],
-        ["Payment Method", payment.get("payment_method", "").upper(),
+        ["Payment Method", _method_cell,
          "Txn ID", payment.get("transaction_id", "—") or "—"],
     ]
     info_table = Table(info_data, colWidths=[1.4 * inch, 2.1 * inch, 1.4 * inch, 2.1 * inch])
@@ -1794,92 +1892,81 @@ async def download_receipt_pdf(payment_id: str, request: Request):
     elements.append(info_table)
     elements.append(Spacer(1, 12))
 
-    fee_data = [["Description", "Fee Type", "Gross (Rs.)", "Discount (Rs.)", "Late Fee (Rs.)", "Net (Rs.)"]]
+    # Itemise each fee with what was PAID in this transaction. For PARTIAL
+    # payments (a balance still pending on any fee) we also show a Balance
+    # column + Balance Due — read live from the ledger (remaining_balance) so
+    # the receipt always matches the DB. A fully-cleared payment keeps it simple
+    # (paid amounts only, no balance column).
+    total_paid = round(float(payment.get("amount", 0)), 2)
+    n_entries = len(entries)
+    rows = []          # (description, fee_type, paid_here, balance)
+    total_balance = 0.0
     for e in entries:
-        fee_data.append([
-            e.get("description", ""),
-            e.get("fee_type", "").replace("_", " ").title(),
-            f"{e['gross_amount']:,.2f}",
-            f"{e.get('concession_amount', 0):,.2f}" if e.get("concession_amount", 0) > 0 else "—",
-            f"{e.get('late_fee_applied', 0):,.2f}" if e.get("late_fee_applied", 0) > 0 else "—",
-            f"{e['net_amount']:,.2f}",
-        ])
-    # Summary: total billed (net), what was paid in THIS txn, and the balance
-    # still remaining on these fees after this payment.
-    net_total = round(sum(e["net_amount"] for e in entries), 2)
-    total_remaining = round(sum(float(e.get("remaining_balance", 0) or 0) for e in entries), 2)
-    fee_data.append(["", "", "", "", "TOTAL BILLED (Net)", f"{net_total:,.2f}"])
-    fee_data.append(["", "", "", "", "AMOUNT PAID (this txn)", f"{payment['amount']:,.2f}"])
-    fee_data.append(["", "", "", "", "BALANCE REMAINING", f"{total_remaining:,.2f}"])
+        net = float(e.get("net_amount", 0))
+        bal = float(e.get("remaining_balance", 0) or 0)  # pending after this payment (live)
+        if n_entries == 1:
+            paid_here = total_paid          # whole payment applies to this fee
+        else:
+            paid_here = round(net - bal, 2) if bal > 0 else net
+        total_balance += bal
+        rows.append((e.get("description", ""), e.get("fee_type", "").replace("_", " ").title(),
+                     paid_here, bal))
+    total_balance = round(total_balance, 2)
+    is_partial_receipt = total_balance > 0.005
 
-    col_w = [2.6 * inch, 1.0 * inch, 0.9 * inch, 0.9 * inch, 0.9 * inch, 0.9 * inch]
-    fee_table = Table(fee_data, colWidths=col_w)
-    fee_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), orange),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("ALIGN", (2, 0), (-1, -1), "RIGHT"),
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
-        ("PADDING", (0, 0), (-1, -1), 5),
-        # Last three rows are the summary block.
-        ("BACKGROUND", (0, -3), (-1, -1), colors.HexColor("#f5f5f5")),
-        ("FONTNAME", (0, -3), (-1, -1), "Helvetica-Bold"),
-        ("TEXTCOLOR", (4, -1), (-1, -1), colors.HexColor("#c0392b")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -4), [colors.white, colors.HexColor("#fafafa")]),
-    ]))
-    elements.append(fee_table)
-    elements.append(Spacer(1, 12))
-
-    # ── Payment history for these fee entries ──────────────────────────────
-    # Partial payments each create their own record against the same ledger
-    # entry. Show ALL of them combined so the receipt reflects the full payment
-    # trail (e.g. ₹200 + ₹300) with cumulative total and remaining balance.
-    related_payments = await db.fee_payments.find(
-        {"student_id": payment["student_id"], "installment_ids": {"$in": ledger_ids}},
-        {"_id": 0},
-    ).to_list(200)
-    related_payments.sort(key=lambda p: str(p.get("payment_date") or p.get("created_at") or ""))
-
-    if len(related_payments) > 1:
-        hist_data = [["#", "Date", "Receipt No.", "Method", "Amount (Rs.)"]]
-        total_received = 0.0
-        for i, p in enumerate(related_payments, start=1):
-            amt = float(p.get("amount", 0))
-            total_received += amt
-            is_current = p.get("payment_id") == payment_id
-            hist_data.append([
-                str(i),
-                str(p.get("payment_date") or p.get("created_at", ""))[:10],
-                (p.get("receipt_number", "") or "") + ("  (this)" if is_current else ""),
-                (p.get("payment_method", "") or "").upper(),
-                f"{amt:,.2f}",
-            ])
-        total_received = round(total_received, 2)
-        balance = round(max(0.0, net_total - total_received), 2)
-        hist_data.append(["", "", "", "TOTAL RECEIVED", f"{total_received:,.2f}"])
-        hist_data.append(["", "", "", "BALANCE DUE", f"{balance:,.2f}"])
-
-        elements.append(Paragraph("Payment History (this fee)", normal_bold))
-        elements.append(Spacer(1, 4))
-        hist_table = Table(hist_data, colWidths=[0.4 * inch, 1.1 * inch, 2.4 * inch, 1.4 * inch, 1.2 * inch])
-        hist_table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#334155")),
+    if is_partial_receipt:
+        # Partial payment — show Paid + Balance pending.
+        fee_data = [["Description", "Fee Type", "Paid (Rs.)", "Balance (Rs.)"]]
+        for desc, ftype, paid_here, bal in rows:
+            fee_data.append([desc, ftype, f"{paid_here:,.2f}", f"{bal:,.2f}"])
+        fee_data.append(["TOTAL", "", f"{total_paid:,.2f}", f"{total_balance:,.2f}"])
+        col_w = [3.0 * inch, 1.3 * inch, 1.1 * inch, 1.1 * inch]
+        fee_table = Table(fee_data, colWidths=col_w)
+        fee_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), orange),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
             ("FONTSIZE", (0, 0), (-1, -1), 8),
-            ("ALIGN", (4, 0), (4, -1), "RIGHT"),
-            ("ALIGN", (3, -2), (3, -1), "RIGHT"),
+            ("ALIGN", (2, 0), (3, -1), "RIGHT"),
             ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
             ("PADDING", (0, 0), (-1, -1), 5),
-            ("BACKGROUND", (0, -2), (-1, -1), colors.HexColor("#f5f5f5")),
-            ("FONTNAME", (0, -2), (-1, -1), "Helvetica-Bold"),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -3), [colors.white, colors.HexColor("#fafafa")]),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f5f5f5")),
+            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+            ("TEXTCOLOR", (3, -1), (3, -1), colors.HexColor("#c0392b")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#fafafa")]),
         ]))
-        elements.append(hist_table)
-    elements.append(Spacer(1, 24))
+        elements.append(fee_table)
+        elements.append(Spacer(1, 6))
+        _conf = ParagraphStyle("Conf", parent=styles["Normal"], fontSize=9)
+        elements.append(Paragraph(
+            f"Paid now: <b>Rs.{total_paid:,.2f}</b> &nbsp;|&nbsp; "
+            f"Balance still pending: <b>Rs.{total_balance:,.2f}</b>", _conf))
+        elements.append(Spacer(1, 18))
+    else:
+        # Full payment — just the amount paid.
+        fee_data = [["Description", "Fee Type", "Amount Paid (Rs.)"]]
+        for desc, ftype, paid_here, bal in rows:
+            fee_data.append([desc, ftype, f"{paid_here:,.2f}"])
+        fee_data.append(["", "TOTAL PAID", f"{total_paid:,.2f}"])
+        col_w = [3.8 * inch, 1.4 * inch, 1.3 * inch]
+        fee_table = Table(fee_data, colWidths=col_w)
+        fee_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), orange),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("ALIGN", (2, 0), (2, -1), "RIGHT"),
+            ("ALIGN", (1, -1), (1, -1), "RIGHT"),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
+            ("PADDING", (0, 0), (-1, -1), 5),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f5f5f5")),
+            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#fafafa")]),
+        ]))
+        elements.append(fee_table)
+        elements.append(Spacer(1, 24))
 
     if payment.get("remarks"):
         elements.append(Paragraph(f"Remarks: {payment['remarks']}", styles["Normal"]))

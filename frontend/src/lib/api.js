@@ -55,9 +55,13 @@ api.interceptors.response.use(
     const originalRequest = error.config;
 
     if (status === 401 && !originalRequest._retry) {
-      // Don't try to refresh on auth endpoints themselves
+      // Don't try to refresh on the public/unauthenticated auth endpoints — a
+      // 401 there is a real failure (bad credentials / not logged in), not an
+      // expired session. Attempting a token refresh + retry (or logout
+      // redirect) just adds a slow, pointless round-trip to flows like the
+      // student self-service password reset.
       const url = originalRequest.url || '';
-      const isAuthEndpoint = url.includes('/auth/login') || url.includes('/auth/refresh') || url.includes('/auth/logout');
+      const isAuthEndpoint = /\/auth\/(login|register|refresh|logout|session|forgot-password|reset-password|student-reset-password)/.test(url);
       const hasRefreshToken = !!localStorage.getItem('refresh_token');
 
       if (!isAuthEndpoint && hasRefreshToken) {

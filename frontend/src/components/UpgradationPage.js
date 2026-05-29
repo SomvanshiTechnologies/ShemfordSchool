@@ -62,7 +62,10 @@ export default function UpgradationPage() {
   const [requiresApproval, setRequiresApproval] = useState(false);
   const [duesLoading, setDuesLoading] = useState(false);
 
-  // Collect pending fees dialog
+  // Collect pending fees dialog. `collectStudent` is the student whose dues we
+  // are collecting — the upgrade-tab selected student, OR a row picked from the
+  // Upgradation History approval queue.
+  const [collectStudent, setCollectStudent] = useState(null);
   const [showCollectDialog, setShowCollectDialog] = useState(false);
   const [collectSplitCash, setCollectSplitCash] = useState('');
   const [collectSplitOnline, setCollectSplitOnline] = useState('');
@@ -70,11 +73,20 @@ export default function UpgradationPage() {
   // Receipt preview shown right after a successful Collect Fee in either dialog
   const [receiptPreview, setReceiptPreview] = useState(null); // { url, paymentId, receiptNumber }
   const [pendingEntries, setPendingEntries] = useState([]);
+  // Full ledger (all statuses) for the dues table, so already-paid / partially-
+  // paid entries show with their status + a receipt PDF link.
+  const [ledgerEntries, setLedgerEntries] = useState([]);
   const [collectIds, setCollectIds] = useState([]);
   const [collectMethod, setCollectMethod] = useState('cash');
   const [collectTxn, setCollectTxn] = useState('');
   const [collectPaying, setCollectPaying] = useState(false);
   const [collectLoading, setCollectLoading] = useState(false);
+  // When the Collect dialog is opened from a History row, remember which row so
+  // the just-collected payment's receipt can be surfaced next to that row's
+  // Collect button (the dues payment is separate from the upgradation-fee one).
+  const [collectRowId, setCollectRowId] = useState(null);
+  // upgradation_id -> { paymentId, receiptNumber } for the latest dues collection
+  const [collectedReceipts, setCollectedReceipts] = useState({});
 
   // Payment dialog state
   const [showPayDialog, setShowPayDialog] = useState(false);
@@ -96,6 +108,8 @@ export default function UpgradationPage() {
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyYear, setHistoryYear] = useState('');
+  const HISTORY_PAGE_SIZE = 10;
+  const [historyPage, setHistoryPage] = useState(1);
 
   useEffect(() => { loadClasses(); }, []);
 
@@ -165,6 +179,7 @@ export default function UpgradationPage() {
       api.get(`/fees/ledger/${s.student_id}`).then(res => {
         const ledger = res.data?.ledger || {};
         const all = [...(ledger.one_time || []), ...(ledger.yearly || []), ...(ledger.monthly || [])];
+        setLedgerEntries(all);
         const pending = all.filter(e => e.status === 'pending' || e.status === 'overdue');
         setPendingEntries(pending);
         setCollectIds(pending.map(e => e.ledger_id));
@@ -173,6 +188,7 @@ export default function UpgradationPage() {
       setFeeBlockMsg(null);
       setRequiresApproval(false);  // clean account → direct upgrade
       setPendingEntries([]);
+      setLedgerEntries([]);
     }
 
     // Auto-advance to the next academic year based on student's current year
@@ -194,7 +210,7 @@ export default function UpgradationPage() {
     }
   }
 
-  async function doUpgrade() {
+  async function doUpgrade(opts = {}) {
     if (!selected || !toClass || !toSection) {
       toast.error('Select student, target class and section');
       return;
@@ -209,15 +225,18 @@ export default function UpgradationPage() {
     upgradingRef.current = true;
     setUpgrading(true);
     try {
+      // No approval step: a clean account (or one whose dues were just collected)
+      // upgrades immediately. force_upgrade=false lets the backend auto-approve
+      // when there are no outstanding dues. Callers can pass an explicit override
+      // (e.g. right after collecting fees, before React state has re-rendered).
+      const forceUpgrade = typeof opts.forceUpgrade === 'boolean' ? opts.forceUpgrade : false;
       const res = await api.post(`/students/${selected.student_id}/upgrade`, {
         to_class: toClass,
         to_section: toSection,
         to_stream: effectiveStream || null,
         academic_year: toAcademicYear,
         notes,
-        // Students who had dues go through admin approval (queued in History);
-        // clean accounts upgrade immediately (auto-approved).
-        force_upgrade: requiresApproval,
+        force_upgrade: forceUpgrade,
       });
       toast.success(res.data.message || (res.data.auto_approved
         ? 'Student upgraded.'
@@ -263,20 +282,27 @@ export default function UpgradationPage() {
     }
   }
 
-  async function openCollectDialog() {
-    if (!selected) return;
+  async function openCollectDialog(studentArg = null, rowId = null) {
+    // studentArg comes from a History-tab row; default to the upgrade-tab student.
+    const stu = (studentArg && studentArg.student_id) ? studentArg : selected;
+    if (!stu) return;
+    setCollectRowId(rowId);
+    setCollectStudent(stu);
     setCollectLoading(true);
     setCollectPartial('');
     setCollectSplitCash('');
     setCollectSplitOnline('');
     setShowCollectDialog(true);
     try {
-      const res = await api.get(`/fees/ledger/${selected.student_id}`);
+      const res = await api.get(`/fees/ledger/${stu.student_id}`);
       const ledger = res.data?.ledger || {};
       const all = [...(ledger.one_time || []), ...(ledger.yearly || []), ...(ledger.monthly || [])];
       const entries = all.filter(e => e.status === 'pending' || e.status === 'overdue');
       setPendingEntries(entries);
-      setCollectIds(entries.map(e => e.ledger_id));
+      // Nothing pre-selected: the admin ticks exactly which fees to collect, so
+      // the payment (and its receipt) contains only those fees. Ticking a single
+      // fee reveals the partial-amount field. Use "Select all" to collect all.
+      setCollectIds([]);
     } catch (e) {
       if (!e._handled) toast.error(e.response?.data?.detail || 'Failed to load pending fees');
       setShowCollectDialog(false);
@@ -286,11 +312,14 @@ export default function UpgradationPage() {
   }
 
   // Fetch the receipt PDF and surface it in an inline preview modal —
-  // called right after either Collect Fee flow succeeds.
-  async function openReceiptPreview(paymentId, receiptNumber) {
+  // called right after either Collect Fee flow succeeds. Pass `ledgerId` to
+  // scope the receipt to a single fee row (so it shows that exact fee, not the
+  // other fees that shared the payment).
+  async function openReceiptPreview(paymentId, receiptNumber, ledgerId) {
     if (!paymentId) return;
     try {
-      const res = await api.get(`/fees/receipt/${paymentId}/pdf`, { responseType: 'blob' });
+      const qs = ledgerId ? `?ledger_id=${encodeURIComponent(ledgerId)}` : '';
+      const res = await api.get(`/fees/receipt/${paymentId}/pdf${qs}`, { responseType: 'blob' });
       const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
       setReceiptPreview({ url, paymentId, receiptNumber });
     } catch {
@@ -304,19 +333,19 @@ export default function UpgradationPage() {
 
   async function payPendingFees() {
     if (!collectIds.length) { toast.error('Select at least one entry'); return; }
+    const target = collectStudent || selected;
+    if (!target) return;
     const payload = {
-      student_id: selected.student_id,
+      student_id: target.student_id,
       ledger_ids: collectIds,
       payment_method: collectMethod,
       transaction_id: collectTxn || undefined,
     };
-    // Partial payment only valid for a single selected entry.
+    // Partial payment: a smaller amount is spread across the selected fees
+    // (oldest first) by the backend. Works for any number of selected fees.
     const partial = parseFloat(collectPartial);
-    if (collectIds.length === 1 && collectPartial && partial > 0) {
+    if (collectPartial && partial > 0) {
       payload.amount = partial;
-    } else if (collectPartial && collectIds.length !== 1) {
-      toast.error('Partial payment supports exactly one selected fee.');
-      return;
     }
     if (collectMethod === 'split') {
       const cash = parseFloat(collectSplitCash) || 0;
@@ -334,24 +363,51 @@ export default function UpgradationPage() {
       setCollectSplitCash('');
       setCollectSplitOnline('');
       setCollectPartial('');
-      openReceiptPreview(res.data.payment?.payment_id, res.data.receipt_number);
-      // Re-fetch student to update fee_status
-      const sr = await api.get(`/students/${selected.student_id}`);
-      const updatedStudent = sr.data;
-      setSelected(updatedStudent);
-      if (updatedStudent.fee_status === 'paid') {
-        setFeeBlockMsg(null);
-        // Dues cleared → if a target class & section are already chosen, queue
-        // the upgrade for approval right away (matches the collect → history →
-        // approve flow). Otherwise prompt to pick the target first.
-        if (toClass && toSection) {
-          toast.success('Fees cleared — sending to Upgradation History for approval.');
-          doUpgrade();
-        } else {
-          toast.success(
-            'All fees cleared. Pick the target class & section, then click "Send for Approval".',
-            { duration: 6000 }
-          );
+      const collectedPaymentId = res.data.payment?.payment_id;
+      openReceiptPreview(collectedPaymentId, res.data.receipt_number);
+      // Remember the receipt for the row it was collected from, so a download
+      // button shows next to that row's Collect button (same as Fees mgmt).
+      if (collectRowId && collectedPaymentId) {
+        setCollectedReceipts(prev => ({
+          ...prev,
+          [collectRowId]: { paymentId: collectedPaymentId, receiptNumber: res.data.receipt_number },
+        }));
+      }
+      // Refresh the approval queue so the dues badge updates after collecting
+      // from a History row.
+      loadHistory();
+      // Upgrade-tab flow only: if we collected for the student currently selected
+      // for upgrade, refresh them and continue the (auto) upgrade once dues clear.
+      if (selected && target.student_id === selected.student_id) {
+        // Refresh the dues table so paid/partially-paid entries show their new
+        // status + receipt (the "Cannot Upgrade" card stays visible while any
+        // dues remain — e.g. after a partial payment).
+        try {
+          const lr = await api.get(`/fees/ledger/${selected.student_id}`);
+          const lg = lr.data?.ledger || {};
+          const all = [...(lg.one_time || []), ...(lg.yearly || []), ...(lg.monthly || [])];
+          setLedgerEntries(all);
+          const pending = all.filter(e => e.status === 'pending' || e.status === 'overdue');
+          setPendingEntries(pending);
+          setCollectIds(pending.map(e => e.ledger_id));
+        } catch { /* non-fatal */ }
+        const sr = await api.get(`/students/${selected.student_id}`);
+        const updatedStudent = sr.data;
+        setSelected(updatedStudent);
+        if (updatedStudent.fee_status === 'paid') {
+          setFeeBlockMsg(null);
+          // Dues cleared → no approval step. Upgrade immediately if a target class
+          // & section are already chosen; otherwise prompt to pick the target.
+          setRequiresApproval(false);
+          if (toClass && toSection) {
+            toast.success('Fees cleared — upgrading student.');
+            doUpgrade({ forceUpgrade: false });
+          } else {
+            toast.success(
+              'All fees cleared. Pick the target class & section, then click "Confirm Upgrade".',
+              { duration: 6000 }
+            );
+          }
         }
       }
     } catch (e) {
@@ -441,6 +497,7 @@ export default function UpgradationPage() {
       // Show every upgrade regardless of fee status; the Fee Status column will
       // reflect the current ledger state (Paid / Pending / Overdue).
       setHistory(res.data || []);
+      setHistoryPage(1);
     } catch (e) {
       if (!e._handled) toast.error('Failed to load history: ' + (e.response?.data?.detail || e.message));
     } finally {
@@ -604,7 +661,7 @@ export default function UpgradationPage() {
                 <div className="flex items-center gap-2 text-sm text-red-500">
                   <Loader2 className="h-4 w-4 animate-spin" /> Loading pending dues...
                 </div>
-              ) : pendingEntries.length > 0 ? (
+              ) : ledgerEntries.length > 0 ? (
                 <div className="rounded-xl border border-red-200 overflow-hidden">
                   <table className="w-full text-sm">
                     <thead className="bg-red-100">
@@ -613,28 +670,56 @@ export default function UpgradationPage() {
                         <th className="text-left px-3 py-2 text-red-700 font-medium">Due Date</th>
                         <th className="text-left px-3 py-2 text-red-700 font-medium">Status</th>
                         <th className="text-right px-3 py-2 text-red-700 font-medium">Amount</th>
+                        <th className="text-center px-3 py-2 text-red-700 font-medium">Receipt</th>
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-red-100">
-                      {pendingEntries.map(e => (
-                        <tr key={e.ledger_id}>
-                          <td className="px-3 py-2 text-slate-700">{e.description || e.fee_component}</td>
-                          <td className="px-3 py-2 text-slate-500">{e.due_date || '—'}</td>
-                          <td className="px-3 py-2">
-                            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${e.status === 'overdue' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
-                              {e.status}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2 text-right font-medium text-slate-800">₹{fmt(e.net_amount)}</td>
-                        </tr>
-                      ))}
+                      {ledgerEntries.map(e => {
+                        const isPaid = e.status === 'paid';
+                        const isPartial = !isPaid && Number(e.amount_paid) > 0 && Number(e.remaining_balance) > 0;
+                        const badgeCls = isPaid ? 'bg-green-100 text-green-700'
+                          : isPartial ? 'bg-blue-100 text-blue-700'
+                          : e.status === 'overdue' ? 'bg-red-100 text-red-700'
+                          : 'bg-amber-100 text-amber-700';
+                        return (
+                          <tr key={e.ledger_id}>
+                            <td className="px-3 py-2 text-slate-700">{e.description || e.fee_component}</td>
+                            <td className="px-3 py-2 text-slate-500">{e.due_date || '—'}</td>
+                            <td className="px-3 py-2">
+                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${badgeCls}`}>
+                                {isPartial ? 'partially paid' : e.status}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-right font-medium text-slate-800">
+                              ₹{fmt(e.net_amount)}
+                              {isPartial && (
+                                <div className="text-[10px] font-normal text-slate-400">
+                                  Paid ₹{fmt(e.amount_paid)} · Bal ₹{fmt(e.remaining_balance)}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              {e.payment_id ? (
+                                <Button
+                                  size="sm" variant="ghost" className="h-7 px-2"
+                                  onClick={() => openReceiptPreview(e.payment_id, e.receipt_number, e.ledger_id)}
+                                  title="View / download receipt"
+                                >
+                                  <Download className="h-3.5 w-3.5" />
+                                </Button>
+                              ) : <span className="text-slate-300">—</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                     <tfoot className="bg-red-50">
                       <tr>
                         <td colSpan={3} className="px-3 py-2 text-sm font-semibold text-red-700">Total Pending</td>
                         <td className="px-3 py-2 text-right font-bold text-red-700">
-                          ₹{fmt(pendingEntries.reduce((s, e) => s + e.net_amount, 0))}
+                          ₹{fmt(pendingEntries.reduce((s, e) => s + (Number(e.remaining_balance) > 0 ? Number(e.remaining_balance) : Number(e.net_amount)), 0))}
                         </td>
+                        <td />
                       </tr>
                     </tfoot>
                   </table>
@@ -642,10 +727,12 @@ export default function UpgradationPage() {
               ) : null}
 
               <Button
-                onClick={openCollectDialog}
-                className="bg-red-600 hover:bg-red-700 text-white flex items-center gap-2"
+                size="sm"
+                className="text-xs h-7 px-2 bg-slate-900 hover:bg-slate-800 text-white"
+                onClick={() => openCollectDialog()}
               >
-                <CreditCard className="h-4 w-4" /> Collect Fee
+                <CreditCard className="h-3 w-3 mr-1" />
+                Collect
               </Button>
             </div>
           )}
@@ -655,7 +742,7 @@ export default function UpgradationPage() {
               <h2 className="font-semibold text-base">Step 2 — Target Class & Academic Year</h2>
               {feeBlockMsg && (
                 <p className="text-xs text-amber-600">
-                  Pick the target class &amp; section, then collect the fee above — the student will be sent to Upgradation History for approval.
+                  Collect the fee above to upgrade now — or click <strong>Send for Approval</strong> to upgrade later: the request waits in Upgradation History until an admin approves it.
                 </p>
               )}
               <div className="grid grid-cols-2 gap-4">
@@ -723,7 +810,7 @@ export default function UpgradationPage() {
                 <Input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Reason for upgradation..." />
               </div>
               <Button
-                onClick={doUpgrade}
+                onClick={() => doUpgrade({ forceUpgrade: requiresApproval })}
                 disabled={upgrading}
                 className="bg-orange-500 hover:bg-orange-600 text-white"
               >
@@ -781,35 +868,40 @@ export default function UpgradationPage() {
           )}
 
           {!historyLoading && history.length > 0 && (
-            <div className="border border-slate-200 rounded-2xl overflow-hidden">
+            <>
+            <div className="border border-slate-200 rounded-2xl overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-muted text-muted-foreground">
                   <tr>
-                    <th className="text-left px-4 py-2.5">Student</th>
-                    <th className="text-left px-4 py-2.5 min-w-[160px] whitespace-nowrap">From</th>
-                    <th className="text-left px-4 py-2.5">To</th>
-                    <th className="text-left px-4 py-2.5 min-w-[140px] whitespace-nowrap">Academic Year</th>
-                    <th className="text-right px-4 py-2.5">Upg. Fee</th>
-                    <th className="text-center px-4 py-2.5">Fee Status</th>
-                    <th className="text-left px-4 py-2.5">Date</th>
-                    <th className="text-center px-4 py-2.5">Status</th>
-                    <th className="text-center px-4 py-2.5">Action</th>
+                    <th className="text-left px-4 py-2.5 whitespace-nowrap">Student</th>
+                    <th className="text-left px-4 py-2.5 whitespace-nowrap">From</th>
+                    <th className="text-left px-4 py-2.5 whitespace-nowrap">To</th>
+                    <th className="text-left px-4 py-2.5 whitespace-nowrap">Academic Year</th>
+                    <th className="text-center px-4 py-2.5 whitespace-nowrap">Fee Status</th>
+                    <th className="text-left px-4 py-2.5 whitespace-nowrap">Date</th>
+                    <th className="text-center px-4 py-2.5 whitespace-nowrap">Status</th>
+                    <th className="text-center px-4 py-2.5 whitespace-nowrap">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {history.map(r => (
+                  {history.slice((historyPage - 1) * HISTORY_PAGE_SIZE, historyPage * HISTORY_PAGE_SIZE).map(r => (
                     <tr key={r.upgradation_id} className="hover:bg-muted/30">
                       <td className="px-4 py-2.5">
                         <div className="font-medium">{r.student_name || r.student_id}</div>
                         <div className="text-xs text-muted-foreground">{r.admission_number}</div>
                       </td>
                       <td className="px-4 py-2.5 whitespace-nowrap">{fmtClassSec(r.from_class, r.from_section, r.from_stream)}</td>
-                      <td className="px-4 py-2.5">{fmtClassSec(r.to_class, r.to_section, r.to_stream)}</td>
+                      <td className="px-4 py-2.5 whitespace-nowrap">{fmtClassSec(r.to_class, r.to_section, r.to_stream)}</td>
                       <td className="px-4 py-2.5 whitespace-nowrap">{r.academic_year}</td>
-                      <td className="px-4 py-2.5 text-right">{r.upgradation_fee > 0 ? `₹${fmt(r.upgradation_fee)}` : '—'}</td>
                       <td className="px-4 py-2.5 text-center">
                         {(r.status || 'pending_approval') === 'pending_approval' ? (
-                          <span className="text-xs text-muted-foreground">— awaiting approval —</span>
+                          r.student_dues_total > 0 ? (
+                            <Badge variant="destructive" title="Student has pending dues — will carry to My Fees if approved">
+                              Dues ₹{fmt(r.student_dues_total)}
+                            </Badge>
+                          ) : (
+                            <Badge className="bg-green-100 text-green-700">No dues</Badge>
+                          )
                         ) : r.upgradation_fee > 0 ? (
                           r.upgradation_fee_status === 'paid' || r.upgradation_fee_paid
                             ? <Badge className="bg-green-100 text-green-700">Paid</Badge>
@@ -820,7 +912,7 @@ export default function UpgradationPage() {
                           <span className="text-muted-foreground">—</span>
                         )}
                       </td>
-                      <td className="px-4 py-2.5 text-muted-foreground">{r.created_at?.slice(0, 10) || '—'}</td>
+                      <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">{r.created_at?.slice(0, 10) || '—'}</td>
                       <td className="px-4 py-2.5 text-center">
                         {(() => {
                           // Only show "Approved" when the record explicitly has status="approved".
@@ -834,6 +926,32 @@ export default function UpgradationPage() {
                       </td>
                       <td className="px-4 py-2.5 text-center">
                         <div className="flex items-center justify-center gap-1">
+                          {isAdmin && (r.status || 'pending_approval') === 'pending_approval' && r.student_dues_total > 0 && (
+                            <Button
+                              size="sm"
+                              className="text-xs h-7 px-2 bg-slate-900 hover:bg-slate-800 text-white"
+                              onClick={() => openCollectDialog({ student_id: r.student_id, first_name: r.student_name, last_name: '' }, r.upgradation_id)}
+                              title="Collect pending fees"
+                            >
+                              <CreditCard className="h-3 w-3 mr-1" />
+                              Collect
+                            </Button>
+                          )}
+                          {/* Receipt for the dues just collected from this row
+                              (the collection payment, distinct from the
+                              upgradation-fee receipt below). */}
+                          {collectedReceipts[r.upgradation_id] && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-xs h-7 px-2 text-orange-600 hover:text-orange-800 hover:bg-orange-50"
+                              onClick={() => openReceiptPreview(collectedReceipts[r.upgradation_id].paymentId, collectedReceipts[r.upgradation_id].receiptNumber)}
+                              title="View / download collection receipt"
+                            >
+                              <Download className="h-3 w-3 mr-1" />
+                              Receipt
+                            </Button>
+                          )}
                           {isAdmin && (r.status || 'pending_approval') === 'pending_approval' && (
                             <>
                               <Button
@@ -867,7 +985,7 @@ export default function UpgradationPage() {
                             <Button
                               size="sm"
                               variant="ghost"
-                              onClick={() => openReceiptPreview(r.upgradation_fee_payment_id, r.upgradation_fee_receipt)}
+                              onClick={() => openReceiptPreview(r.upgradation_fee_payment_id, r.upgradation_fee_receipt, r.upgradation_fee_ledger_id)}
                               title="View / download receipt"
                             >
                               <Download className="h-4 w-4" />
@@ -889,6 +1007,23 @@ export default function UpgradationPage() {
                 </tbody>
               </table>
             </div>
+            {history.length > HISTORY_PAGE_SIZE && (
+              <div className="flex items-center justify-between gap-3 pt-3">
+                <p className="text-xs text-slate-500">
+                  Showing {(historyPage - 1) * HISTORY_PAGE_SIZE + 1}–{Math.min(historyPage * HISTORY_PAGE_SIZE, history.length)} of {history.length}
+                </p>
+                <div className="flex items-center gap-1">
+                  <Button variant="outline" size="sm" className="h-8 px-3"
+                    disabled={historyPage <= 1}
+                    onClick={() => setHistoryPage(p => Math.max(1, p - 1))}>Prev</Button>
+                  <span className="text-xs px-2">Page {historyPage} of {Math.ceil(history.length / HISTORY_PAGE_SIZE)}</span>
+                  <Button variant="outline" size="sm" className="h-8 px-3"
+                    disabled={historyPage >= Math.ceil(history.length / HISTORY_PAGE_SIZE)}
+                    onClick={() => setHistoryPage(p => Math.min(Math.ceil(history.length / HISTORY_PAGE_SIZE), p + 1))}>Next</Button>
+                </div>
+              </div>
+            )}
+            </>
           )}
         </div>
       )}
@@ -963,42 +1098,86 @@ export default function UpgradationPage() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-4 sm:p-6 w-full max-w-md space-y-4 shadow-xl max-h-[85vh] overflow-y-auto">
             <h3 className="text-lg font-semibold">Collect Pending Fees</h3>
-            <p className="text-sm text-muted-foreground">Student: <strong>{selected?.first_name} {selected?.last_name}</strong></p>
+            <p className="text-sm text-muted-foreground">Student: <strong>{collectStudent?.first_name} {collectStudent?.last_name}</strong></p>
             {collectLoading ? (
               <div className="flex items-center justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-orange-500" /></div>
             ) : pendingEntries.length === 0 ? (
               <p className="text-sm text-green-600">No pending fees found.</p>
             ) : (
               <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">Select the fees to collect</span>
+                  <div className="flex gap-3 text-xs">
+                    <button type="button" className="text-orange-600 hover:underline font-medium"
+                      onClick={() => setCollectIds(pendingEntries.map(e => e.ledger_id))}>
+                      Select all
+                    </button>
+                    <button type="button" className="text-slate-500 hover:underline font-medium"
+                      onClick={() => setCollectIds([])}>
+                      Clear
+                    </button>
+                  </div>
+                </div>
                 <div className="max-h-48 overflow-y-auto space-y-1 border rounded-lg p-2">
-                  {pendingEntries.map(e => (
+                  {pendingEntries.map(e => {
+                    // Show the live remaining balance from the ledger, not the
+                    // original net — a partially-paid fee must reflect what's
+                    // left to collect (e.g. ₹3500 net, ₹1500 paid → ₹2000 due).
+                    const paid = Number(e.amount_paid || 0);
+                    const remaining = e.remaining_balance != null && e.remaining_balance >= 0
+                      ? Number(e.remaining_balance)
+                      : Math.max(0, Number(e.net_amount || 0) - paid);
+                    return (
                     <label key={e.ledger_id} className="flex items-center gap-3 text-sm cursor-pointer hover:bg-slate-50 rounded px-2 py-1">
                       <input
                         type="checkbox"
                         checked={collectIds.includes(e.ledger_id)}
                         onChange={ev => setCollectIds(prev => ev.target.checked ? [...prev, e.ledger_id] : prev.filter(id => id !== e.ledger_id))}
                       />
-                      <span className="flex-1">{e.description || e.fee_component}</span>
-                      <span className="font-medium">₹{fmt(e.net_amount)}</span>
+                      <span className="flex-1">
+                        {e.description || e.fee_component}
+                        {paid > 0 && (
+                          <span className="block text-[10px] text-amber-600">Paid ₹{fmt(paid)} of ₹{fmt(e.net_amount)}</span>
+                        )}
+                      </span>
+                      <span className="font-medium">₹{fmt(remaining)}</span>
                     </label>
-                  ))}
+                    );
+                  })}
                 </div>
                 <p className="text-sm font-medium text-right">
-                  Total: ₹{fmt(pendingEntries.filter(e => collectIds.includes(e.ledger_id)).reduce((s, e) => s + (e.remaining_balance > 0 ? e.remaining_balance : e.net_amount), 0))}
+                  Total: ₹{fmt(pendingEntries.filter(e => collectIds.includes(e.ledger_id)).reduce((s, e) => {
+                    const paid = Number(e.amount_paid || 0);
+                    const remaining = e.remaining_balance != null && e.remaining_balance >= 0
+                      ? Number(e.remaining_balance)
+                      : Math.max(0, Number(e.net_amount || 0) - paid);
+                    return s + remaining;
+                  }, 0))}
                 </p>
-                {collectIds.length === 1 && (() => {
-                  const entry = pendingEntries.find(e => e.ledger_id === collectIds[0]);
-                  const remaining = Number(entry?.remaining_balance ?? entry?.net_amount ?? 0);
+                {collectIds.length >= 1 && (() => {
+                  // Total still due across the selected fees — a smaller amount
+                  // is a partial payment, spread oldest-first across them.
+                  const selectedRemaining = pendingEntries
+                    .filter(e => collectIds.includes(e.ledger_id))
+                    .reduce((s, e) => {
+                      const paid = Number(e.amount_paid || 0);
+                      const rem = e.remaining_balance != null && e.remaining_balance >= 0
+                        ? Number(e.remaining_balance)
+                        : Math.max(0, Number(e.net_amount || 0) - paid);
+                      return s + rem;
+                    }, 0);
                   return (
                     <div className="space-y-1">
                       <Label>Amount to collect <span className="text-slate-400 font-normal">(blank = full)</span></Label>
                       <Input
-                        type="number" min="0" step="0.01" max={remaining}
-                        placeholder={`Full: ₹${fmt(remaining)}`}
+                        type="number" min="0" step="0.01" max={selectedRemaining}
+                        placeholder={`Full: ₹${fmt(selectedRemaining)}`}
                         value={collectPartial}
                         onChange={e => setCollectPartial(e.target.value)}
                       />
-                      <p className="text-[10px] text-slate-400">Enter a smaller amount to record a partial payment.</p>
+                      <p className="text-[10px] text-slate-400">
+                        Leave blank to collect the full ₹{fmt(selectedRemaining)}. Enter a smaller amount to record a partial payment{collectIds.length > 1 ? ' (applied oldest fee first)' : ''}.
+                      </p>
                     </div>
                   );
                 })()}

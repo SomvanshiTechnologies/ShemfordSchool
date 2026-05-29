@@ -504,6 +504,80 @@ async def reset_password(request: Request):
     return {"message": "Password has been reset successfully. Please login with your new password."}
 
 
+@router.post("/auth/student-reset-password")
+async def student_reset_password(request: Request):
+    """
+    Self-service password reset for STUDENTS, who log in with their admission
+    number (not email). Identity is verified directly against the students
+    collection — admission number + date of birth must both match — so no email
+    or reset token is involved. On success the linked user account's password is
+    updated immediately.
+    """
+    body = await request.json()
+    admission_number = (body.get("admission_number") or "").strip()
+    date_of_birth = (body.get("date_of_birth") or "").strip()
+    new_password = body.get("new_password") or ""
+
+    if not admission_number or not date_of_birth:
+        raise HTTPException(status_code=400, detail="Admission number and date of birth are required")
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    # ── Rate limit: max attempts per admission number per hour (brute-force
+    #    guard on the DOB factor). Reuses the reset_attempts collection. ────────
+    rl_key = f"adm:{admission_number.lower()}"
+    attempt_doc = await db.reset_attempts.find_one({"email": rl_key}, {"_id": 0})
+    if attempt_doc:
+        window_start = datetime.now(timezone.utc) - timedelta(seconds=_RESET_WINDOW_SECONDS)
+        last_attempt = attempt_doc.get("last_attempt")
+        if isinstance(last_attempt, str):
+            last_attempt = datetime.fromisoformat(last_attempt)
+        if last_attempt and last_attempt > window_start and attempt_doc.get("attempts", 0) >= _RESET_MAX_ATTEMPTS:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many reset attempts. Try again in 1 hour.",
+                headers={"Retry-After": "3600"},
+            )
+    await db.reset_attempts.update_one(
+        {"email": rl_key},
+        {"$inc": {"attempts": 1}, "$set": {"last_attempt": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+
+    # Generic error for both "not found" and "wrong DOB" to avoid revealing
+    # which admission numbers exist.
+    invalid = HTTPException(status_code=400, detail="Admission number or date of birth is incorrect.")
+
+    student = await db.students.find_one(
+        {"admission_number": {"$regex": f"^{re.escape(admission_number)}$", "$options": "i"},
+         "is_active": True},
+        {"_id": 0, "user_id": 1, "date_of_birth": 1, "first_name": 1},
+    )
+    if not student or (student.get("date_of_birth") or "") != date_of_birth:
+        raise invalid
+
+    user_id = student.get("user_id")
+    if not user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No login account exists for this student yet. Please contact the school office.",
+        )
+
+    await db.users.update_one(
+        {"user_id": user_id},
+        {"$set": {"password_hash": hash_password(new_password)}},
+    )
+    # Identity verified → clear the rate-limit counter and force re-login.
+    await db.reset_attempts.delete_one({"email": rl_key})
+    await revoke_all_refresh_tokens(user_id)
+    await create_audit_log("user", user_id, "password_reset",
+                           {"admission_number": admission_number, "method": "student_self_service"},
+                           _system_actor(user_id, "student_reset"))
+    logger.info("Student self-service password reset for user %s (adm %s)", user_id, admission_number)
+
+    return {"message": "Password has been reset successfully. Please login with your new password."}
+
+
 @router.put("/auth/change-password")
 async def change_password(request: Request):
     user = await get_current_user(request)

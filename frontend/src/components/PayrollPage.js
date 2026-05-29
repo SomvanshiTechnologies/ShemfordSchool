@@ -3,6 +3,7 @@ import api from '../lib/api';
 import { previewInTab, previewExcelHtml } from '../lib/preview';
 import { useAuth } from '../contexts/AuthContext';
 import { useSession } from '../contexts/SessionContext';
+import { clampISODate } from '../lib/dateBounds';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -408,7 +409,7 @@ export const AdminPayrollView = ({ canManage = true }) => {
             </div>
             <div className="space-y-1.5">
               <Label>Payment Date</Label>
-              <Input type="date" value={payDate} onChange={e => setPayDate(e.target.value)} className="rounded-xl" />
+              <Input type="date" min={sessionBounds.start || undefined} max={sessionToday || undefined} value={payDate} onChange={e => setPayDate(clampISODate(e.target.value, { min: sessionBounds.start, max: sessionToday }))} className="rounded-xl" />
             </div>
             <div className="space-y-1.5">
               <Label>Payment Reference / UTR (optional)</Label>

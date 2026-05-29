@@ -1,5 +1,6 @@
 import React from 'react';
 import { useSession } from '../contexts/SessionContext';
+import { clampISODate } from '../lib/dateBounds';
 
 // A native date input bounded to the selected academic session.
 //
@@ -19,7 +20,7 @@ export default function SessionDatePicker({ value, onChange, className = '', dis
       min={sessionBounds.start || undefined}
       max={sessionBounds.end || undefined}
       value={value || ''}
-      onChange={(e) => onChange(e.target.value)}
+      onChange={(e) => onChange(clampISODate(e.target.value, { min: sessionBounds.start, max: sessionBounds.end }))}
       className={`flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
     />
   );

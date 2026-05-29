@@ -29,6 +29,7 @@ _PUBLIC_EXACT: frozenset = frozenset({
     "/api/auth/logout",           # logout works even with expired tokens
     "/api/auth/forgot-password",
     "/api/auth/reset-password",   # uses a one-time reset token, not a session
+    "/api/auth/student-reset-password",  # admission no. + DOB verification, no session
 
     # Webhooks — called by Razorpay/Stripe servers, not end-users
     "/api/webhook/razorpay",

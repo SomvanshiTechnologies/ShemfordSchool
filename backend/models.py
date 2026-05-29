@@ -136,6 +136,9 @@ class StudentBase(BaseModel):
     parent_name: Optional[str] = None
     parent_phone: Optional[str] = None
     parent_email: Optional[EmailStr] = None
+    mother_name: Optional[str] = None
+    mother_phone: Optional[str] = None
+    mother_email: Optional[EmailStr] = None
     admission_date: str = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d"))
     academic_year: str = Field(default_factory=_current_academic_year)
     is_active: bool = True
@@ -163,6 +166,9 @@ class StudentCreate(BaseModel):
     parent_name: Optional[str] = None
     parent_phone: Optional[str] = None
     parent_email: Optional[EmailStr] = None
+    mother_name: Optional[str] = None
+    mother_phone: Optional[str] = None
+    mother_email: Optional[EmailStr] = None
     is_sibling: bool = False
     sibling_student_id: Optional[str] = None
     blood_group: Optional[str] = None

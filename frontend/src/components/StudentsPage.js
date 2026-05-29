@@ -3,6 +3,8 @@ import api from '../lib/api';
 import { getCached, setCached } from '../lib/pageCache';
 import { copyText } from '../lib/clipboard';
 import { useSession } from '../contexts/SessionContext';
+import { PAYMENT_METHODS, fetchPaymentMethods } from '../lib/paymentMethods';
+import { clampISODate, todayISO } from '../lib/dateBounds';
 
 const TopProgressBar = ({ active }) =>
   active ? (
@@ -41,7 +43,7 @@ import {
   TableRow,
 } from './ui/table';
 import { toast } from 'sonner';
-import { Plus, Search, Upload, Eye, Edit, GraduationCap, Filter, FileUp, Download, CheckCircle, XCircle, ArrowRight, ArrowLeft, CreditCard, User, BookOpen, KeyRound, RefreshCw, Copy, EyeOff, Loader2, UserX, UserCheck, AlertCircle } from 'lucide-react';
+import { Plus, Search, Upload, Eye, Edit, GraduationCap, Filter, FileUp, Download, CheckCircle, XCircle, ArrowRight, ArrowLeft, CreditCard, User, BookOpen, KeyRound, RefreshCw, Copy, EyeOff, Loader2, UserX, UserCheck, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -81,9 +83,7 @@ const StudentsPage = () => {
   const [totalStudents, setTotalStudents] = useState(0);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const PAGE_SIZE = 50;
-  const sentinelRef = useRef(null);
+  const PAGE_SIZE = 20;
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -144,24 +144,27 @@ const StudentsPage = () => {
   const [onbLoading, setOnbLoading] = useState(false);
   const [onbErrors, setOnbErrors] = useState({});
   const [onbSkipDocs, setOnbSkipDocs] = useState(false);
-  const [onbPayment, setOnbPayment] = useState({ method: 'cash', transaction_id: '', remarks: '' });
+  const [onbPayment, setOnbPayment] = useState({ method: 'cash', transaction_id: '', remarks: '', split_cash: '', split_online: '', partial_amount: '' });
   const [onbPaymentLoading, setOnbPaymentLoading] = useState(false);
+  // Payment methods come from the DB (admin-configurable); the static list is the
+  // fallback. POS terminal is excluded here — its hardware flow isn't wired into
+  // onboarding — but Split is included alongside Cash / Cheque / Bank / Online.
+  const [onbPaymentMethods, setOnbPaymentMethods] = useState(PAYMENT_METHODS);
+  useEffect(() => { fetchPaymentMethods({ withPos: false }).then(setOnbPaymentMethods); }, []);
 
-  const fetchStudents = useCallback(async (pg = 1, search = searchTerm, append = false) => {
+  const fetchStudents = useCallback(async (pg = 1, search = searchTerm) => {
     const cacheKey = `students:${viewSession}:${filterClass}:${filterSection}:${filterStatus}:${pg}:${search}`;
     const cached = getCached(cacheKey);
 
-    if (!append) {
-      if (cached) {
-        setStudents(cached.students);
-        setTotalStudents(cached.total);
-        setTotalPages(cached.pages);
-        setLoading(false);
-      }
-      setRefreshing(true);
-    } else {
-      setLoadingMore(true);
+    // Show the cached page instantly (no empty flash when paging), then always
+    // revalidate against the DB so what's displayed reflects the latest data.
+    if (cached) {
+      setStudents(cached.students);
+      setTotalStudents(cached.total);
+      setTotalPages(cached.pages);
+      setLoading(false);
     }
+    setRefreshing(true);
 
     try {
       const params = { page: pg, limit: PAGE_SIZE };
@@ -176,34 +179,23 @@ const StudentsPage = () => {
       const pages = parseInt(res.headers?.['x-total-pages'] ?? res.data?.pages ?? 1);
       const result = { students: arr, total, pages };
       setCached(cacheKey, result);
-      setStudents(prev => append ? [...prev, ...result.students] : result.students);
+      setStudents(result.students);
       setTotalStudents(result.total);
       setTotalPages(result.pages);
-    } catch { if (!cached && !append) toast.error('Failed to fetch students'); }
-    finally { setLoading(false); setRefreshing(false); setLoadingMore(false); }
+    } catch { if (!cached) toast.error('Failed to fetch students'); }
+    finally { setLoading(false); setRefreshing(false); }
   }, [filterClass, filterSection, filterStatus, viewSession]);
 
-  // Infinite scroll: load next page when sentinel enters viewport
-  useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting && !loadingMore && !loading) {
-        setPage(prev => {
-          const next = prev + 1;
-          if (next <= totalPages) {
-            fetchStudents(next, searchTerm, true);
-            return next;
-          }
-          return prev;
-        });
-      }
-    }, { rootMargin: '200px' });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [loadingMore, loading, totalPages, searchTerm, fetchStudents]);
+  // Jump to a specific page (classic pagination). Revalidates from the DB and
+  // scrolls back to the top of the list so the new page starts in view.
+  const goToPage = useCallback((pg) => {
+    if (pg < 1 || pg > totalPages || pg === page) return;
+    setPage(pg);
+    fetchStudents(pg, searchTerm);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [totalPages, page, searchTerm, fetchStudents]);
 
-  useEffect(() => { setPage(1); setStudents([]); fetchStudents(1, searchTerm); fetchClasses(); }, [filterClass, filterSection, filterStatus, viewSession]);
+  useEffect(() => { setPage(1); fetchStudents(1, searchTerm); fetchClasses(); }, [filterClass, filterSection, filterStatus, viewSession]);
 
   // Header quick-search redirects here with ?focus=<student_id> — fetch
   // that student directly and open the view dialog so admin lands on the
@@ -240,7 +232,7 @@ const StudentsPage = () => {
     const val = e.target.value;
     setSearchTerm(val);
     clearTimeout(searchDebounce.current);
-    searchDebounce.current = setTimeout(() => { setPage(1); setStudents([]); fetchStudents(1, val, false); }, 400);
+    searchDebounce.current = setTimeout(() => { setPage(1); fetchStudents(1, val); }, 400);
   };
 
   const fetchClasses = async () => {
@@ -276,6 +268,7 @@ const StudentsPage = () => {
   const handleOnbStep1 = async () => {
     // Validate all required fields client-side
     const errors = {};
+    const isTenDigits = (v) => /^\d{10}$/.test((v || '').trim());
     if (!onbData.first_name?.trim()) errors.first_name = 'First Name is required';
     if (!onbData.last_name?.trim()) errors.last_name = 'Last Name is required';
     if (!onbData.gender) errors.gender = 'Gender is required';
@@ -283,6 +276,11 @@ const StudentsPage = () => {
     // Email is OPTIONAL — students log in with their admission number + the
     // password generated against it, so an email isn't required.
     if (!onbData.phone?.trim()) errors.phone = 'Phone is required';
+    else if (!isTenDigits(onbData.phone)) errors.phone = 'Phone must be exactly 10 digits';
+    if (!onbData.address?.trim()) errors.address = 'Address is required';
+    // Parent / mother contact numbers are optional, but when provided must be 10 digits.
+    if (onbData.parent_phone?.trim() && !isTenDigits(onbData.parent_phone)) errors.parent_phone = 'Contact number must be 10 digits';
+    if (onbData.mother_phone?.trim() && !isTenDigits(onbData.mother_phone)) errors.mother_phone = 'Mother contact must be 10 digits';
     // Parent / guardian details are optional — admins can fill them in later
     setOnbErrors(errors);
     if (Object.keys(errors).length > 0) {
@@ -293,7 +291,7 @@ const StudentsPage = () => {
     try {
       const payload = { ...onbData };
       // Strip empty strings from optional fields — Pydantic EmailStr rejects ""
-      ['email', 'parent_email', 'phone', 'date_of_birth', 'address', 'sibling_student_id'].forEach(k => {
+      ['email', 'parent_email', 'mother_email', 'phone', 'date_of_birth', 'address', 'sibling_student_id'].forEach(k => {
         if (!payload[k]) delete payload[k];
       });
       const res = await api.post('/onboarding/start', payload);
@@ -390,14 +388,34 @@ const StudentsPage = () => {
       if (admissionResult.admission_time_fee > 0 || onbFeeData?.fee_breakdown?.length > 0) {
         setOnbPaymentLoading(true);
         try {
-          const payRes = await api.post('/fees/admission-payment', {
+          const totalDue = onbFeeData?.admission_time_fee || 0;
+          const payPayload = {
             student_id: admissionResult.student_id,
             payment_method: onbPayment.method,
             transaction_id: onbPayment.transaction_id || undefined,
             remarks: onbPayment.remarks || 'Collected at admission',
-          });
+          };
+          // Partial collection — any positive amount below the total due.
+          const partial = parseFloat(onbPayment.partial_amount);
+          if (onbPayment.partial_amount && partial > 0 && partial < totalDue) {
+            payPayload.amount = partial;
+          }
+          // Split — cash + online must equal the amount being collected.
+          if (onbPayment.method === 'split') {
+            const cash = parseFloat(onbPayment.split_cash) || 0;
+            const online = parseFloat(onbPayment.split_online) || 0;
+            if (cash <= 0 && online <= 0) {
+              toast.error('Enter at least one split amount');
+              setOnbPaymentLoading(false);
+              return;
+            }
+            payPayload.split_payments = { cash, online };
+            // Keep the collected amount in sync with the split total.
+            if (!payPayload.amount && (cash + online) < totalDue) payPayload.amount = cash + online;
+          }
+          const payRes = await api.post('/fees/admission-payment', payPayload);
           receiptNumber = payRes.data.receipt_number;
-          toast.success(`Payment recorded — Receipt: ${receiptNumber}`);
+          toast.success(payRes.data.message || `Payment recorded — Receipt: ${receiptNumber}`);
         } catch (payErr) {
           // Non-fatal: admission succeeded but payment recording failed
           toast.error('Admission done, but payment recording failed. Record it from the Fees tab.');
@@ -471,6 +489,9 @@ const StudentsPage = () => {
       setSelectedStudent(full);
       setEditData(prev => ({
         ...prev,
+        phone: full.phone ?? prev.phone,
+        email: full.email ?? prev.email,
+        roll_number: full.roll_number ?? prev.roll_number,
         father_name: full.father_name || prev.father_name || prev.parent_name,
         father_phone: full.father_phone || prev.father_phone || prev.parent_phone,
         father_occupation: full.father_occupation || prev.father_occupation,
@@ -504,8 +525,14 @@ const StudentsPage = () => {
   };
 
   const handleSaveEdit = async () => {
+    const tenDigits = (v) => /^\d{10}$/.test((v || '').trim());
     if (!editData.phone?.trim()) { toast.error('Phone is required'); return; }
+    if (!tenDigits(editData.phone)) { toast.error('Phone must be exactly 10 digits'); return; }
     if (!editData.address?.trim()) { toast.error('Address is required'); return; }
+    // Contact numbers are optional, but must be 10 digits when provided.
+    for (const [field, label] of [['father_phone', 'Father phone'], ['mother_phone', 'Mother phone'], ['emergency_contact', 'Emergency contact']]) {
+      if (editData[field]?.trim() && !tenDigits(editData[field])) { toast.error(`${label} must be 10 digits`); return; }
+    }
     try {
       await api.put(`/students/${selectedStudent.student_id}`, editData);
       toast.success('Student updated successfully');
@@ -954,7 +981,12 @@ const StudentsPage = () => {
                   <TableRow key={student.student_id} data-testid={`student-row-${student.student_id}`} className={!student.is_active ? 'opacity-60 bg-slate-50' : ''}>
                     <TableCell className="font-mono text-sm select-none" onCopy={e => e.preventDefault()} onContextMenu={e => e.preventDefault()}>{student.admission_number}</TableCell>
                     <TableCell>
-                      <p className="font-medium text-foreground">{student.first_name} {student.last_name}</p>
+                      <p className="font-medium text-foreground flex items-center gap-2">
+                        {student.first_name} {student.last_name}
+                        {student.is_sibling && (
+                          <Badge className="bg-blue-50 text-blue-700 border border-blue-200 text-[10px] px-1.5 py-0" title="Sibling discount applied">Sibling</Badge>
+                        )}
+                      </p>
                       <p className="text-sm text-muted-foreground">{student.email || ''}</p>
                     </TableCell>
                     <TableCell>Class {student.class_name} - {student.section}</TableCell>
@@ -1009,15 +1041,46 @@ const StudentsPage = () => {
         </CardContent>
       </Card>
 
-      {/* Infinite scroll sentinel */}
-      <div ref={sentinelRef} className="h-4" />
-      {loadingMore && (
-        <div className="flex items-center justify-center py-4 gap-2 text-sm text-slate-500">
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading more students...
+      {/* Pagination */}
+      {!loading && totalStudents > 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 py-4">
+          <p className="text-xs text-slate-500">
+            Showing <span className="font-medium text-slate-700">{(page - 1) * PAGE_SIZE + 1}</span>–
+            <span className="font-medium text-slate-700">{Math.min(page * PAGE_SIZE, totalStudents)}</span> of{' '}
+            <span className="font-medium text-slate-700">{totalStudents}</span> students
+          </p>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              <Button variant="outline" size="sm" className="h-8 px-2" disabled={page <= 1 || refreshing}
+                onClick={() => goToPage(page - 1)} data-testid="students-prev-page">
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              {(() => {
+                // Windowed page numbers: first, last, and up to 2 around current.
+                const set = new Set([1, totalPages, page, page - 1, page + 1]);
+                const nums = [...set].filter(n => n >= 1 && n <= totalPages).sort((a, b) => a - b);
+                const out = [];
+                let prev = 0;
+                for (const n of nums) {
+                  if (n - prev > 1) out.push(<span key={`gap-${n}`} className="px-1 text-slate-400">…</span>);
+                  out.push(
+                    <Button key={n} variant={n === page ? 'default' : 'outline'} size="sm"
+                      className="h-8 min-w-8 px-2" disabled={refreshing && n !== page}
+                      onClick={() => goToPage(n)} data-testid={`students-page-${n}`}>
+                      {n}
+                    </Button>
+                  );
+                  prev = n;
+                }
+                return out;
+              })()}
+              <Button variant="outline" size="sm" className="h-8 px-2" disabled={page >= totalPages || refreshing}
+                onClick={() => goToPage(page + 1)} data-testid="students-next-page">
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
         </div>
-      )}
-      {!loading && !loadingMore && page >= totalPages && totalStudents > 0 && (
-        <p className="text-center text-xs text-slate-400 py-3">{totalStudents} students total</p>
       )}
 
       {/* ===== DEACTIVATION CONFIRMATION ===== */}
@@ -1101,7 +1164,7 @@ const StudentsPage = () => {
                 </div>
                 <div className="space-y-1">
                   <Label>Date of Birth <span className="text-red-500">*</span></Label>
-                  <Input type="date" value={onbData.date_of_birth} onChange={(e) => { setOnbData({...onbData, date_of_birth: e.target.value}); setOnbErrors(p => ({...p, date_of_birth: ''})); }} className={onbErrors.date_of_birth ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-dob" />
+                  <Input type="date" max={todayISO()} value={onbData.date_of_birth} onChange={(e) => { setOnbData({...onbData, date_of_birth: clampISODate(e.target.value, { max: todayISO() })}); setOnbErrors(p => ({...p, date_of_birth: ''})); }} className={onbErrors.date_of_birth ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-dob" />
                   {onbData.date_of_birth && (() => {
                     const dob = new Date(onbData.date_of_birth);
                     const today = new Date();
@@ -1134,11 +1197,11 @@ const StudentsPage = () => {
                 </div>
                 <div className="space-y-1">
                   <Label>Phone <span className="text-red-500">*</span></Label>
-                  <Input value={onbData.phone} onChange={(e) => { setOnbData({...onbData, phone: e.target.value}); setOnbErrors(p => ({...p, phone: ''})); }} className={onbErrors.phone ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-phone" />
+                  <Input value={onbData.phone} inputMode="numeric" maxLength={10} onChange={(e) => { const v = e.target.value.replace(/\D/g, '').slice(0, 10); setOnbData({...onbData, phone: v}); setOnbErrors(p => ({...p, phone: ''})); }} className={onbErrors.phone ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-phone" />
                   {onbErrors.phone && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.phone}</p>}
                 </div>
               </div>
-              <div className="space-y-1"><Label>Address</Label><Input value={onbData.address} onChange={(e) => setOnbData({...onbData, address: e.target.value})} data-testid="onb-address" /></div>
+              <div className="space-y-1"><Label>Address <span className="text-red-500">*</span></Label><Input value={onbData.address} onChange={(e) => { setOnbData({...onbData, address: e.target.value}); setOnbErrors(p => ({...p, address: ''})); }} className={onbErrors.address ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-address" /></div>
               <div className="border-t pt-4">
                 <h4 className="font-medium mb-3 text-foreground">Parent / Guardian Details</h4>
                 <div className="grid gap-4">
@@ -1150,7 +1213,7 @@ const StudentsPage = () => {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1">
                       <Label>Contact Number</Label>
-                      <Input value={onbData.parent_phone} onChange={(e) => { setOnbData({...onbData, parent_phone: e.target.value}); setOnbErrors(p => ({...p, parent_phone: ''})); }} className={onbErrors.parent_phone ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-parent-phone" />
+                      <Input value={onbData.parent_phone} inputMode="numeric" maxLength={10} onChange={(e) => { const v = e.target.value.replace(/\D/g, '').slice(0, 10); setOnbData({...onbData, parent_phone: v}); setOnbErrors(p => ({...p, parent_phone: ''})); }} className={onbErrors.parent_phone ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-parent-phone" />
                       {onbErrors.parent_phone && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.parent_phone}</p>}
                     </div>
                     <div className="space-y-1"><Label>Parent Email</Label><Input type="email" value={onbData.parent_email} onChange={(e) => setOnbData({...onbData, parent_email: e.target.value})} data-testid="onb-parent-email" /></div>
@@ -1167,7 +1230,7 @@ const StudentsPage = () => {
                   </div>
                   <div className="space-y-1">
                     <Label>Mother Contact Number</Label>
-                    <Input value={onbData.mother_phone} onChange={(e) => { setOnbData({...onbData, mother_phone: e.target.value}); setOnbErrors(p => ({...p, mother_phone: ''})); }} className={onbErrors.mother_phone ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-mother-phone" />
+                    <Input value={onbData.mother_phone} inputMode="numeric" maxLength={10} onChange={(e) => { const v = e.target.value.replace(/\D/g, '').slice(0, 10); setOnbData({...onbData, mother_phone: v}); setOnbErrors(p => ({...p, mother_phone: ''})); }} className={onbErrors.mother_phone ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-mother-phone" />
                     {onbErrors.mother_phone && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.mother_phone}</p>}
                   </div>
                   <div className="space-y-1 col-span-2">
@@ -1180,6 +1243,34 @@ const StudentsPage = () => {
                     />
                   </div>
                 </div>
+              </div>
+              {/* Sibling — applies the sibling discount (from Fee Config) to
+                  Admission Fee & Monthly Tuition on ledger creation. */}
+              <div className="border-t pt-4">
+                <label className="flex items-start gap-2 cursor-pointer rounded-xl border border-blue-200 bg-blue-50 p-3">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={onbData.is_sibling}
+                    onChange={(e) => setOnbData({ ...onbData, is_sibling: e.target.checked })}
+                    data-testid="onb-is-sibling"
+                  />
+                  <span>
+                    <span className="block text-sm font-semibold text-blue-900">This student has a sibling already enrolled</span>
+                    <span className="text-xs text-blue-600">Sibling discount applied to Admission Fee &amp; Monthly Tuition</span>
+                  </span>
+                </label>
+                {onbData.is_sibling && (
+                  <div className="space-y-1 mt-3">
+                    <Label>Sibling Student ID (optional)</Label>
+                    <Input
+                      value={onbData.sibling_student_id}
+                      onChange={(e) => setOnbData({ ...onbData, sibling_student_id: e.target.value })}
+                      placeholder="STU… — leave blank to auto-detect by parent email"
+                      data-testid="onb-sibling-id"
+                    />
+                  </div>
+                )}
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={resetOnboarding}>Cancel</Button>
@@ -1434,6 +1525,23 @@ const StudentsPage = () => {
                     Collect Admission Payment — ₹{(onbFeeData.admission_time_fee||0).toLocaleString()}
                   </div>
                   <div className="p-4 space-y-3">
+                    {/* Amount to collect — leave blank for full; enter less to record a partial payment */}
+                    <div>
+                      <Label className="text-xs font-bold uppercase tracking-wider">
+                        Amount to Collect <span className="text-slate-400 font-normal normal-case">(leave blank to collect full)</span>
+                      </Label>
+                      <Input
+                        type="number" min="0" step="0.01"
+                        max={onbFeeData.admission_time_fee || undefined}
+                        className="mt-1 h-9 text-sm"
+                        placeholder={`Full: ₹${(onbFeeData.admission_time_fee||0).toLocaleString()}`}
+                        value={onbPayment.partial_amount}
+                        onChange={e => setOnbPayment(p => ({ ...p, partial_amount: e.target.value }))}
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        Total due at admission: ₹{(onbFeeData.admission_time_fee||0).toLocaleString()}. Enter a smaller amount for a partial payment — the balance stays due.
+                      </p>
+                    </div>
                     <div>
                       <Label className="text-xs font-bold uppercase tracking-wider">Payment Method *</Label>
                       <Select value={onbPayment.method} onValueChange={v => setOnbPayment(p => ({ ...p, method: v }))}>
@@ -1441,14 +1549,30 @@ const StudentsPage = () => {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="cash">Cash</SelectItem>
-                          <SelectItem value="cheque">Cheque</SelectItem>
-                          <SelectItem value="bank_transfer">Bank Transfer / NEFT</SelectItem>
-                          <SelectItem value="online">Online / UPI</SelectItem>
+                          {onbPaymentMethods.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
                         </SelectContent>
                       </Select>
                     </div>
-                    {onbPayment.method !== 'cash' && (
+                    {onbPayment.method === 'split' && (
+                      <div className="grid grid-cols-2 gap-3 p-3 rounded-xl border border-orange-200 bg-orange-50">
+                        <div>
+                          <Label className="text-xs font-bold uppercase tracking-wider">Cash Amount</Label>
+                          <Input type="number" min={0} step="0.01" className="mt-1 h-9 text-sm"
+                            value={onbPayment.split_cash}
+                            onChange={e => setOnbPayment(p => ({ ...p, split_cash: e.target.value }))} placeholder="0" />
+                        </div>
+                        <div>
+                          <Label className="text-xs font-bold uppercase tracking-wider">Online Amount</Label>
+                          <Input type="number" min={0} step="0.01" className="mt-1 h-9 text-sm"
+                            value={onbPayment.split_online}
+                            onChange={e => setOnbPayment(p => ({ ...p, split_online: e.target.value }))} placeholder="0" />
+                        </div>
+                        <p className="col-span-2 text-[10px] text-slate-500">
+                          Cash + Online must equal the amount being collected.
+                        </p>
+                      </div>
+                    )}
+                    {onbPayment.method !== 'cash' && onbPayment.method !== 'split' && (
                       <div>
                         <Label className="text-xs font-bold uppercase tracking-wider">
                           {onbPayment.method === 'cheque' ? 'Cheque Number' : 'Transaction / UTR Number'}
@@ -1778,20 +1902,20 @@ const StudentsPage = () => {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2"><Label>Email</Label><Input type="email" value={editData.email} onChange={(e) => setEditData({...editData, email: e.target.value})} data-testid="edit-email" /></div>
-                <div className="space-y-2"><Label>Phone <span className="text-red-500">*</span></Label><Input required value={editData.phone} onChange={(e) => setEditData({...editData, phone: e.target.value})} data-testid="edit-phone" /></div>
+                <div className="space-y-2"><Label>Phone <span className="text-red-500">*</span></Label><Input required inputMode="numeric" maxLength={10} value={editData.phone} onChange={(e) => setEditData({...editData, phone: e.target.value.replace(/\D/g, '').slice(0, 10)})} data-testid="edit-phone" /></div>
               </div>
               <div className="space-y-2"><Label>Address <span className="text-red-500">*</span></Label><Input required value={editData.address} onChange={(e) => setEditData({...editData, address: e.target.value})} data-testid="edit-address" /></div>
               <div className="space-y-2"><Label>Roll Number</Label><Input value={editData.roll_number} onChange={(e) => setEditData({...editData, roll_number: e.target.value})} data-testid="edit-roll" /></div>
               {/* (#30) Blood group and emergency contact */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2"><Label>Blood Group</Label><Input value={editData.blood_group} onChange={(e) => setEditData({...editData, blood_group: e.target.value})} placeholder="e.g. A+" data-testid="edit-blood-group" /></div>
-                <div className="space-y-2"><Label>Emergency Contact</Label><Input value={editData.emergency_contact} onChange={(e) => setEditData({...editData, emergency_contact: e.target.value})} placeholder="Phone number" data-testid="edit-emergency-contact" /></div>
+                <div className="space-y-2"><Label>Emergency Contact</Label><Input inputMode="numeric" maxLength={10} value={editData.emergency_contact} onChange={(e) => setEditData({...editData, emergency_contact: e.target.value.replace(/\D/g, '').slice(0, 10)})} placeholder="10-digit phone number" data-testid="edit-emergency-contact" /></div>
               </div>
               <div className="border-t pt-4">
                 <h4 className="font-medium mb-3 text-foreground">Father Details</h4>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2"><Label>Father Name</Label><Input value={editData.father_name ?? editData.parent_name ?? ''} onChange={(e) => setEditData({...editData, father_name: e.target.value, parent_name: e.target.value})} data-testid="edit-father-name" /></div>
-                  <div className="space-y-2"><Label>Father Phone</Label><Input value={editData.father_phone ?? editData.parent_phone ?? ''} onChange={(e) => setEditData({...editData, father_phone: e.target.value, parent_phone: e.target.value})} data-testid="edit-father-phone" /></div>
+                  <div className="space-y-2"><Label>Father Phone</Label><Input inputMode="numeric" maxLength={10} value={editData.father_phone ?? editData.parent_phone ?? ''} onChange={(e) => { const v = e.target.value.replace(/\D/g, '').slice(0, 10); setEditData({...editData, father_phone: v, parent_phone: v}); }} data-testid="edit-father-phone" /></div>
                   <div className="space-y-2"><Label>Father Occupation</Label><Input value={editData.father_occupation ?? ''} onChange={(e) => setEditData({...editData, father_occupation: e.target.value})} data-testid="edit-father-occupation" /></div>
                   <div className="space-y-2"><Label>Father Email</Label><Input value={editData.parent_email ?? ''} onChange={(e) => setEditData({...editData, parent_email: e.target.value})} data-testid="edit-parent-email" /></div>
                 </div>
@@ -1800,7 +1924,7 @@ const StudentsPage = () => {
                 <h4 className="font-medium mb-3 text-foreground">Mother Details</h4>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2"><Label>Mother Name</Label><Input value={editData.mother_name ?? ''} onChange={(e) => setEditData({...editData, mother_name: e.target.value})} data-testid="edit-mother-name" /></div>
-                  <div className="space-y-2"><Label>Mother Phone</Label><Input value={editData.mother_phone ?? ''} onChange={(e) => setEditData({...editData, mother_phone: e.target.value})} data-testid="edit-mother-phone" /></div>
+                  <div className="space-y-2"><Label>Mother Phone</Label><Input inputMode="numeric" maxLength={10} value={editData.mother_phone ?? ''} onChange={(e) => setEditData({...editData, mother_phone: e.target.value.replace(/\D/g, '').slice(0, 10)})} data-testid="edit-mother-phone" /></div>
                   <div className="space-y-2"><Label>Mother Occupation</Label><Input value={editData.mother_occupation ?? ''} onChange={(e) => setEditData({...editData, mother_occupation: e.target.value})} data-testid="edit-mother-occupation" /></div>
                 </div>
               </div>

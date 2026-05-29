@@ -442,22 +442,10 @@ async def approve_upgrade(upgradation_id: str, request: Request):
             detail=f"Cannot approve — request is already '{current_status}'."
         )
 
-    # Re-check dues at approval time: a student must not be promoted while any
-    # fee is still pending/overdue. The admin collects the dues first, then
-    # approves. Dues in the TARGET (future) year — including the upgradation fee
-    # the promotion charges — are excluded; only current-and-prior dues gate it.
-    pending_agg = await db.student_ledger.aggregate([
-        {"$match": {"student_id": upg["student_id"], "status": {"$in": ["pending", "overdue"]},
-                    "academic_year": {"$ne": upg["academic_year"]}}},
-        {"$group": {"_id": None, "total": {"$sum": "$net_amount"}, "count": {"$sum": 1}}},
-    ]).to_list(1)
-    if pending_agg and pending_agg[0]["count"] > 0:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot approve — student still has ₹{pending_agg[0]['total']:,.0f} in pending dues. "
-                   f"Collect the dues first, then approve.",
-        )
-
+    # Note: approval is NOT blocked by pending dues. The admin can see the
+    # outstanding amount in the Upgradation History queue (and optionally collect
+    # it there). If they approve anyway, the student is promoted and any unpaid
+    # dues remain on the ledger — the student/parent settles them from My Fees.
     result = await _perform_upgrade_approval(upg, user, auto=False)
     result["message"] = (
         f"Upgrade approved. Student moved to {upg['to_class']}." +
@@ -666,6 +654,23 @@ async def get_upgradation_history(
         ).to_list(len(ledger_ids))
         ledger_map = {row["ledger_id"]: row for row in ledger_rows}
 
+    # Bulk-fetch each student's outstanding dues (pending/overdue), grouped by
+    # student + academic_year, so the approval queue can flag students who still
+    # owe fees. The TARGET year is excluded per-record below (the upgradation fee
+    # the promotion itself charges must not count as a blocking due).
+    student_ids = list({r["student_id"] for r in records})
+    dues_map = {}  # student_id -> { academic_year: total }
+    if student_ids:
+        dues_rows = await db.student_ledger.aggregate([
+            {"$match": {"student_id": {"$in": student_ids},
+                        "status": {"$in": ["pending", "overdue"]}}},
+            {"$group": {"_id": {"sid": "$student_id", "ay": "$academic_year"},
+                        "total": {"$sum": "$net_amount"}}},
+        ]).to_list(5000)
+        for row in dues_rows:
+            sid = row["_id"]["sid"]
+            dues_map.setdefault(sid, {})[row["_id"].get("ay")] = row["total"]
+
     result = []
     for r in records:
         # Sync fee-paid status from the linked ledger entry (DB-driven, not cached)
@@ -681,6 +686,11 @@ async def get_upgradation_history(
             r["upgradation_fee_status"] = "paid" if r.get("upgradation_fee_paid") else "pending"
         else:
             r["upgradation_fee_status"] = "no_fee"
+
+        # Student's outstanding dues EXCLUDING the target (promotion) year.
+        by_year = dues_map.get(r["student_id"], {})
+        dues_total = sum(v for ay, v in by_year.items() if ay != r.get("academic_year"))
+        r["student_dues_total"] = round(dues_total, 2)
 
         s = await db.students.find_one({"student_id": r["student_id"]}, {"_id": 0,
             "first_name": 1, "last_name": 1, "admission_number": 1})

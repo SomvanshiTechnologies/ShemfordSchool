@@ -282,12 +282,14 @@ async def get_students(
     LIST_FIELDS = {
         "_id": 0, "student_id": 1, "admission_number": 1,
         "first_name": 1, "last_name": 1, "email": 1,
+        "phone": 1, "gender": 1, "date_of_birth": 1, "address": 1,
         "class_name": 1, "section": 1, "stream": 1, "academic_year": 1,
         "parent_name": 1, "parent_phone": 1,
         "father_name": 1, "father_phone": 1,
         "mother_name": 1, "mother_phone": 1,
         "fee_status": 1, "is_active": 1, "app_locked": 1,
         "roll_number": 1, "user_id": 1, "parent_id": 1,
+        "is_sibling": 1,
     }
 
     limit = max(1, min(limit, 200))
@@ -347,6 +349,25 @@ async def update_student(student_id: str, request: Request):
     IMMUTABLE = ["student_id", "admission_number", "created_at", "onboarding_id"]
     for f in IMMUTABLE:
         body.pop(f, None)
+
+    # Phone numbers must be exactly 10 digits. Normalize to digits-only before
+    # persisting so the DB never stores an over-/under-length number.
+    phone_errors = {}
+    for _pf, _plabel in (("phone", "Phone"), ("parent_phone", "Father/Guardian phone"),
+                         ("father_phone", "Father phone"), ("mother_phone", "Mother phone"),
+                         ("emergency_contact", "Emergency contact")):
+        if _pf not in body:
+            continue
+        _val = (str(body.get(_pf) or "")).strip()
+        if not _val:
+            continue  # blank = leave/clear; only validate provided values
+        _digits = re.sub(r"\D", "", _val)
+        if len(_digits) != 10:
+            phone_errors[_pf] = f"{_plabel} must be exactly 10 digits"
+        else:
+            body[_pf] = _digits
+    if phone_errors:
+        raise HTTPException(status_code=400, detail=" | ".join(phone_errors.values()))
 
     # Validate class/section change
     new_class = body.get("class_name", old_student["class_name"])
