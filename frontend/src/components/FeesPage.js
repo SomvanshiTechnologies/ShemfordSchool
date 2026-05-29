@@ -320,6 +320,10 @@ const FeesPage = () => {
     setStudentSearch('');
     setStudentSearchResults([]);
     setPayLedgerIds([]);
+    // Refresh the bulk student/concession list for the newly selected session
+    // so it doesn't linger on the previous year's data (the due chart and
+    // fee configs already refetch via their own session-keyed effects).
+    if (isAdmin) fetchAdminData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewSession]);
 
@@ -797,22 +801,7 @@ const FeesPage = () => {
         <TabsContent value="config">
           <div className="flex flex-col gap-4">
             {/* Controls */}
-            <div className="flex flex-wrap gap-3 items-center justify-between">
-              <div className="flex gap-3 items-center">
-                <div>
-                  <Label className="text-xs font-bold uppercase tracking-wider">Academic Year</Label>
-                  <Select value={selectedYear} onValueChange={setSelectedYear}>
-                    <SelectTrigger className="mt-1 h-8 w-40 text-sm">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {ACADEMIC_YEARS.map(y => (
-                        <SelectItem key={y} value={y}>{y}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
+            <div className="flex flex-wrap gap-3 items-center justify-end">
               <div className="flex gap-2">
                 <Button
                   variant="outline" size="sm"
