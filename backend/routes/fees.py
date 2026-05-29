@@ -1791,10 +1791,19 @@ async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Opt
     # button next to a single fee row), scope the receipt to THAT fee only —
     # showing its own stamped receipt number / paid date / amount. This avoids
     # showing unrelated fees when a payment_id link is shared or imprecise.
+    scoped_entry = None        # set when the receipt is scoped to one fee
+    entry_payments = []        # every payment made toward that one fee (oldest-first)
     if ledger_id:
         scoped = await db.student_ledger.find_one({"ledger_id": ledger_id}, {"_id": 0})
         if scoped:
             entries = [scoped]
+            scoped_entry = scoped
+            # All payments that touched this fee — so the receipt lists each
+            # part-payment (e.g. ₹500 + ₹500) with a running total + balance.
+            entry_payments = await db.fee_payments.find(
+                {"student_id": payment["student_id"], "installment_ids": ledger_id}, {"_id": 0}
+            ).to_list(200)
+            entry_payments.sort(key=lambda p: str(p.get("payment_date") or p.get("created_at") or ""))
             payment = {
                 **payment,
                 "receipt_number": scoped.get("receipt_number") or payment.get("receipt_number"),
@@ -1892,62 +1901,89 @@ async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Opt
     elements.append(info_table)
     elements.append(Spacer(1, 12))
 
-    # Itemise each fee with what was PAID in this transaction. For PARTIAL
-    # payments (a balance still pending on any fee) we also show a Balance
-    # column + Balance Due — read live from the ledger (remaining_balance) so
-    # the receipt always matches the DB. A fully-cleared payment keeps it simple
-    # (paid amounts only, no balance column).
-    total_paid = round(float(payment.get("amount", 0)), 2)
-    n_entries = len(entries)
-    rows = []          # (description, fee_type, paid_here, balance)
-    total_balance = 0.0
-    for e in entries:
-        net = float(e.get("net_amount", 0))
-        bal = float(e.get("remaining_balance", 0) or 0)  # pending after this payment (live)
-        if n_entries == 1:
-            paid_here = total_paid          # whole payment applies to this fee
+    if scoped_entry:
+        # Per-fee receipt: list the part-payment(s) toward this fee (each with
+        # its date), then TOTAL PAID. Payments are capped to the amount actually
+        # paid on this fee so unrelated/mis-linked payments can't inflate the
+        # total (some legacy payments wrongly reference another fee's ledger id).
+        e = scoped_entry
+        net = round(float(e.get("net_amount", 0)), 2)
+        # Amount actually paid on this fee — status-aware so legacy stale fields
+        # (older paid entries with amount_paid=0) don't understate it.
+        if e.get("status") == "paid":
+            paid_total = net
         else:
-            paid_here = round(net - bal, 2) if bal > 0 else net
-        total_balance += bal
-        rows.append((e.get("description", ""), e.get("fee_type", "").replace("_", " ").title(),
-                     paid_here, bal))
-    total_balance = round(total_balance, 2)
-    is_partial_receipt = total_balance > 0.005
+            paid_total = round(float(e.get("amount_paid") or 0), 2)
 
-    if is_partial_receipt:
-        # Partial payment — show Paid + Balance pending.
-        fee_data = [["Description", "Fee Type", "Paid (Rs.)", "Balance (Rs.)"]]
-        for desc, ftype, paid_here, bal in rows:
-            fee_data.append([desc, ftype, f"{paid_here:,.2f}", f"{bal:,.2f}"])
-        fee_data.append(["TOTAL", "", f"{total_paid:,.2f}", f"{total_balance:,.2f}"])
-        col_w = [3.0 * inch, 1.3 * inch, 1.1 * inch, 1.1 * inch]
-        fee_table = Table(fee_data, colWidths=col_w)
-        fee_table.setStyle(TableStyle([
+        elements.append(Paragraph(
+            f"<b>Fee:</b> {e.get('description','')} "
+            f"({e.get('fee_type','').replace('_',' ').title()}) &nbsp;—&nbsp; "
+            f"Total billed: Rs.{net:,.2f}",
+            ParagraphStyle("FeeLine", parent=styles["Normal"], fontSize=10)))
+        elements.append(Spacer(1, 6))
+
+        hist_method_style = ParagraphStyle("HistMethod2", parent=styles["Normal"], fontSize=8, leading=9)
+        hist = [["#", "Date", "Method", "Amount (Rs.)"]]
+        listed_total = 0.0
+        idx = 0
+        for p in entry_payments:   # every payment toward this fee, oldest-first
+            amt = round(float(p.get("amount", 0)), 2)
+            if amt <= 0:
+                continue
+            method_label = (p.get("payment_method", "") or "").upper()
+            sp = p.get("split_payments")
+            if sp and isinstance(sp, dict):
+                parts = " + ".join(f"{k.title()} Rs.{float(v):,.2f}" for k, v in sp.items() if float(v) > 0)
+                if parts:
+                    method_label = f"SPLIT<br/><font size=7 color='#64748b'>{parts}</font>"
+            idx += 1
+            hist.append([
+                str(idx),
+                str(p.get("payment_date") or p.get("created_at", ""))[:10],
+                Paragraph(method_label, hist_method_style),
+                f"{amt:,.2f}",
+            ])
+            listed_total = round(listed_total + amt, 2)
+        if idx == 0:   # no linked payment rows — fall back to the entry's paid total
+            hist.append(["1", str(payment.get("payment_date") or "")[:10], "—", f"{paid_total:,.2f}"])
+            listed_total = paid_total
+        hist.append(["", "", "TOTAL PAID", f"{listed_total:,.2f}"])
+
+        htbl = Table(hist, colWidths=[0.4 * inch, 1.5 * inch, 3.0 * inch, 1.6 * inch])
+        htbl.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), orange),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
             ("FONTSIZE", (0, 0), (-1, -1), 8),
-            ("ALIGN", (2, 0), (3, -1), "RIGHT"),
+            ("ALIGN", (3, 0), (3, -1), "RIGHT"),
+            ("ALIGN", (2, -1), (2, -1), "RIGHT"),
             ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
             ("PADDING", (0, 0), (-1, -1), 5),
             ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f5f5f5")),
             ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-            ("TEXTCOLOR", (3, -1), (3, -1), colors.HexColor("#c0392b")),
             ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#fafafa")]),
         ]))
-        elements.append(fee_table)
-        elements.append(Spacer(1, 6))
-        _conf = ParagraphStyle("Conf", parent=styles["Normal"], fontSize=9)
-        elements.append(Paragraph(
-            f"Paid now: <b>Rs.{total_paid:,.2f}</b> &nbsp;|&nbsp; "
-            f"Balance still pending: <b>Rs.{total_balance:,.2f}</b>", _conf))
+        elements.append(htbl)
         elements.append(Spacer(1, 18))
     else:
-        # Full payment — just the amount paid.
+        # Itemise each fee with the amount PAID in this transaction, then the
+        # TOTAL PAID. (No balance column — the receipt records what was paid.)
+        total_paid = round(float(payment.get("amount", 0)), 2)
+        n_entries = len(entries)
         fee_data = [["Description", "Fee Type", "Amount Paid (Rs.)"]]
-        for desc, ftype, paid_here, bal in rows:
-            fee_data.append([desc, ftype, f"{paid_here:,.2f}"])
+        for e in entries:
+            net = float(e.get("net_amount", 0))
+            bal = 0.0 if e.get("status") == "paid" else float(e.get("remaining_balance", 0) or 0)
+            if n_entries == 1:
+                paid_here = total_paid          # whole payment applies to this fee
+            else:
+                paid_here = round(net - bal, 2) if bal > 0 else net
+            fee_data.append([
+                e.get("description", ""),
+                e.get("fee_type", "").replace("_", " ").title(),
+                f"{paid_here:,.2f}",
+            ])
         fee_data.append(["", "TOTAL PAID", f"{total_paid:,.2f}"])
         col_w = [3.8 * inch, 1.4 * inch, 1.3 * inch]
         fee_table = Table(fee_data, colWidths=col_w)

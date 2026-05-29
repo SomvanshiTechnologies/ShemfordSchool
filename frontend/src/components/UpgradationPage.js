@@ -81,12 +81,11 @@ export default function UpgradationPage() {
   const [collectTxn, setCollectTxn] = useState('');
   const [collectPaying, setCollectPaying] = useState(false);
   const [collectLoading, setCollectLoading] = useState(false);
-  // When the Collect dialog is opened from a History row, remember which row so
-  // the just-collected payment's receipt can be surfaced next to that row's
-  // Collect button (the dues payment is separate from the upgradation-fee one).
+  // Remember which History row the Collect dialog was opened from, and the
+  // receipt of the last collection per row, so the action column can offer a
+  // download (scoped to the collected fee → shows that fee's full payment trail).
   const [collectRowId, setCollectRowId] = useState(null);
-  // upgradation_id -> { paymentId, receiptNumber } for the latest dues collection
-  const [collectedReceipts, setCollectedReceipts] = useState({});
+  const [collectedReceipts, setCollectedReceipts] = useState({}); // upg_id -> {paymentId, receiptNumber, ledgerId}
 
   // Payment dialog state
   const [showPayDialog, setShowPayDialog] = useState(false);
@@ -353,6 +352,11 @@ export default function UpgradationPage() {
       if (cash <= 0 && online <= 0) { toast.error('Enter at least one split amount'); return; }
       payload.split_payments = { cash, online };
     }
+    // If exactly one fee was collected, scope its receipt to that ledger entry
+    // so the receipt lists that fee's full payment trail (previous partials +
+    // this one). Capture before collectIds is cleared below.
+    const singleLedgerId = collectIds.length === 1 ? collectIds[0] : null;
+    const rowId = collectRowId;
     setCollectPaying(true);
     try {
       const res = await api.post('/fees/pay', payload);
@@ -364,13 +368,12 @@ export default function UpgradationPage() {
       setCollectSplitOnline('');
       setCollectPartial('');
       const collectedPaymentId = res.data.payment?.payment_id;
-      openReceiptPreview(collectedPaymentId, res.data.receipt_number);
-      // Remember the receipt for the row it was collected from, so a download
-      // button shows next to that row's Collect button (same as Fees mgmt).
-      if (collectRowId && collectedPaymentId) {
+      openReceiptPreview(collectedPaymentId, res.data.receipt_number, singleLedgerId);
+      // Surface a receipt-download in that row's action column.
+      if (rowId && collectedPaymentId) {
         setCollectedReceipts(prev => ({
           ...prev,
-          [collectRowId]: { paymentId: collectedPaymentId, receiptNumber: res.data.receipt_number },
+          [rowId]: { paymentId: collectedPaymentId, receiptNumber: res.data.receipt_number, ledgerId: singleLedgerId },
         }));
       }
       // Refresh the approval queue so the dues badge updates after collecting
@@ -937,21 +940,6 @@ export default function UpgradationPage() {
                               Collect
                             </Button>
                           )}
-                          {/* Receipt for the dues just collected from this row
-                              (the collection payment, distinct from the
-                              upgradation-fee receipt below). */}
-                          {collectedReceipts[r.upgradation_id] && (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="text-xs h-7 px-2 text-orange-600 hover:text-orange-800 hover:bg-orange-50"
-                              onClick={() => openReceiptPreview(collectedReceipts[r.upgradation_id].paymentId, collectedReceipts[r.upgradation_id].receiptNumber)}
-                              title="View / download collection receipt"
-                            >
-                              <Download className="h-3 w-3 mr-1" />
-                              Receipt
-                            </Button>
-                          )}
                           {isAdmin && (r.status || 'pending_approval') === 'pending_approval' && (
                             <>
                               <Button
@@ -978,14 +966,19 @@ export default function UpgradationPage() {
                               </Button>
                             </>
                           )}
-                          {/* PDF download for any upgradation entry whose
-                              fee has been paid (or partially paid — receipt
-                              of the latest payment is stamped on the ledger). */}
-                          {r.upgradation_fee_payment_id && (
+                          {/* Single receipt download: the just-collected fee's
+                              receipt (scoped → shows that fee's full payment
+                              trail) if a collection was made from this row,
+                              otherwise the upgradation-fee receipt. */}
+                          {(collectedReceipts[r.upgradation_id] || r.upgradation_fee_payment_id) && (
                             <Button
                               size="sm"
                               variant="ghost"
-                              onClick={() => openReceiptPreview(r.upgradation_fee_payment_id, r.upgradation_fee_receipt, r.upgradation_fee_ledger_id)}
+                              onClick={() => {
+                                const c = collectedReceipts[r.upgradation_id];
+                                if (c) openReceiptPreview(c.paymentId, c.receiptNumber, c.ledgerId);
+                                else openReceiptPreview(r.upgradation_fee_payment_id, r.upgradation_fee_receipt, r.upgradation_fee_ledger_id);
+                              }}
                               title="View / download receipt"
                             >
                               <Download className="h-4 w-4" />
