@@ -4,48 +4,19 @@ import { useAuth } from '../../contexts/AuthContext';
 import {
   Users, Calendar, GraduationCap, BarChart3, Bell, MessageSquare,
   ClipboardList, Settings, LogOut, User, Building, Monitor, History,
-  ArrowUpCircle, ShieldCheck, Wallet, BookOpen, FileText, CreditCard,
-  LayoutDashboard,
+  ArrowUpCircle, ShieldCheck, Wallet, BookOpen, CreditCard, Trash2,
 } from 'lucide-react';
 
 // Paths already accessible from the bottom tab bar OR the role's Home page
 // "Quick Actions". The More menu skips these to avoid duplicating tiles.
-// Keep in sync with:
-//   - MobileLayout.js  getBottomTabs(role)
-//   - AdminDashboard / TeacherDashboard / StudentDashboard / ParentDashboard
 const PRIMARY_PATHS_BY_ROLE = {
   admin: new Set([
-    '/m',                  // Home (bottom tab)
-    '/m/students',         // bottom tab + Quick Actions
-    '/m/fees',             // bottom tab + Quick Actions
-    '/m/attendance',       // bottom tab + Quick Actions
-    '/m/marks',            // Quick Actions (Management)
-    '/m/reports',          // Quick Actions (Management)
-    '/m/notices',          // Quick Actions (Management — labelled "Notices")
+    '/m', '/m/students', '/m/fees', '/m/attendance', '/m/marks', '/m/reports', '/m/notices',
   ]),
-  teacher: new Set([
-    '/m',
-    '/m/attendance',
-    '/m/marks',
-    '/m/messages',
-  ]),
-  student: new Set([
-    '/m',
-    '/m/marks',
-    '/m/attendance',
-    '/m/notices',
-  ]),
-  parent: new Set([
-    '/m',
-    '/m/fees',
-    '/m/attendance',
-    '/m/marks',
-    '/m/messages',
-    '/m/notices',
-  ]),
-  accountant: new Set([
-    '/m',                  // accountant only has Home + More in bottom tab
-  ]),
+  teacher: new Set(['/m', '/m/attendance', '/m/marks', '/m/messages']),
+  student: new Set(['/m', '/m/marks', '/m/attendance', '/m/notices']),
+  parent: new Set(['/m', '/m/fees', '/m/attendance', '/m/marks', '/m/messages', '/m/notices']),
+  accountant: new Set(['/m']),
 };
 
 const MobileMore = () => {
@@ -58,10 +29,8 @@ const MobileMore = () => {
   const isStudent = role === 'student';
   const isParent = role === 'parent';
 
-  // Every tile the role *could* see — same as before. We then strip out the
-  // ones already in primary nav for this role just below.
   const allTiles = [
-    // ── Records ────────────────────────────────────────────
+    // ── Records ──
     ...(isAdmin || isTeacher || isAccountant ? [
       { icon: Users, label: 'Students', path: '/m/students', color: '#E88A1A' },
     ] : []),
@@ -73,7 +42,7 @@ const MobileMore = () => {
       { icon: ShieldCheck, label: 'Users', path: '/users', color: '#1A1A1A' },
     ] : []),
 
-    // ── Academic ───────────────────────────────────────────
+    // ── Academic ──
     ...(isAdmin || isTeacher ? [
       { icon: Calendar, label: 'Attendance', path: '/m/attendance', color: '#1A1A1A' },
       { icon: GraduationCap, label: 'Marks', path: '/m/marks', color: '#E88A1A' },
@@ -95,21 +64,24 @@ const MobileMore = () => {
       { icon: BookOpen, label: 'Syllabus', path: '/syllabus', color: '#1A1A1A' },
     ] : []),
 
-    // ── Operations ─────────────────────────────────────────
+    // ── Operations ──
     ...(isAdmin ? [
       { icon: ArrowUpCircle, label: 'Upgradation', path: '/m/upgradation', color: '#E88A1A' },
     ] : []),
     ...(isAdmin || isAccountant || isTeacher ? [
-      { icon: Wallet, label: 'Payroll', path: '/payroll', color: '#1A1A1A' },
+      { icon: Wallet, label: 'Payroll', path: '/m/payroll', color: '#1A1A1A' },
     ] : []),
 
-    // ── Communication ──────────────────────────────────────
+    // ── Communication ──
     ...(isAdmin || isTeacher || isStudent || isParent ? [
       { icon: Bell, label: 'Announcements', path: '/m/notices', color: '#E88A1A' },
     ] : []),
     { icon: MessageSquare, label: 'Messages', path: '/m/messages', color: '#1A1A1A' },
+    ...(isAdmin ? [
+      { icon: Trash2, label: 'Deletion Requests', path: '/m/account-deletions', color: '#dc2626' },
+    ] : []),
 
-    // ── Insights ───────────────────────────────────────────
+    // ── Insights ──
     ...(isAdmin || isAccountant ? [
       { icon: BarChart3, label: 'Reports', path: '/m/reports', color: '#E88A1A' },
     ] : []),
@@ -117,12 +89,11 @@ const MobileMore = () => {
       { icon: History, label: 'Audit Trails', path: '/m/audit-trail', color: '#E88A1A' },
     ] : []),
 
-    // ── Misc ───────────────────────────────────────────────
-    { icon: ClipboardList, label: 'Issues', path: '/issues', color: '#888' },
-    { icon: Settings, label: 'Settings', path: '/settings', color: '#1A1A1A' },
+    // ── Misc ──
+    { icon: ClipboardList, label: 'Issues', path: '/m/issues', color: '#888' },
+    { icon: Settings, label: 'Settings', path: '/m/settings', color: '#1A1A1A' },
   ];
 
-  // Drop anything the user already has on Home (bottom tab + Quick Actions).
   const primary = PRIMARY_PATHS_BY_ROLE[role] || PRIMARY_PATHS_BY_ROLE.admin;
   const menuItems = allTiles.filter(item => !primary.has(item.path));
 

@@ -1,9 +1,10 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import api from '../lib/api';
 import {
   LayoutDashboard, Users, CreditCard, BarChart3, Menu, Calendar,
-  GraduationCap, Bell, MessageSquare, BookOpen, User, FileText, ClipboardList
+  GraduationCap, Bell, MessageSquare, BookOpen, User, FileText, ClipboardList, Lock, AlertTriangle
 } from 'lucide-react';
 
 const getBottomTabs = (role) => {
@@ -91,6 +92,20 @@ const MobileLayout = ({ children, onRefresh }) => {
   const navigate = useNavigate();
   const tabs = getBottomTabs(user?.role);
 
+  // Fee lock: students/parents with overdue fees are limited to Home + Fees
+  // (mirrors the desktop Layout behaviour).
+  const [appLocked, setAppLocked] = useState(false);
+  useEffect(() => {
+    if (user?.role === 'student' || user?.role === 'parent') {
+      api.get('/reports/dashboard')
+        .then(r => setAppLocked(!!r.data.app_locked))
+        .catch(() => {});
+    } else {
+      setAppLocked(false);
+    }
+  }, [user]);
+  const isLockedOut = appLocked && !(location.pathname === '/m' || location.pathname.startsWith('/m/fees'));
+
   const activeTab = tabs.find(t => {
     if (t.path === '/m') return location.pathname === '/m';
     return location.pathname.startsWith(t.path);
@@ -100,7 +115,24 @@ const MobileLayout = ({ children, onRefresh }) => {
     <div className="m-app" data-testid="mobile-app">
       <PullToRefresh onRefresh={onRefresh}>
         <div className="m-content">
-          {children}
+          {appLocked && (
+            <div style={{display:'flex',alignItems:'center',gap:8,padding:'10px 12px',background:'#fee2e2',border:'1px solid #fecaca',borderRadius:12,marginBottom:12}}>
+              <AlertTriangle size={16} color="#dc2626" style={{flexShrink:0}} />
+              <span style={{fontSize:12,color:'#991b1b'}}>Account restricted due to overdue fees. Access limited to Home and Fees.</span>
+            </div>
+          )}
+          {isLockedOut ? (
+            <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',textAlign:'center',padding:'48px 20px'}} data-testid="m-locked-content">
+              <div style={{width:56,height:56,borderRadius:28,background:'#fee2e2',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:12}}>
+                <Lock size={26} color="#dc2626" />
+              </div>
+              <h2 style={{fontSize:18,fontWeight:800,color:'#1A1A1A',marginBottom:6}}>Access Restricted</h2>
+              <p style={{fontSize:13,color:'#666',marginBottom:16,maxWidth:280}}>Clear overdue fees to restore full access to the portal.</p>
+              <button className="m-btn m-btn-primary" style={{width:'auto'}} onClick={() => navigate('/m/fees')}>
+                <CreditCard size={16} /> View Fees
+              </button>
+            </div>
+          ) : children}
         </div>
       </PullToRefresh>
 

@@ -3,6 +3,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import api from '../../lib/api';
 import { getCached, setCached, invalidatePrefix } from '../../lib/pageCache';
 import { previewReportInTab } from '../../lib/preview';
+import { fetchPaymentMethods, PAYMENT_METHODS } from '../../lib/paymentMethods';
 import { toast } from 'sonner';
 import {
   CreditCard, Search, X, Loader2, AlertTriangle, CheckCircle2, Clock,
@@ -23,6 +24,23 @@ const ACADEMIC_YEARS = [
   (() => { const [s] = CURRENT_YEAR.split('-'); return `${+s + 1}-${+s + 2}`; })(),
   (() => { const [s] = CURRENT_YEAR.split('-'); return `${+s - 1}-${+s}`; })(),
 ];
+
+const REPORT_PAGE_SIZE = 20;
+// Prev/Next pager for the report lists (client-side over the loaded rows).
+const ReportPager = ({ page, total, onPage }) => {
+  const pages = Math.max(1, Math.ceil(total / REPORT_PAGE_SIZE));
+  if (total <= REPORT_PAGE_SIZE) return null;
+  return (
+    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,padding:'10px 4px 2px'}}>
+      <span style={{fontSize:11,color:'#888'}}>{(page - 1) * REPORT_PAGE_SIZE + 1}–{Math.min(page * REPORT_PAGE_SIZE, total)} of {total}</span>
+      <div style={{display:'flex',alignItems:'center',gap:6}}>
+        <button className="m-btn m-btn-outline m-btn-sm" style={{width:'auto'}} disabled={page <= 1} onClick={() => onPage(page - 1)}>Prev</button>
+        <span style={{fontSize:11,color:'#666'}}>{page}/{pages}</span>
+        <button className="m-btn m-btn-outline m-btn-sm" style={{width:'auto'}} disabled={page >= pages} onClick={() => onPage(page + 1)}>Next</button>
+      </div>
+    </div>
+  );
+};
 
 const isoToDDMMYYYY = (iso) => {
   if (!iso) return '';
@@ -155,6 +173,8 @@ const CollectTab = () => {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetchDue(); }, [fetchDue]);
+  const [duePage, setDuePage] = useState(1);
+  useEffect(() => { setDuePage(1); }, [dueChart]);
 
   const fetchLedger = useCallback(async (sid) => {
     if (!sid) return;
@@ -276,7 +296,7 @@ const CollectTab = () => {
         </div>
       ) : (
         <div className="m-list">
-          {dueChart.slice(0, 50).map(s => (
+          {dueChart.slice((duePage - 1) * REPORT_PAGE_SIZE, duePage * REPORT_PAGE_SIZE).map(s => (
             <button
               key={s.student_id}
               onClick={() => setSelectedStudentId(s.student_id)}
@@ -293,11 +313,7 @@ const CollectTab = () => {
               </div>
             </button>
           ))}
-          {dueChart.length > 50 && (
-            <div style={{padding:'8px 12px',fontSize:11,color:'#888',textAlign:'center',background:'#F8F8F8'}}>
-              Showing 50 of {dueChart.length} — use search for others
-            </div>
-          )}
+          <ReportPager page={duePage} total={dueChart.length} onPage={setDuePage} />
         </div>
       )}
     </>
@@ -492,6 +508,10 @@ const LedgerRow = ({ entry, checked, onToggle, disabled }) => {
 
 const PaymentSheet = ({ studentId, ledger, payIds, onClose, onSuccess }) => {
   const [method, setMethod] = useState('cash');
+  // Payment methods are admin-configurable in the DB (same source desktop uses).
+  // POS terminal is excluded here as the mobile collect flow has no Ezetap step.
+  const [payMethods, setPayMethods] = useState(PAYMENT_METHODS);
+  useEffect(() => { fetchPaymentMethods({ withPos: false }).then(setPayMethods).catch(() => {}); }, []);
   const [transactionId, setTransactionId] = useState('');
   const [remarks, setRemarks] = useState('');
   const [paymentDate, setPaymentDate] = useState(todayDDMMYYYY());
@@ -533,6 +553,8 @@ const PaymentSheet = ({ studentId, ledger, payIds, onClose, onSuccess }) => {
         const o = parseFloat(splitOnline) || 0;
         if (c <= 0 && o <= 0) { toast.error('Enter at least one split amount'); setProcessing(false); return; }
         payload.split_payments = { cash: c, online: o };
+        // Split total = amount collected (spread across selected entries oldest-first).
+        payload.amount = c + o;
       }
       const res = await api.post('/fees/pay', payload);
       toast.success(res.data.message || 'Payment recorded');
@@ -552,22 +574,22 @@ const PaymentSheet = ({ studentId, ledger, payIds, onClose, onSuccess }) => {
 
         <div style={body}>
           <FormSelect label="Payment Method" value={method} onChange={setMethod}
-            options={[
-              ['cash', 'Cash'],
-              ['cheque', 'Cheque'],
-              ['bank_transfer', 'Bank Transfer / NEFT'],
-              ['online', 'Online / UPI'],
-              ['split', 'Split (Cash + Online)'],
-            ]}
+            options={payMethods.map(m => [m.value, m.label])}
           />
           {method !== 'cash' && method !== 'split' && (
             <FormInput label={method === 'cheque' ? 'Cheque Number' : 'Transaction / UTR'} value={transactionId} onChange={setTransactionId} placeholder={method === 'cheque' ? 'e.g. 123456' : 'UTR / Ref'} />
           )}
           {method === 'split' && (
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-              <FormInput label="Cash Amount" type="number" value={splitCash} onChange={setSplitCash} />
-              <FormInput label="Online Amount" type="number" value={splitOnline} onChange={setSplitOnline} />
-            </div>
+            <>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+                <FormInput label="Cash Amount" type="number" value={splitCash} onChange={setSplitCash} />
+                <FormInput label="Online Amount" type="number" value={splitOnline} onChange={setSplitOnline} />
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 12px',background:'#F8F8F8',borderRadius:10}}>
+                <span style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:'#666'}}>Amount to collect</span>
+                <span style={{fontSize:15,fontWeight:800,color:'#1A1A1A'}}>{fmt((parseFloat(splitCash) || 0) + (parseFloat(splitOnline) || 0))}</span>
+              </div>
+            </>
           )}
           <FormInput label="Payment Date (DD-MM-YYYY)" value={paymentDate} onChange={setPaymentDate} placeholder="DD-MM-YYYY" />
           <FormInput label="Remarks (optional)" value={remarks} onChange={setRemarks} placeholder="e.g. Cash receipt #..." />
@@ -581,7 +603,7 @@ const PaymentSheet = ({ studentId, ledger, payIds, onClose, onSuccess }) => {
           <button onClick={onClose} style={{...actionBtn('outline'), flex:1}}>Cancel</button>
           <button onClick={submit} disabled={processing} style={{...actionBtn('dark'), flex:1}} data-testid="m-pay-submit">
             {processing ? <Loader2 size={14} className="animate-spin" /> : <CreditCard size={14} />}
-            Collect {fmt(total)}
+            Collect {fmt(method === 'split' ? ((parseFloat(splitCash) || 0) + (parseFloat(splitOnline) || 0)) : total)}
           </button>
         </Footer>
       </div>
@@ -757,6 +779,8 @@ const CollectionReport = () => {
     finally { setDownloading(false); }
   };
 
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [rows]);
   const totalCollected = rows.reduce((s, r) => s + (Number(r.total_collected) || 0), 0);
 
   return (
@@ -810,7 +834,7 @@ const CollectionReport = () => {
         </div>
       ) : (
         <div className="m-list">
-          {rows.slice(0, 100).map((r, i) => (
+          {rows.slice((page - 1) * REPORT_PAGE_SIZE, page * REPORT_PAGE_SIZE).map((r, i) => (
             <div key={i} className="m-list-item" style={{gap:8}}>
               <div style={{minWidth:0,flex:1}}>
                 <p style={{fontSize:12,fontWeight:700,color:'#1A1A1A',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.student_name}</p>
@@ -819,11 +843,7 @@ const CollectionReport = () => {
               <p style={{fontSize:13,fontWeight:800,color:'#15803d',flexShrink:0}}>{fmt(r.total_collected)}</p>
             </div>
           ))}
-          {rows.length > 100 && (
-            <div style={{padding:'8px 12px',fontSize:11,color:'#888',textAlign:'center',background:'#F8F8F8'}}>
-              Showing 100 of {rows.length} — download PDF for the full report
-            </div>
-          )}
+          <ReportPager page={page} total={rows.length} onPage={setPage} />
         </div>
       )}
     </>
@@ -911,6 +931,8 @@ const DueReport = () => {
     return arr;
   }, [rows, duration, startDate, endDate]);
   const totalDue = useMemo(() => dueRows.reduce((s, r) => s + dueOf(r), 0), [dueRows]);
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [dueRows]);
 
   return (
     <>
@@ -968,7 +990,7 @@ const DueReport = () => {
         </div>
       ) : (
         <div className="m-list">
-          {dueRows.slice(0, 100).map((r, i) => (
+          {dueRows.slice((page - 1) * REPORT_PAGE_SIZE, page * REPORT_PAGE_SIZE).map((r, i) => (
             <div key={i} className="m-list-item" style={{gap:8}}>
               <div style={{minWidth:0,flex:1}}>
                 <p style={{fontSize:12,fontWeight:700,color:'#1A1A1A',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.student_name}</p>
@@ -977,11 +999,7 @@ const DueReport = () => {
               <p style={{fontSize:13,fontWeight:800,color:'#dc2626',flexShrink:0}}>{fmt(dueOf(r))}</p>
             </div>
           ))}
-          {dueRows.length > 100 && (
-            <div style={{padding:'8px 12px',fontSize:11,color:'#888',textAlign:'center',background:'#F8F8F8'}}>
-              Showing 100 of {dueRows.length} — download PDF for the full report
-            </div>
-          )}
+          <ReportPager page={page} total={dueRows.length} onPage={setPage} />
         </div>
       )}
     </>

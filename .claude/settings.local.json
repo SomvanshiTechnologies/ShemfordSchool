@@ -255,7 +255,10 @@
       "PowerShell(& \"C:\\\\Users\\\\psbho\\\\ShemfordSchool\\\\backend\\\\.venv\\\\Scripts\\\\python.exe\" -m py_compile \"C:\\\\Users\\\\psbho\\\\ShemfordSchool\\\\backend\\\\routes\\\\fees.py\" \"C:\\\\Users\\\\psbho\\\\ShemfordSchool\\\\backend\\\\routes\\\\settings.py\"; if \\($?\\) { \"backend OK\" })",
       "Bash(echo \"exit: $?\")",
       "PowerShell(& \"C:\\\\Users\\\\psbho\\\\ShemfordSchool\\\\backend\\\\.venv\\\\Scripts\\\\python.exe\" -m py_compile \"C:\\\\Users\\\\psbho\\\\ShemfordSchool\\\\backend\\\\routes\\\\fees.py\"; if \\($?\\) { \"fees.py OK\" })",
-      "Bash(npx eslint *)"
+      "Bash(npx eslint *)",
+      "mcp__ide__getDiagnostics",
+      "Bash(dir C:\\\\Users\\\\psbho\\\\ShemfordSchool\\\\frontend\\\\src\\\\components)",
+      "Bash(dir C:\\\\Users\\\\psbho\\\\ShemfordSchool\\\\backend *)"
     ]
   }
 }

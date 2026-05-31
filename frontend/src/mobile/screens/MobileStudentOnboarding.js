@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from '../../lib/api';
+import { clampISODate, todayISO } from '../../lib/dateBounds';
+import { fetchPaymentMethods, PAYMENT_METHODS } from '../../lib/paymentMethods';
 import { toast } from 'sonner';
 import {
   X, ArrowRight, ArrowLeft, CheckCircle, AlertCircle, FileUp, RefreshCw, Loader2,
@@ -58,7 +60,10 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
   const [docs, setDocs] = useState({});
   const [docLoading, setDocLoading] = useState({});
   const [skipDocs, setSkipDocs] = useState(false);
-  const [payment, setPayment] = useState({ method: 'cash', transaction_id: '', remarks: '' });
+  const [payment, setPayment] = useState({ method: 'cash', transaction_id: '', remarks: '', amount: '', split_cash: '', split_online: '' });
+  // Payment methods are admin-configurable in the DB (same source as Fees).
+  const [payMethods, setPayMethods] = useState(PAYMENT_METHODS);
+  useEffect(() => { fetchPaymentMethods({ withPos: false }).then(setPayMethods).catch(() => {}); }, []);
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [result, setResult] = useState(null);
 
@@ -77,12 +82,19 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
 
   const doStep1 = async () => {
     const err = {};
+    const isTenDigits = (v) => /^\d{10}$/.test((v || '').trim());
     if (!data.first_name?.trim()) err.first_name = 'First Name is required';
     if (!data.last_name?.trim()) err.last_name = 'Last Name is required';
     if (!data.gender) err.gender = 'Gender is required';
     if (!data.date_of_birth) err.date_of_birth = 'Date of Birth is required';
-    if (!data.email?.trim()) err.email = 'Email is required';
+    // Email is OPTIONAL — students log in with their admission number + the
+    // password generated against it, so an email isn't required (matches desktop).
     if (!data.phone?.trim()) err.phone = 'Phone is required';
+    else if (!isTenDigits(data.phone)) err.phone = 'Phone must be exactly 10 digits';
+    if (!data.address?.trim()) err.address = 'Address is required';
+    // Parent / mother contact numbers are optional, but when provided must be 10 digits.
+    if (data.parent_phone?.trim() && !isTenDigits(data.parent_phone)) err.parent_phone = 'Contact number must be 10 digits';
+    if (data.mother_phone?.trim() && !isTenDigits(data.mother_phone)) err.mother_phone = 'Mother contact must be 10 digits';
     setErrors(err);
     if (Object.keys(err).length > 0) { toast.error('Please fill required fields'); return; }
     setLoading(true);
@@ -159,12 +171,22 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
       if (admission.admission_time_fee > 0 || (feeData?.fee_breakdown?.length || 0) > 0) {
         setPaymentLoading(true);
         try {
-          const pr = await api.post('/fees/admission-payment', {
+          const payPayload = {
             student_id: admission.student_id,
             payment_method: payment.method,
             transaction_id: payment.transaction_id || undefined,
             remarks: payment.remarks || 'Collected at admission',
-          });
+          };
+          const admTotal = feeData?.admission_time_fee || 0;
+          let collectAmt = parseFloat(payment.amount);
+          if (payment.method === 'split') {
+            const cash = parseFloat(payment.split_cash) || 0;
+            const online = parseFloat(payment.split_online) || 0;
+            payPayload.split_payments = { cash, online };
+            collectAmt = cash + online; // split defines the amount collected
+          }
+          if (collectAmt > 0 && (!admTotal || collectAmt < admTotal)) payPayload.amount = collectAmt;
+          const pr = await api.post('/fees/admission-payment', payPayload);
           receipt_number = pr.data.receipt_number;
           toast.success(`Payment recorded — Receipt: ${receipt_number}`);
         } catch {
@@ -178,21 +200,6 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed to complete admission'); }
     finally { setLoading(false); }
   };
-
-  const Input = ({ label, value, onChange, error, type='text', placeholder, required }) => (
-    <div style={sheet.field}>
-      <label style={sheet.label}>{label}{required && <span style={{color:'#dc2626',marginLeft:4}}>*</span>}</label>
-      <input
-        type={type}
-        value={value || ''}
-        onChange={onChange}
-        placeholder={placeholder}
-        className="m-input"
-        style={error ? { borderColor:'#dc2626' } : undefined}
-      />
-      {error && <div style={sheet.err}><AlertCircle size={12} />{error}</div>}
-    </div>
-  );
 
   return (
     <div onClick={onClose} style={sheet.overlay} data-testid="m-onboarding">
@@ -226,21 +233,21 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
                 </select>
                 {errors.gender && <div style={sheet.err}><AlertCircle size={12} />{errors.gender}</div>}
               </div>
-              <Input label="Date of Birth" required type="date" value={data.date_of_birth} onChange={(e) => { setData({...data, date_of_birth: e.target.value}); setErrors(p => ({...p, date_of_birth:''})); }} error={errors.date_of_birth} />
-              <Input label="Email" required type="email" value={data.email} onChange={(e) => { setData({...data, email: e.target.value}); setErrors(p => ({...p, email:''})); }} error={errors.email} />
-              <Input label="Phone" required value={data.phone} onChange={(e) => { setData({...data, phone: e.target.value}); setErrors(p => ({...p, phone:''})); }} error={errors.phone} />
-              <Input label="Address" value={data.address} onChange={(e) => setData({...data, address: e.target.value})} />
+              <Input label="Date of Birth" required type="date" max={todayISO()} value={data.date_of_birth} onChange={(e) => { setData({...data, date_of_birth: clampISODate(e.target.value, { max: todayISO() })}); setErrors(p => ({...p, date_of_birth:''})); }} error={errors.date_of_birth} />
+              <Input label="Email" type="email" value={data.email} onChange={(e) => { setData({...data, email: e.target.value}); setErrors(p => ({...p, email:''})); }} error={errors.email} />
+              <Input label="Phone" required inputMode="numeric" maxLength={10} value={data.phone} onChange={(e) => { const v = e.target.value.replace(/\D/g, '').slice(0, 10); setData({...data, phone: v}); setErrors(p => ({...p, phone:''})); }} error={errors.phone} />
+              <Input label="Address" required value={data.address} onChange={(e) => { setData({...data, address: e.target.value}); setErrors(p => ({...p, address:''})); }} error={errors.address} />
 
               <div style={{borderTop:'1px solid #F0F0F0',paddingTop:12,marginTop:8}}>
                 <p style={{fontSize:13,fontWeight:700,color:'#1A1A1A',marginBottom:10}}>Father / Guardian</p>
                 <Input label="Name" value={data.parent_name} onChange={(e) => setData({...data, parent_name: e.target.value})} />
-                <Input label="Phone" value={data.parent_phone} onChange={(e) => setData({...data, parent_phone: e.target.value})} />
+                <Input label="Phone" inputMode="numeric" maxLength={10} value={data.parent_phone} onChange={(e) => { const v = e.target.value.replace(/\D/g, '').slice(0, 10); setData({...data, parent_phone: v}); setErrors(p => ({...p, parent_phone:''})); }} error={errors.parent_phone} />
                 <Input label="Email" type="email" value={data.parent_email} onChange={(e) => setData({...data, parent_email: e.target.value})} />
               </div>
               <div style={{borderTop:'1px solid #F0F0F0',paddingTop:12,marginTop:8}}>
                 <p style={{fontSize:13,fontWeight:700,color:'#1A1A1A',marginBottom:10}}>Mother</p>
                 <Input label="Name" value={data.mother_name} onChange={(e) => setData({...data, mother_name: e.target.value})} />
-                <Input label="Phone" value={data.mother_phone} onChange={(e) => setData({...data, mother_phone: e.target.value})} />
+                <Input label="Phone" inputMode="numeric" maxLength={10} value={data.mother_phone} onChange={(e) => { const v = e.target.value.replace(/\D/g, '').slice(0, 10); setData({...data, mother_phone: v}); setErrors(p => ({...p, mother_phone:''})); }} error={errors.mother_phone} />
                 <Input label="Email" type="email" value={data.mother_email} onChange={(e) => setData({...data, mother_email: e.target.value})} />
               </div>
             </>
@@ -403,13 +410,16 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
                     <div style={sheet.field}>
                       <label style={sheet.label}>Payment Method <span style={{color:'#dc2626'}}>*</span></label>
                       <select className="m-input" value={payment.method} onChange={(e) => setPayment(p => ({...p, method: e.target.value}))}>
-                        <option value="cash">Cash</option>
-                        <option value="cheque">Cheque</option>
-                        <option value="bank_transfer">Bank Transfer / NEFT</option>
-                        <option value="online">Online / UPI</option>
+                        {payMethods.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                       </select>
                     </div>
-                    {payment.method !== 'cash' && (
+                    {payment.method === 'split' && (
+                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+                        <Input label="Cash Amount" type="number" value={payment.split_cash} onChange={(e) => setPayment(p => ({...p, split_cash: e.target.value}))} placeholder="0" />
+                        <Input label="Online Amount" type="number" value={payment.split_online} onChange={(e) => setPayment(p => ({...p, split_online: e.target.value}))} placeholder="0" />
+                      </div>
+                    )}
+                    {payment.method !== 'cash' && payment.method !== 'split' && (
                       <Input
                         label={payment.method === 'cheque' ? 'Cheque Number' : 'Transaction / UTR Number'}
                         value={payment.transaction_id}
@@ -417,8 +427,18 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
                         placeholder={payment.method === 'cheque' ? 'e.g. 123456' : 'e.g. UTR / Ref'}
                       />
                     )}
+                    <Input
+                      label="Amount to collect (blank = full)"
+                      type="number"
+                      readOnly={payment.method === 'split'}
+                      value={payment.method === 'split'
+                        ? String(((parseFloat(payment.split_cash) || 0) + (parseFloat(payment.split_online) || 0)) || '')
+                        : payment.amount}
+                      onChange={(e) => setPayment(p => ({...p, amount: e.target.value}))}
+                      placeholder={`Full: ₹${(feeData.admission_time_fee||0).toLocaleString()}`}
+                    />
                     <Input label="Remarks (optional)" value={payment.remarks} onChange={(e) => setPayment(p => ({...p, remarks: e.target.value}))} placeholder="e.g. Received from father" />
-                    <p style={{fontSize:11,color:'#666',background:'#F8F8F8',padding:'8px 10px',borderRadius:8}}>A receipt will be generated automatically after admission is confirmed.</p>
+                    <p style={{fontSize:11,color:'#666',background:'#F8F8F8',padding:'8px 10px',borderRadius:8}}>Leave amount blank to collect the full fee, or enter a smaller amount for a partial payment. A receipt is generated after admission is confirmed.</p>
                   </div>
                 </div>
               )}
@@ -542,6 +562,26 @@ const btn = (variant) => ({
   background: variant === 'dark' ? '#1A1A1A' : '#FFF',
   color: variant === 'dark' ? '#FFF' : '#1A1A1A',
 });
+
+const Input = ({ label, value, onChange, error, type='text', placeholder, required, inputMode, maxLength, max, min, readOnly }) => (
+  <div style={sheet.field}>
+    <label style={sheet.label}>{label}{required && <span style={{color:'#dc2626',marginLeft:4}}>*</span>}</label>
+    <input
+      type={type}
+      value={value || ''}
+      onChange={onChange}
+      placeholder={placeholder}
+      inputMode={inputMode}
+      maxLength={maxLength}
+      max={max}
+      min={min}
+      readOnly={readOnly}
+      className="m-input"
+      style={error ? { borderColor:'#dc2626' } : (readOnly ? { background:'#F8F8F8', color:'#666' } : undefined)}
+    />
+    {error && <div style={sheet.err}><AlertCircle size={12} />{error}</div>}
+  </div>
+);
 
 const Row = ({ label, value, mono, accent }) => (
   <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',padding:'4px 0'}}>

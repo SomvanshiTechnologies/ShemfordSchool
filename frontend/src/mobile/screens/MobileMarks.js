@@ -28,6 +28,22 @@ const formLabel = {
   letterSpacing:'0.06em', color:'#666', marginBottom:6,
 };
 
+const MARKS_PAGE_SIZE = 10;
+const MPager = ({ page, total, onPage }) => {
+  const pages = Math.max(1, Math.ceil(total / MARKS_PAGE_SIZE));
+  if (total <= MARKS_PAGE_SIZE) return null;
+  return (
+    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,padding:'8px 2px 4px'}}>
+      <span style={{fontSize:11,color:'#888'}}>{(page - 1) * MARKS_PAGE_SIZE + 1}–{Math.min(page * MARKS_PAGE_SIZE, total)} of {total}</span>
+      <div style={{display:'flex',alignItems:'center',gap:6}}>
+        <button className="m-btn m-btn-outline m-btn-sm" style={{width:'auto'}} disabled={page <= 1} onClick={() => onPage(page - 1)}>Prev</button>
+        <span style={{fontSize:11,color:'#666'}}>Page {page}/{pages}</span>
+        <button className="m-btn m-btn-outline m-btn-sm" style={{width:'auto'}} disabled={page >= pages} onClick={() => onPage(page + 1)}>Next</button>
+      </div>
+    </div>
+  );
+};
+
 const TabBar = ({ tabs, active, onChange }) => (
   <div style={{display:'flex',gap:6,padding:4,background:'#F0F0F0',borderRadius:12,marginBottom:12,overflowX:'auto'}}>
     {tabs.map(t => (
@@ -136,8 +152,8 @@ const MobileMarks = () => {
 
   const tabs = [
     ...(isAdmin ? [{ key: 'exams', label: 'Exams' }] : []),
-    ...(canEditMarks ? [{ key: 'entry', label: 'Entry' }] : []),
-    ...(!isTeacher ? [{ key: 'view', label: isAdmin ? 'View' : 'My Marks' }] : []),
+    ...(canEditMarks ? [{ key: 'entry', label: 'Marks Entry' }] : []),
+    ...(!isTeacher ? [{ key: 'view', label: isAdmin ? 'View Marks' : 'My Marks' }] : []),
   ];
 
   return (
@@ -202,6 +218,8 @@ export default MobileMarks;
 
 const ExamsTab = ({ exams, onChanged }) => {
   const [busyId, setBusyId] = useState(null);
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [exams]);
 
   const toggleLock = async (exam) => {
     setBusyId(exam.exam_id);
@@ -230,7 +248,7 @@ const ExamsTab = ({ exams, onChanged }) => {
 
   return (
     <div>
-      {exams.map(exam => {
+      {exams.slice((page - 1) * MARKS_PAGE_SIZE, page * MARKS_PAGE_SIZE).map(exam => {
         const subjects = exam.subjects?.map(s => s.subject).join(', ') || '';
         return (
           <div key={exam.exam_id} style={{background:'#FFF',border:'1px solid rgba(0,0,0,0.04)',borderRadius:14,padding:12,marginBottom:10,boxShadow:'0 1px 3px rgba(0,0,0,0.04)'}}>
@@ -268,6 +286,7 @@ const ExamsTab = ({ exams, onChanged }) => {
           </div>
         );
       })}
+      <MPager page={page} total={exams.length} onPage={setPage} />
     </div>
   );
 };
@@ -288,6 +307,8 @@ const EntryTab = ({ exams, classes, isAdmin }) => {
   const [marksData, setMarksData] = useState({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [students]);
 
   const examOptions = useMemo(() => exams.filter(e => !e.is_locked || isAdmin), [exams, isAdmin]);
 
@@ -431,7 +452,7 @@ const EntryTab = ({ exams, classes, isAdmin }) => {
       ) : students.length === 0 ? (
         <div className="m-empty"><p>No students in {selectedExam.class_name}-{selSection}</p></div>
       ) : (
-        students.map(student => {
+        students.slice((page - 1) * MARKS_PAGE_SIZE, page * MARKS_PAGE_SIZE).map(student => {
           const sm = marksData[student.student_id] || {};
           let totalObt = 0, totalMax = 0;
           (selectedExam.subjects || []).forEach(subj => {
@@ -485,6 +506,7 @@ const EntryTab = ({ exams, classes, isAdmin }) => {
           );
         })
       )}
+      <MPager page={page} total={students.length} onPage={setPage} />
     </>
   );
 };
@@ -497,6 +519,8 @@ const ViewTab = ({ exams, classes }) => {
   const [students, setStudents] = useState([]);
   const [marksData, setMarksData] = useState({});
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [students]);
 
   const sections = useMemo(() => {
     if (!selectedExam) return [];
@@ -559,7 +583,7 @@ const ViewTab = ({ exams, classes }) => {
       ) : students.length === 0 ? (
         <div className="m-empty"><p>No students</p></div>
       ) : (
-        students.map(student => {
+        students.slice((page - 1) * MARKS_PAGE_SIZE, page * MARKS_PAGE_SIZE).map(student => {
           const sm = marksData[student.student_id] || {};
           let totalObt = 0, totalMax = 0;
           (selectedExam.subjects || []).forEach(subj => {
@@ -595,6 +619,7 @@ const ViewTab = ({ exams, classes }) => {
           );
         })
       )}
+      <MPager page={page} total={students.length} onPage={setPage} />
     </>
   );
 };

@@ -36,6 +36,24 @@ const GRADE_MAP = (pct) => {
   return { grade: 'E', cls: 'bg-red-100 text-red-700 border border-red-300' };
 };
 
+const MARKS_PAGE_SIZE = 10;
+
+// Compact client-side pager shared by the Marks tabs.
+const MarksPager = ({ page, total, onPage }) => {
+  const pages = Math.max(1, Math.ceil(total / MARKS_PAGE_SIZE));
+  if (total <= MARKS_PAGE_SIZE) return null;
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2 px-4 py-2.5 border-t border-slate-100 bg-slate-50/60">
+      <p className="text-xs text-slate-400 mr-auto">
+        {(page - 1) * MARKS_PAGE_SIZE + 1}–{Math.min(page * MARKS_PAGE_SIZE, total)} of {total}
+      </p>
+      <Button variant="outline" size="sm" className="h-8 px-3 rounded-lg" disabled={page <= 1} onClick={() => onPage(page - 1)}>Prev</Button>
+      <span className="text-xs text-slate-500">Page {page} / {pages}</span>
+      <Button variant="outline" size="sm" className="h-8 px-3 rounded-lg" disabled={page >= pages} onClick={() => onPage(page + 1)}>Next</Button>
+    </div>
+  );
+};
+
 const MarksPage = () => {
   const { user } = useAuth();
   const { viewSession } = useSession();
@@ -360,6 +378,12 @@ const MarksPage = () => {
     { value: 'annual', label: 'Annual Exam' },
   ];
 
+  const [examsPage, setExamsPage] = useState(1);
+  const [entryPage, setEntryPage] = useState(1);
+  const [viewPage, setViewPage] = useState(1);
+  useEffect(() => { setExamsPage(1); }, [exams]);
+  useEffect(() => { setEntryPage(1); setViewPage(1); }, [students]);
+
   return (
     <div data-testid="marks-page">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8 pb-6 border-b border-slate-200">
@@ -413,7 +437,7 @@ const MarksPage = () => {
                     <TableRow>
                       <TableCell colSpan={6} className="text-center py-8 text-slate-500">No exams defined yet</TableCell>
                     </TableRow>
-                  ) : exams.map(exam => (
+                  ) : exams.slice((examsPage - 1) * MARKS_PAGE_SIZE, examsPage * MARKS_PAGE_SIZE).map(exam => (
                     <TableRow key={exam.exam_id} className="hover:bg-slate-50">
                       <TableCell className="font-semibold text-slate-900">{exam.name}</TableCell>
                       <TableCell className="text-xs uppercase text-slate-500">{exam.exam_type}</TableCell>
@@ -454,6 +478,7 @@ const MarksPage = () => {
                   ))}
                 </TableBody>
               </Table>
+              <MarksPager page={examsPage} total={exams.length} onPage={setExamsPage} />
             </div>
           </TabsContent>
         )}
@@ -551,7 +576,7 @@ const MarksPage = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {students.map(student => {
+                  {students.slice((entryPage - 1) * MARKS_PAGE_SIZE, entryPage * MARKS_PAGE_SIZE).map(student => {
                     const studentMarks = marksData[student.student_id] || {};
                     let totalObt = 0, totalMax = 0;
                     (selectedExam.subjects || []).forEach(s => {
@@ -598,6 +623,7 @@ const MarksPage = () => {
                 </TableBody>
               </Table>
             )}
+            <MarksPager page={entryPage} total={students.length} onPage={setEntryPage} />
           </div>
         </TabsContent>
 
@@ -658,7 +684,7 @@ const MarksPage = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {students.map(student => {
+                    {students.slice((viewPage - 1) * MARKS_PAGE_SIZE, viewPage * MARKS_PAGE_SIZE).map(student => {
                       const studentMarks = marksData[student.student_id] || {};
                       let totalObt = 0, totalMax = 0;
                       (selectedExam.subjects || []).forEach(s => {
@@ -688,6 +714,7 @@ const MarksPage = () => {
                     })}
                   </TableBody>
                 </Table>
+                <MarksPager page={viewPage} total={students.length} onPage={setViewPage} />
               </div>
             )}
           </div>

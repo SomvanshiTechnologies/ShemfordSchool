@@ -1533,9 +1533,12 @@ const StudentsPage = () => {
                       <Input
                         type="number" min="0" step="0.01"
                         max={onbFeeData.admission_time_fee || undefined}
-                        className="mt-1 h-9 text-sm"
+                        readOnly={onbPayment.method === 'split'}
+                        className={`mt-1 h-9 text-sm ${onbPayment.method === 'split' ? 'bg-slate-50 text-slate-500 cursor-not-allowed' : ''}`}
                         placeholder={`Full: ₹${(onbFeeData.admission_time_fee||0).toLocaleString()}`}
-                        value={onbPayment.partial_amount}
+                        value={onbPayment.method === 'split'
+                          ? (((parseFloat(onbPayment.split_cash) || 0) + (parseFloat(onbPayment.split_online) || 0)) || '')
+                          : onbPayment.partial_amount}
                         onChange={e => setOnbPayment(p => ({ ...p, partial_amount: e.target.value }))}
                       />
                       <p className="text-[10px] text-slate-400 mt-1">

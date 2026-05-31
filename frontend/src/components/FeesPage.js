@@ -248,8 +248,11 @@ const FeesPage = () => {
     finally { setRefreshing(false); }
   }, [viewSession]);
 
-  // Refetch the due chart whenever any due-tab filter changes
+  // Refetch the due chart whenever any due-tab filter changes.
+  // Admin/accountant only — /fees/due-chart is staff-scoped, so running it for
+  // a student/parent would 403 ("Access denied") on their My Fees page.
   useEffect(() => {
+    if (!isAdmin) return;
     let active = true;
     const params = {};
     if (dueFeeSelections.length > 0) {
@@ -440,6 +443,9 @@ const FeesPage = () => {
         if (cash <= 0 && online <= 0) { toast.error('Enter at least one split amount'); setProcessingPayment(false); return; }
         payload.payment_method = 'split';
         payload.split_payments = { cash, online };
+        // Split total defines the amount being collected (spread across the
+        // selected entries oldest-first when it's less than the full due).
+        payload.amount = cash + online;
       }
       const res = await api.post('/fees/pay', payload);
       toast.success(res.data.message);
@@ -1684,9 +1690,12 @@ const FeesPage = () => {
                     min="0"
                     step="0.01"
                     max={remaining}
-                    className="mt-1 h-9 text-sm"
+                    readOnly={payForm.method === 'split'}
+                    className={`mt-1 h-9 text-sm ${payForm.method === 'split' ? 'bg-slate-50 text-slate-500 cursor-not-allowed' : ''}`}
                     placeholder={`Full: ₹${remaining.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`}
-                    value={payForm.partial_amount}
+                    value={payForm.method === 'split'
+                      ? (((parseFloat(payForm.split_cash) || 0) + (parseFloat(payForm.split_online) || 0)) || '')
+                      : payForm.partial_amount}
                     onChange={e => setPayForm(f => ({ ...f, partial_amount: e.target.value }))}
                   />
                   <p className="text-[10px] text-slate-400 mt-1">

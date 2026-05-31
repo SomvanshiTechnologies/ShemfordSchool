@@ -41,6 +41,7 @@ import ClassStructurePage from "./components/ClassStructurePage";
 import SettingsPage from "./components/SettingsPage";
 import PayrollPage from "./components/PayrollPage";
 import AuditTrailPage from "./components/AuditTrailPage";
+import AccountDeletionsPage from "./components/AccountDeletionsPage";
 import MobileApp from "./mobile/MobileApp";
 import { useMobile } from "./hooks/useMobile";
 import ScreenshotBlocker from "./components/ScreenshotBlocker";
@@ -265,7 +266,18 @@ function AppRouter() {
           </ProtectedRoute>
         }
       />
-      
+
+      <Route
+        path="/account-deletions"
+        element={
+          <ProtectedRoute allowedRoles={['admin']}>
+            <Layout>
+              <AccountDeletionsPage />
+            </Layout>
+          </ProtectedRoute>
+        }
+      />
+
       {/* Student-specific routes */}
       <Route
         path="/my-attendance"

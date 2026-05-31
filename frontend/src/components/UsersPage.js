@@ -41,7 +41,7 @@ import {
 } from './ui/table';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { toast } from 'sonner';
-import { Search, Users, Shield, Edit, X, Loader2, UserCheck, UserX } from 'lucide-react';
+import { Search, Users, Shield, Edit, X, Loader2, UserCheck, UserX, KeyRound, Copy } from 'lucide-react';
 import { getInitials, formatDate } from '../lib/utils';
 
 const UsersPage = () => {
@@ -65,6 +65,25 @@ const UsersPage = () => {
   const [createData, setCreateData] = useState({
     name: '', email: '', password: '', role: 'teacher', phone: ''
   });
+  // Admin set/generate password for ANY user
+  const [pwUser, setPwUser] = useState(null);
+  const [pwInput, setPwInput] = useState('');
+  const [pwResult, setPwResult] = useState(null);
+  const [pwLoading, setPwLoading] = useState(false);
+
+  const handleSetUserPassword = async (generate) => {
+    if (!pwUser) return;
+    setPwLoading(true);
+    try {
+      const body = generate ? {} : { password: pwInput };
+      const res = await api.post(`/users/${pwUser.user_id}/reset-password`, body);
+      setPwResult(res.data);
+      setPwInput('');
+      toast.success('Password updated');
+    } catch (e) {
+      if (!e._handled) toast.error(e.response?.data?.detail || 'Failed to set password');
+    } finally { setPwLoading(false); }
+  };
 
   // Debounced server-side search term — separate from the input value so we
   // can throttle DB hits without losing keystrokes.
@@ -371,6 +390,9 @@ const UsersPage = () => {
                             <Edit className="h-4 w-4" />
                           </Button>
                         )}
+                        <Button variant="ghost" size="sm" onClick={() => { setPwUser(user); setPwInput(''); setPwResult(null); }} title="Set / generate password" data-testid={`set-pw-${user.user_id}`}>
+                          <KeyRound className="h-4 w-4" />
+                        </Button>
                         {user.user_id !== currentUser?.user_id && (
                           user.is_active ? (
                             <Button
@@ -440,6 +462,50 @@ const UsersPage = () => {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowEditDialog(false)}>Cancel</Button>
             <Button onClick={handleUpdateRole} data-testid="update-role-btn">Update Role</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Set / Generate Password (any user) */}
+      <Dialog open={!!pwUser} onOpenChange={(o) => { if (!o) { setPwUser(null); setPwResult(null); setPwInput(''); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><KeyRound className="h-4 w-4" /> Set Password</DialogTitle>
+            <DialogDescription>{pwUser?.name} ({pwUser?.role}) — they can sign in with their email/ID and this password.</DialogDescription>
+          </DialogHeader>
+          {pwResult ? (
+            <div className="space-y-3 py-2">
+              <p className="text-sm font-medium text-green-700">Password updated successfully</p>
+              <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl p-3">
+                <code className="text-sm font-mono flex-1 break-all">{pwResult.password}</code>
+                <Button size="sm" variant="outline" className="rounded-lg shrink-0"
+                  onClick={async () => { try { await navigator.clipboard.writeText(pwResult.password); toast.success('Copied'); } catch { toast.error('Copy failed'); } }}>
+                  <Copy className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">Login: {pwResult.email}. Share securely — the user can change it after signing in.</p>
+            </div>
+          ) : (
+            <div className="space-y-3 py-2">
+              <div className="space-y-1.5">
+                <Label>New Password <span className="text-xs text-muted-foreground">(min 6 chars — leave blank to auto-generate)</span></Label>
+                <Input type="text" value={pwInput} onChange={(e) => setPwInput(e.target.value)} placeholder="Custom password, or leave blank" data-testid="user-pw-input" />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            {pwResult ? (
+              <Button onClick={() => { setPwUser(null); setPwResult(null); }}>Done</Button>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => handleSetUserPassword(true)} disabled={pwLoading}>
+                  {pwLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null} Generate
+                </Button>
+                <Button onClick={() => handleSetUserPassword(false)} disabled={pwLoading || (!!pwInput && pwInput.length < 6)} data-testid="user-pw-save">
+                  Set Password
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

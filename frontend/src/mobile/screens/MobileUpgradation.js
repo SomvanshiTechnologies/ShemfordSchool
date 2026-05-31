@@ -1,20 +1,14 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
+import { useSession } from '../../contexts/SessionContext';
 import api from '../../lib/api';
 import { getCached, setCached, invalidatePrefix } from '../../lib/pageCache';
+import { fetchPaymentMethods, PAYMENT_METHODS_WITH_POS } from '../../lib/paymentMethods';
 import { toast } from 'sonner';
 import {
-  ArrowUpCircle, History, Search, CheckCircle2, AlertCircle, Loader2,
-  Eye, CreditCard, Check, X, ChevronRight, ChevronLeft, Receipt,
+  ArrowUpCircle, Search, CheckCircle2, AlertCircle, Loader2,
+  Eye, CreditCard, Check, X, ChevronRight, ChevronLeft, Download,
 } from 'lucide-react';
-
-const PAYMENT_METHODS = [
-  { value: 'cash', label: 'Cash' },
-  { value: 'upi', label: 'UPI' },
-  { value: 'cheque', label: 'Cheque' },
-  { value: 'bank_transfer', label: 'Bank Transfer' },
-  { value: 'card', label: 'Card' },
-];
 
 const STREAMS = ['Science', 'Humanities'];
 const CLASSES_WITH_STREAMS = ['Class 11', 'Class 12', '11th', '12th'];
@@ -23,11 +17,16 @@ const isStreamClass = (cn) => CLASSES_WITH_STREAMS.includes(cn) || /^(11|12)(th)
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
-const currentAY = () => {
-  const now = new Date();
-  const y = now.getFullYear();
-  return now.getMonth() + 1 >= 4 ? `${y}-${y + 1}` : `${y - 1}-${y}`;
+// Remaining balance for a ledger entry: prefer the server's remaining_balance,
+// else net_amount − amount_paid. Mirrors desktop UpgradationPage.
+const remainingOf = (e) => {
+  const paid = Number(e.amount_paid || 0);
+  return e.remaining_balance != null && e.remaining_balance >= 0
+    ? Number(e.remaining_balance)
+    : Math.max(0, Number(e.net_amount || 0) - paid);
 };
+
+const HISTORY_PAGE_SIZE = 10;
 
 const formLabel = {
   display:'block', fontSize:11, fontWeight:700, textTransform:'uppercase',
@@ -53,6 +52,159 @@ const TabBar = ({ tabs, active, onChange }) => (
   </div>
 );
 
+// ─── Receipt preview hook + sheet ────────────────────────────────────────────
+// Fetches the receipt PDF and shows it inline. Pass ledgerId to scope the
+// receipt to a single fee (shows that fee's full payment trail).
+const useReceipt = () => {
+  const [preview, setPreview] = useState(null);
+  const openPreview = useCallback(async (paymentId, receiptNumber, ledgerId) => {
+    if (!paymentId) return;
+    try {
+      const qs = ledgerId ? `?ledger_id=${encodeURIComponent(ledgerId)}` : '';
+      const res = await api.get(`/fees/receipt/${paymentId}/pdf${qs}`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      setPreview({ url, paymentId, receiptNumber });
+    } catch {
+      toast.error('Receipt generated but preview failed.');
+    }
+  }, []);
+  const close = useCallback(() => {
+    setPreview(prev => { if (prev?.url) URL.revokeObjectURL(prev.url); return null; });
+  }, []);
+  return { preview, openPreview, close };
+};
+
+const ReceiptPreviewSheet = ({ preview, onClose }) => {
+  useEffect(() => {
+    const h = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
+  if (!preview) return null;
+  const download = () => {
+    const a = document.createElement('a');
+    a.href = preview.url;
+    a.download = `receipt-${preview.receiptNumber || 'fee'}.pdf`;
+    document.body.appendChild(a); a.click(); a.remove();
+  };
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:260,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{background:'#FFF',width:'100%',maxWidth:560,borderTopLeftRadius:20,borderTopRightRadius:20,height:'92dvh',display:'flex',flexDirection:'column',paddingBottom:'env(safe-area-inset-bottom, 0)'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 16px',borderBottom:'1px solid #F0F0F0'}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,minWidth:0}}>
+            <CheckCircle2 size={18} color="#16a34a" />
+            <span style={{fontSize:14,fontWeight:800,color:'#1A1A1A'}}>Payment recorded</span>
+            {preview.receiptNumber && (
+              <span style={{fontSize:11,color:'#888',fontFamily:'ui-monospace, monospace',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{preview.receiptNumber}</span>
+            )}
+          </div>
+          <button onClick={onClose} aria-label="Close" style={{background:'none',border:'none',padding:6,cursor:'pointer',color:'#888'}}><X size={20} /></button>
+        </div>
+        <div style={{flex:1,background:'#F0F0F0',minHeight:0}}>
+          <iframe src={preview.url} title="Fee receipt" style={{width:'100%',height:'100%',border:0}} />
+        </div>
+        <div style={{display:'flex',gap:8,padding:12,borderTop:'1px solid #F0F0F0'}}>
+          <button onClick={() => window.open(preview.url, '_blank')} className="m-btn m-btn-outline" style={{flex:1}}>
+            <Eye size={14} /> Open
+          </button>
+          <button onClick={download} className="m-btn" style={{flex:1,background:'#1A1A1A',color:'#FFF'}}>
+            <Download size={14} /> Download
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── Collect-fee flow hook (shared by Upgrade + History tabs) ────────────────
+const useCollectFlow = (onPaid) => {
+  const [show, setShow] = useState(false);
+  const [student, setStudent] = useState(null);
+  const [rowId, setRowId] = useState(null);
+  const [entries, setEntries] = useState([]);
+  const [ids, setIds] = useState([]);
+  const [method, setMethod] = useState('cash');
+  const [txn, setTxn] = useState('');
+  const [partial, setPartial] = useState('');
+  const [splitCash, setSplitCash] = useState('');
+  const [splitOnline, setSplitOnline] = useState('');
+  const [paying, setPaying] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const open = useCallback(async (stu, rid = null) => {
+    if (!stu?.student_id) return;
+    setStudent(stu);
+    setRowId(rid);
+    setIds([]);
+    setPartial(''); setSplitCash(''); setSplitOnline('');
+    setLoading(true);
+    setShow(true);
+    try {
+      const res = await api.get(`/fees/ledger/${stu.student_id}`);
+      const ledger = res.data?.ledger || {};
+      const all = [...(ledger.one_time || []), ...(ledger.yearly || []), ...(ledger.monthly || [])];
+      setEntries(all.filter(e => e.status === 'pending' || e.status === 'overdue'));
+    } catch (e) {
+      if (!e._handled) toast.error(e.response?.data?.detail || 'Failed to load pending fees');
+      setShow(false);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const close = useCallback(() => setShow(false), []);
+
+  const pay = useCallback(async () => {
+    if (!ids.length) { toast.error('Select at least one entry'); return; }
+    if (!student) return;
+    const payload = {
+      student_id: student.student_id,
+      ledger_ids: ids,
+      payment_method: method,
+      transaction_id: txn || undefined,
+    };
+    const partialVal = parseFloat(partial);
+    if (partial && partialVal > 0) payload.amount = partialVal;
+    if (method === 'split') {
+      const cash = parseFloat(splitCash) || 0;
+      const online = parseFloat(splitOnline) || 0;
+      if (cash <= 0 && online <= 0) { toast.error('Enter at least one split amount'); return; }
+      payload.split_payments = { cash, online };
+    }
+    // Scope the receipt to a single fee when exactly one was collected, so it
+    // shows that fee's full payment trail (previous partials + this one).
+    const singleLedgerId = ids.length === 1 ? ids[0] : null;
+    const rid = rowId;
+    const stu = student;
+    setPaying(true);
+    try {
+      const res = await api.post('/fees/pay', payload);
+      toast.success(res.data.message || 'Fees collected successfully');
+      setShow(false);
+      setIds([]); setTxn(''); setPartial(''); setSplitCash(''); setSplitOnline('');
+      const paymentId = res.data.payment?.payment_id;
+      onPaid && (await onPaid({
+        paymentId,
+        receiptNumber: res.data.receipt_number,
+        ledgerId: singleLedgerId,
+        rowId: rid,
+        student: stu,
+      }));
+    } catch (e) {
+      if (!e._handled) toast.error(e.response?.data?.detail || 'Payment failed');
+    } finally {
+      setPaying(false);
+    }
+  }, [ids, student, method, txn, partial, splitCash, splitOnline, rowId, onPaid]);
+
+  return {
+    show, student, entries, ids, setIds, method, setMethod, txn, setTxn,
+    partial, setPartial, splitCash, setSplitCash, splitOnline, setSplitOnline,
+    paying, loading, open, close, pay,
+  };
+};
+
 // ─── Main ──────────────────────────────────────────────────────────────────
 
 const MobileUpgradation = () => {
@@ -61,6 +213,7 @@ const MobileUpgradation = () => {
 
   const [tab, setTab] = useState('upgrade');
   const [classes, setClasses] = useState(getCached('classes') || []);
+  const [payMethods, setPayMethods] = useState(PAYMENT_METHODS_WITH_POS);
 
   useEffect(() => {
     (async () => {
@@ -71,6 +224,9 @@ const MobileUpgradation = () => {
         setCached('classes', arr);
       } catch {}
     })();
+    // Payment methods are admin-configurable in the DB — fetch the live list
+    // (same source the desktop collect dialogs use). Falls back to defaults.
+    fetchPaymentMethods({ withPos: true }).then(setPayMethods).catch(() => {});
   }, []);
 
   return (
@@ -89,8 +245,8 @@ const MobileUpgradation = () => {
         { key: 'history', label: 'History' },
       ]} active={tab} onChange={setTab} />
 
-      {tab === 'upgrade' && <UpgradeTab classes={classes} isAdmin={isAdmin} />}
-      {tab === 'history' && <HistoryTab isAdmin={isAdmin} />}
+      {tab === 'upgrade' && <UpgradeTab classes={classes} payMethods={payMethods} />}
+      {tab === 'history' && <HistoryTab isAdmin={isAdmin} payMethods={payMethods} />}
     </div>
   );
 };
@@ -99,7 +255,9 @@ export default MobileUpgradation;
 
 // ─── Upgrade Tab ───────────────────────────────────────────────────────────
 
-const UpgradeTab = ({ classes }) => {
+const UpgradeTab = ({ classes, payMethods }) => {
+  const { viewSession } = useSession();
+
   const [search, setSearch] = useState('');
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
@@ -108,30 +266,51 @@ const UpgradeTab = ({ classes }) => {
   const [toClass, setToClass] = useState('');
   const [toSection, setToSection] = useState('');
   const [toStream, setToStream] = useState('');
-  const [toAY, setToAY] = useState(currentAY());
+  const [toAY, setToAY] = useState('');
   const [notes, setNotes] = useState('');
   const [upgrading, setUpgrading] = useState(false);
   const [graduating, setGraduating] = useState(false);
   const [result, setResult] = useState(null);
 
   const [feeBlockMsg, setFeeBlockMsg] = useState(null);
+  // True when the selected student had pending/overdue fees — even after the
+  // dues are collected, their upgrade goes through admin approval (queued in
+  // history) rather than upgrading immediately. Clean accounts upgrade directly.
+  const [requiresApproval, setRequiresApproval] = useState(false);
+  const [ledgerEntries, setLedgerEntries] = useState([]); // full ledger (all statuses)
   const [pendingEntries, setPendingEntries] = useState([]);
   const [duesLoading, setDuesLoading] = useState(false);
-
-  // Collect-fee dialog state (mirrors desktop UpgradationPage)
-  const [showCollect, setShowCollect] = useState(false);
-  const [collectIds, setCollectIds] = useState([]);
-  const [collectMethod, setCollectMethod] = useState('cash');
-  const [collectTxn, setCollectTxn] = useState('');
-  const [collectPaying, setCollectPaying] = useState(false);
-  const [collectLoading, setCollectLoading] = useState(false);
 
   const upgradingRef = useRef(false);
   const searchTimer = useRef(null);
 
-  // Debounced search.
-  // /students search matches parents too — narrow to student name/admission
-  // so the upgrade picker doesn't surface Ankit when you search "pooja".
+  const { preview, openPreview, close: closePreview } = useReceipt();
+
+  // Default the destination ("promote to") year to the year *after* the viewed
+  // session — not the live clock — so promotions target the correct year for
+  // whichever session is selected. Overridden per-student on selection.
+  useEffect(() => {
+    if (selected) return;
+    const m = /^(\d{4})-(\d{4})$/.exec(viewSession || '');
+    if (m) {
+      const start = parseInt(m[1], 10);
+      setToAY(`${start + 1}-${start + 2}`);
+    }
+  }, [viewSession, selected]);
+
+  // Refresh the dues tables (full ledger + pending) for the selected student.
+  const refreshDues = useCallback(async (studentId) => {
+    try {
+      const res = await api.get(`/fees/ledger/${studentId}`);
+      const ledger = res.data?.ledger || {};
+      const all = [...(ledger.one_time || []), ...(ledger.yearly || []), ...(ledger.monthly || [])];
+      setLedgerEntries(all);
+      setPendingEntries(all.filter(e => e.status === 'pending' || e.status === 'overdue'));
+    } catch { /* non-fatal */ }
+  }, []);
+
+  // Debounced search. /students search matches parents too — narrow to
+  // student name / admission so the picker doesn't surface unrelated people.
   useEffect(() => {
     if (selected) return;
     clearTimeout(searchTimer.current);
@@ -157,30 +336,29 @@ const UpgradeTab = ({ classes }) => {
     setResults([]);
     setSearch(`${s.first_name} ${s.last_name} (${s.admission_number || s.student_id})`);
     setResult(null);
-    setFeeBlockMsg(null);
-    setPendingEntries([]);
 
-    // Fee status check
     if (s.fee_status === 'pending' || s.fee_status === 'overdue') {
       const yr = s.academic_year || 'current year';
       setFeeBlockMsg(`Fees for ${yr} are ${s.fee_status}.`);
+      setRequiresApproval(true);   // had dues → upgrade goes through approval
+      setLedgerEntries([]);
+      setPendingEntries([]);
       setDuesLoading(true);
-      api.get(`/fees/ledger/${s.student_id}`).then(r => {
-        const ledger = r.data?.ledger || {};
-        const all = [...(ledger.one_time || []), ...(ledger.yearly || []), ...(ledger.monthly || [])];
-        const dues = all.filter(e => e.status === 'pending' || e.status === 'overdue');
-        setPendingEntries(dues);
-        setCollectIds(dues.map(e => e.ledger_id));
-      }).catch(() => {}).finally(() => setDuesLoading(false));
+      refreshDues(s.student_id).finally(() => setDuesLoading(false));
+    } else {
+      setFeeBlockMsg(null);
+      setRequiresApproval(false);  // clean account → direct upgrade
+      setLedgerEntries([]);
+      setPendingEntries([]);
     }
 
-    // Auto-advance academic year
+    // Auto-advance academic year from the student's current year.
     if (s.academic_year && /^\d{4}-\d{4}$/.test(s.academic_year)) {
       const startYear = parseInt(s.academic_year.split('-')[0], 10);
       setToAY(`${startYear + 1}-${startYear + 2}`);
     }
 
-    // Auto-pick the next class
+    // Auto-pick the next class.
     const active = (classes || []).filter(c => c.is_active);
     const idx = active.findIndex(c => c.name === s.class_name);
     if (idx >= 0 && idx + 1 < active.length) {
@@ -200,6 +378,8 @@ const UpgradeTab = ({ classes }) => {
     setToStream('');
     setNotes('');
     setFeeBlockMsg(null);
+    setRequiresApproval(false);
+    setLedgerEntries([]);
     setPendingEntries([]);
     setResult(null);
   };
@@ -217,7 +397,7 @@ const UpgradeTab = ({ classes }) => {
     return idx >= 0 ? active.slice(idx + 1) : active;
   }, [classes, selected]);
 
-  const doUpgrade = async () => {
+  const doUpgrade = async (opts = {}) => {
     if (!selected || !toClass || !toSection) {
       toast.error('Select target class and section');
       return;
@@ -231,77 +411,32 @@ const UpgradeTab = ({ classes }) => {
     upgradingRef.current = true;
     setUpgrading(true);
     try {
+      // force_upgrade=false lets the backend auto-approve when there are no
+      // dues; =true queues the request for admin approval (used when the
+      // student had dues).
+      const forceUpgrade = typeof opts.forceUpgrade === 'boolean' ? opts.forceUpgrade : false;
       const r = await api.post(`/students/${selected.student_id}/upgrade`, {
         to_class: toClass,
         to_section: toSection,
         to_stream: effectiveStream || null,
         academic_year: toAY,
         notes,
+        force_upgrade: forceUpgrade,
       });
-      toast.success(r.data.message || 'Upgrade request submitted. Awaiting admin approval.');
+      toast.success(r.data.message || (r.data.auto_approved
+        ? 'Student upgraded.'
+        : 'Upgrade request sent to History for approval.'));
       invalidatePrefix('m-upgradation:');
       resetSelection();
     } catch (e) {
       const detail = e.response?.data?.detail || '';
       const isFeeBlock = e.response?.status === 400 && detail.toLowerCase().includes('fees pending');
       if (isFeeBlock) setFeeBlockMsg(detail);
-      else toast.error(detail || 'Upgrade failed');
+      else if (!e._handled) toast.error(detail || 'Upgrade failed');
     } finally {
       upgradingRef.current = false;
       setUpgrading(false);
     }
-  };
-
-  const openCollect = async () => {
-    if (!selected) return;
-    setCollectLoading(true);
-    setShowCollect(true);
-    try {
-      const r = await api.get(`/fees/ledger/${selected.student_id}`);
-      const ledger = r.data?.ledger || {};
-      const all = [...(ledger.one_time || []), ...(ledger.yearly || []), ...(ledger.monthly || [])];
-      const entries = all.filter(e => e.status === 'pending' || e.status === 'overdue');
-      setPendingEntries(entries);
-      setCollectIds(entries.map(e => e.ledger_id));
-    } catch (e) {
-      toast.error(e.response?.data?.detail || 'Failed to load pending fees');
-      setShowCollect(false);
-    } finally { setCollectLoading(false); }
-  };
-
-  const payPendingFees = async () => {
-    if (!collectIds.length) { toast.error('Select at least one entry'); return; }
-    setCollectPaying(true);
-    try {
-      const r = await api.post('/fees/pay', {
-        student_id: selected.student_id,
-        ledger_ids: collectIds,
-        payment_method: collectMethod,
-        transaction_id: collectTxn || undefined,
-      });
-      toast.success(r.data.message || 'Fees collected successfully');
-      setShowCollect(false);
-      setCollectIds([]);
-      setCollectTxn('');
-      // Re-fetch student to update fee_status so the block clears
-      try {
-        const sr = await api.get(`/students/${selected.student_id}`);
-        const updated = sr.data;
-        setSelected(updated);
-        if (updated.fee_status === 'paid') {
-          setFeeBlockMsg(null);
-          setPendingEntries([]);
-          toast.success('All fees cleared — you can now upgrade the student.');
-        } else {
-          // Refresh pending dues for the still-blocked view
-          const lr = await api.get(`/fees/ledger/${updated.student_id}`);
-          const ledger = lr.data?.ledger || {};
-          const all = [...(ledger.one_time || []), ...(ledger.yearly || []), ...(ledger.monthly || [])];
-          setPendingEntries(all.filter(e => e.status === 'pending' || e.status === 'overdue'));
-        }
-      } catch {}
-    } catch (e) { toast.error(e.response?.data?.detail || 'Payment failed'); }
-    finally { setCollectPaying(false); }
   };
 
   const doGraduate = async () => {
@@ -311,9 +446,38 @@ const UpgradeTab = ({ classes }) => {
       const r = await api.post(`/students/${selected.student_id}/graduate`, { remarks: notes });
       toast.success(r.data.message || 'Student marked as passed out');
       setResult({ graduated: true, message: r.data.message });
-    } catch (e) { toast.error(e.response?.data?.detail || 'Pass out failed'); }
+    } catch (e) { if (!e._handled) toast.error(e.response?.data?.detail || 'Pass out failed'); }
     finally { setGraduating(false); }
   };
+
+  // After collecting dues: show receipt, refresh the student + dues. When dues
+  // clear, drop the approval requirement and auto-upgrade (or prompt to pick a
+  // target). Mirrors desktop UpgradationPage.payPendingFees.
+  const onCollected = useCallback(async ({ paymentId, receiptNumber, ledgerId, student }) => {
+    openPreview(paymentId, receiptNumber, ledgerId);
+    if (!student) return;
+    await refreshDues(student.student_id);
+    try {
+      const sr = await api.get(`/students/${student.student_id}`);
+      const updated = sr.data;
+      setSelected(updated);
+      if (updated.fee_status === 'paid') {
+        setFeeBlockMsg(null);
+        setRequiresApproval(false);
+        if (toClass && toSection) {
+          toast.success('Fees cleared — upgrading student.');
+          doUpgrade({ forceUpgrade: false });
+        } else {
+          toast.success('All fees cleared. Pick the target class & section, then Confirm Upgrade.', { duration: 6000 });
+        }
+      }
+    } catch { /* non-fatal */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openPreview, refreshDues, toClass, toSection]);
+
+  const collect = useCollectFlow(onCollected);
+
+  const totalPending = pendingEntries.reduce((s, e) => s + remainingOf(e), 0);
 
   return (
     <>
@@ -407,7 +571,7 @@ const UpgradeTab = ({ classes }) => {
         </div>
       )}
 
-      {/* Fee blocked banner with pending dues */}
+      {/* Fee blocked banner with full dues ledger (per-fee status + receipt) */}
       {selected && selected.class_name !== '12th' && feeBlockMsg && (
         <div style={{background:'#fee2e2',border:'1px solid #fecaca',borderRadius:14,padding:14,marginBottom:12}}>
           <p style={{fontSize:13,fontWeight:700,color:'#dc2626',marginBottom:6}}>⚠ Cannot Upgrade — Fees Pending</p>
@@ -416,54 +580,68 @@ const UpgradeTab = ({ classes }) => {
             <div style={{display:'flex',alignItems:'center',gap:6,color:'#991b1b',fontSize:12}}>
               <Loader2 size={14} className="animate-spin" /> Loading pending dues…
             </div>
-          ) : pendingEntries.length > 0 ? (
+          ) : ledgerEntries.length > 0 ? (
             <div style={{background:'#FFF',border:'1px solid #fecaca',borderRadius:10,overflow:'hidden'}}>
-              {pendingEntries.map(e => (
-                <div key={e.ledger_id} style={{padding:10,borderBottom:'1px solid #fef2f2',display:'flex',justifyContent:'space-between',gap:8}}>
-                  <div style={{minWidth:0,flex:1}}>
-                    <p style={{fontSize:12,fontWeight:600,color:'#1A1A1A',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.description || e.fee_component}</p>
-                    <p style={{fontSize:10,color:'#888'}}>Due {e.due_date || '—'} · {e.status}</p>
+              {ledgerEntries.map(e => {
+                const isPaid = e.status === 'paid';
+                const paid = Number(e.amount_paid || 0);
+                const isPartial = !isPaid && paid > 0 && remainingOf(e) > 0;
+                const badge = isPaid ? { bg:'#dcfce7', color:'#15803d', label:'paid' }
+                  : isPartial ? { bg:'#dbeafe', color:'#1d4ed8', label:'partially paid' }
+                  : e.status === 'overdue' ? { bg:'#fee2e2', color:'#dc2626', label:'overdue' }
+                  : { bg:'#fef3c7', color:'#a16207', label:'pending' };
+                return (
+                  <div key={e.ledger_id} style={{padding:10,borderBottom:'1px solid #fef2f2',display:'flex',justifyContent:'space-between',gap:8,alignItems:'flex-start'}}>
+                    <div style={{minWidth:0,flex:1}}>
+                      <p style={{fontSize:12,fontWeight:600,color:'#1A1A1A',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.description || e.fee_component}</p>
+                      <p style={{fontSize:10,color:'#888',marginTop:2}}>
+                        Due {e.due_date || '—'} ·
+                        <span style={{marginLeft:4,padding:'1px 6px',borderRadius:5,fontWeight:700,background:badge.bg,color:badge.color}}>{badge.label}</span>
+                      </p>
+                      {isPartial && (
+                        <p style={{fontSize:10,color:'#64748b',marginTop:2}}>Paid ₹{fmt(paid)} · Bal ₹{fmt(remainingOf(e))}</p>
+                      )}
+                    </div>
+                    <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0}}>
+                      <p style={{fontSize:13,fontWeight:800,color:'#dc2626'}}>₹{fmt(e.net_amount)}</p>
+                      {e.payment_id && (
+                        <button onClick={() => openPreview(e.payment_id, e.receipt_number, e.ledger_id)}
+                          title="View / download receipt"
+                          style={{background:'none',border:'none',padding:4,cursor:'pointer',color:'#64748b'}}>
+                          <Download size={14} />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <p style={{fontSize:13,fontWeight:800,color:'#dc2626',flexShrink:0}}>₹{fmt(e.net_amount)}</p>
-                </div>
-              ))}
+                );
+              })}
               <div style={{padding:10,background:'#fef2f2',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                 <span style={{fontSize:12,fontWeight:700,color:'#991b1b'}}>Total Pending</span>
-                <span style={{fontSize:14,fontWeight:800,color:'#dc2626'}}>
-                  ₹{fmt(pendingEntries.reduce((s, e) => s + (e.net_amount || 0), 0))}
-                </span>
+                <span style={{fontSize:14,fontWeight:800,color:'#dc2626'}}>₹{fmt(totalPending)}</span>
               </div>
             </div>
           ) : null}
-          <button onClick={openCollect}
+          <button onClick={() => collect.open(selected)}
             style={{marginTop:10,width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:6,padding:'12px 14px',borderRadius:12,background:'#dc2626',border:'none',color:'#FFF',fontSize:13,fontWeight:700,cursor:'pointer'}}
             data-testid="m-upg-collect-fee">
-            <CreditCard size={14} /> Collect Fee
+            <CreditCard size={14} /> Collect
           </button>
         </div>
       )}
 
-      {showCollect && (
-        <CollectFeeSheet
-          student={selected}
-          entries={pendingEntries}
-          loading={collectLoading}
-          selectedIds={collectIds}
-          setSelectedIds={setCollectIds}
-          method={collectMethod}
-          setMethod={setCollectMethod}
-          txn={collectTxn}
-          setTxn={setCollectTxn}
-          paying={collectPaying}
-          onConfirm={payPendingFees}
-          onClose={() => setShowCollect(false)}
-        />
-      )}
+      {collect.show && <CollectFeeSheet flow={collect} payMethods={payMethods} />}
+      <ReceiptPreviewSheet preview={preview} onClose={closePreview} />
 
-      {/* Target class form */}
-      {selected && selected.class_name !== '12th' && !feeBlockMsg && (
+      {/* Target class form — shown for any non-12th student (even when fees are
+          pending, so the admin can Send for Approval to upgrade later). */}
+      {selected && selected.class_name !== '12th' && (
         <div style={{background:'#FFF',border:'1px solid rgba(0,0,0,0.04)',borderRadius:14,padding:14,marginBottom:12,boxShadow:'0 1px 3px rgba(0,0,0,0.04)'}}>
           <p className="m-section" style={{margin:'0 0 10px'}}>Step 2 — Target Class & Year</p>
+          {feeBlockMsg && (
+            <p style={{fontSize:11,color:'#b45309',marginBottom:10,lineHeight:1.5}}>
+              Collect the fee above to upgrade now — or tap <strong>Send for Approval</strong> to upgrade later: the request waits in History until an admin approves it.
+            </p>
+          )}
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
             <div>
               <label style={formLabel}>New Class</label>
@@ -507,12 +685,12 @@ const UpgradeTab = ({ classes }) => {
             <label style={formLabel}>Notes (optional)</label>
             <input className="m-input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Reason for upgradation..." />
           </div>
-          <button onClick={doUpgrade} disabled={upgrading}
+          <button onClick={() => doUpgrade({ forceUpgrade: requiresApproval })} disabled={upgrading}
             className="m-btn m-btn-primary"
             style={{width:'100%',padding:14}}
             data-testid="m-upg-confirm">
             {upgrading ? <Loader2 size={14} className="animate-spin" /> : <ArrowUpCircle size={16} />}
-            Confirm Upgrade
+            {requiresApproval ? 'Send for Approval' : 'Confirm Upgrade'}
           </button>
         </div>
       )}
@@ -532,7 +710,7 @@ const UpgradeTab = ({ classes }) => {
 
 // ─── History Tab ───────────────────────────────────────────────────────────
 
-const HistoryTab = ({ isAdmin }) => {
+const HistoryTab = ({ isAdmin, payMethods }) => {
   const [year, setYear] = useState('');
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -540,6 +718,11 @@ const HistoryTab = ({ isAdmin }) => {
   const [rejectFor, setRejectFor] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
   const [viewRow, setViewRow] = useState(null);
+  const [page, setPage] = useState(1);
+  // upg_id -> {paymentId, receiptNumber, ledgerId} for the just-collected fee.
+  const [collectedReceipts, setCollectedReceipts] = useState({});
+
+  const { preview, openPreview, close: closePreview } = useReceipt();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -547,11 +730,22 @@ const HistoryTab = ({ isAdmin }) => {
       const params = year ? { academic_year: year } : {};
       const r = await api.get('/upgradation/history', { params });
       setHistory(Array.isArray(r.data) ? r.data : []);
-    } catch (e) { toast.error(e.response?.data?.detail || 'Failed to load history'); }
+      setPage(1);
+    } catch (e) { if (!e._handled) toast.error(e.response?.data?.detail || 'Failed to load history'); }
     finally { setLoading(false); }
   }, [year]);
 
   useEffect(() => { load(); }, [load]);
+
+  const onCollected = useCallback(async ({ paymentId, receiptNumber, ledgerId, rowId }) => {
+    openPreview(paymentId, receiptNumber, ledgerId);
+    if (rowId && paymentId) {
+      setCollectedReceipts(prev => ({ ...prev, [rowId]: { paymentId, receiptNumber, ledgerId } }));
+    }
+    load();
+  }, [openPreview, load]);
+
+  const collect = useCollectFlow(onCollected);
 
   const approve = async (id) => {
     if (busyId) return;
@@ -560,7 +754,7 @@ const HistoryTab = ({ isAdmin }) => {
       const r = await api.post(`/upgradation/${id}/approve`);
       toast.success(r.data.message || 'Approved');
       load();
-    } catch (e) { toast.error(e.response?.data?.detail || 'Failed to approve'); }
+    } catch (e) { if (!e._handled) toast.error(e.response?.data?.detail || 'Failed to approve'); }
     finally { setBusyId(null); }
   };
 
@@ -573,9 +767,12 @@ const HistoryTab = ({ isAdmin }) => {
       setRejectFor(null);
       setRejectReason('');
       load();
-    } catch (e) { toast.error(e.response?.data?.detail || 'Failed to reject'); }
+    } catch (e) { if (!e._handled) toast.error(e.response?.data?.detail || 'Failed to reject'); }
     finally { setBusyId(null); }
   };
+
+  const totalPages = Math.ceil(history.length / HISTORY_PAGE_SIZE);
+  const pageRows = history.slice((page - 1) * HISTORY_PAGE_SIZE, page * HISTORY_PAGE_SIZE);
 
   return (
     <>
@@ -594,10 +791,12 @@ const HistoryTab = ({ isAdmin }) => {
       ) : history.length === 0 ? (
         <div className="m-empty"><AlertCircle className="m-empty-icon" /><p>No upgradation records</p></div>
       ) : (
-        history.map(r => {
+        <>
+        {pageRows.map(r => {
           const status = r.status || 'pending_approval';
           const isPending = status === 'pending_approval';
           const feePaid = r.upgradation_fee_status === 'paid' || r.upgradation_fee_paid;
+          const receiptAvailable = collectedReceipts[r.upgradation_id] || r.upgradation_fee_payment_id;
           return (
             <div key={r.upgradation_id}
               style={{background:'#FFF',border:'1px solid rgba(0,0,0,0.04)',borderRadius:14,padding:12,marginBottom:10,boxShadow:'0 1px 3px rgba(0,0,0,0.04)'}}>
@@ -617,9 +816,20 @@ const HistoryTab = ({ isAdmin }) => {
                 <ArrowUpCircle size={12} color="#E88A1A" />
                 <span style={{fontWeight:700}}>{r.to_class}-{r.to_section}{r.to_stream ? ` (${r.to_stream})` : ''}</span>
               </div>
+
+              {/* Fee status line: dues badge while pending approval, else
+                  upgradation-fee status. Mirrors desktop. */}
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                 <div style={{display:'flex',alignItems:'center',gap:6}}>
-                  {r.upgradation_fee > 0 && (
+                  {isPending ? (
+                    r.student_dues_total > 0 ? (
+                      <span style={{padding:'2px 8px',borderRadius:6,fontSize:10,fontWeight:700,background:'#fee2e2',color:'#dc2626'}}>
+                        Dues ₹{fmt(r.student_dues_total)}
+                      </span>
+                    ) : (
+                      <span style={{padding:'2px 8px',borderRadius:6,fontSize:10,fontWeight:700,background:'#dcfce7',color:'#15803d'}}>No dues</span>
+                    )
+                  ) : r.upgradation_fee > 0 ? (
                     <>
                       <span style={{fontSize:11,color:'#666'}}>Fee ₹{fmt(r.upgradation_fee)}</span>
                       <span style={{
@@ -630,9 +840,16 @@ const HistoryTab = ({ isAdmin }) => {
                         {feePaid ? 'Paid' : 'Pending'}
                       </span>
                     </>
-                  )}
+                  ) : null}
                 </div>
-                <div style={{display:'flex',gap:6}}>
+                <div style={{display:'flex',gap:6,flexWrap:'wrap',justifyContent:'flex-end'}}>
+                  {isAdmin && isPending && r.student_dues_total > 0 && (
+                    <button onClick={() => collect.open({ student_id: r.student_id, first_name: r.student_name, last_name: '' }, r.upgradation_id)}
+                      style={{padding:'6px 10px',borderRadius:8,background:'#1A1A1A',border:'none',color:'#FFF',fontSize:11,fontWeight:700,display:'flex',alignItems:'center',gap:4,cursor:'pointer'}}
+                      data-testid={`m-upg-collect-${r.upgradation_id}`}>
+                      <CreditCard size={12} /> Collect
+                    </button>
+                  )}
                   {isAdmin && isPending && (
                     <>
                       <button onClick={() => approve(r.upgradation_id)} disabled={busyId === r.upgradation_id}
@@ -647,6 +864,17 @@ const HistoryTab = ({ isAdmin }) => {
                       </button>
                     </>
                   )}
+                  {receiptAvailable && (
+                    <button onClick={() => {
+                        const c = collectedReceipts[r.upgradation_id];
+                        if (c) openPreview(c.paymentId, c.receiptNumber, c.ledgerId);
+                        else openPreview(r.upgradation_fee_payment_id, r.upgradation_fee_receipt, r.upgradation_fee_ledger_id);
+                      }}
+                      title="View / download receipt"
+                      style={{padding:'6px 10px',borderRadius:8,background:'#FFF',border:'1px solid #E5E5E5',color:'#1A1A1A',fontSize:11,fontWeight:700,display:'flex',alignItems:'center',gap:4,cursor:'pointer'}}>
+                      <Download size={12} /> Receipt
+                    </button>
+                  )}
                   <button onClick={() => setViewRow(r)}
                     style={{padding:'6px 10px',borderRadius:8,background:'#FFF',border:'1px solid #E5E5E5',color:'#1A1A1A',fontSize:11,fontWeight:700,display:'flex',alignItems:'center',gap:4,cursor:'pointer'}}>
                     <Eye size={12} /> View
@@ -655,8 +883,27 @@ const HistoryTab = ({ isAdmin }) => {
               </div>
             </div>
           );
-        })
+        })}
+
+        {history.length > HISTORY_PAGE_SIZE && (
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,paddingTop:4}}>
+            <span style={{fontSize:11,color:'#888'}}>
+              {(page - 1) * HISTORY_PAGE_SIZE + 1}–{Math.min(page * HISTORY_PAGE_SIZE, history.length)} of {history.length}
+            </span>
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              <button className="m-btn m-btn-outline m-btn-sm" style={{width:'auto'}} disabled={page <= 1}
+                onClick={() => setPage(p => Math.max(1, p - 1))}>Prev</button>
+              <span style={{fontSize:11,color:'#666'}}>Page {page} / {totalPages}</span>
+              <button className="m-btn m-btn-outline m-btn-sm" style={{width:'auto'}} disabled={page >= totalPages}
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}>Next</button>
+            </div>
+          </div>
+        )}
+        </>
       )}
+
+      {collect.show && <CollectFeeSheet flow={collect} payMethods={payMethods} />}
+      <ReceiptPreviewSheet preview={preview} onClose={closePreview} />
 
       {rejectFor && (
         <ConfirmReject
@@ -668,9 +915,7 @@ const HistoryTab = ({ isAdmin }) => {
         />
       )}
 
-      {viewRow && (
-        <ViewSheet row={viewRow} onClose={() => setViewRow(null)} />
-      )}
+      {viewRow && <ViewSheet row={viewRow} onClose={() => setViewRow(null)} openPreview={openPreview} />}
     </>
   );
 };
@@ -712,17 +957,22 @@ const Sheet = ({ title, onClose, children }) => {
   );
 };
 
-const CollectFeeSheet = ({
-  student, entries, loading, selectedIds, setSelectedIds,
-  method, setMethod, txn, setTxn, paying, onConfirm, onClose,
-}) => {
-  const toggle = (id) => setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  const total = entries
-    .filter(e => selectedIds.includes(e.ledger_id))
-    .reduce((s, e) => s + (e.net_amount || 0), 0);
+// Collect Pending Fees — select fees (with select-all/clear), partial amount,
+// and split (cash + online) payment. Mirrors desktop UpgradationPage dialog.
+const CollectFeeSheet = ({ flow, payMethods }) => {
+  const {
+    student, entries, ids, setIds, method, setMethod, txn, setTxn,
+    partial, setPartial, splitCash, setSplitCash, splitOnline, setSplitOnline,
+    paying, loading, close, pay,
+  } = flow;
+
+  const toggle = (id) => setIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const selectedRemaining = entries
+    .filter(e => ids.includes(e.ledger_id))
+    .reduce((s, e) => s + remainingOf(e), 0);
 
   return (
-    <Sheet title="Collect Pending Fees" onClose={onClose}>
+    <Sheet title="Collect Pending Fees" onClose={close}>
       <p style={{fontSize:12,color:'#666',marginBottom:10}}>
         Student: <strong style={{color:'#1A1A1A'}}>{student?.first_name} {student?.last_name}</strong>
       </p>
@@ -738,42 +988,86 @@ const CollectFeeSheet = ({
         </div>
       ) : (
         <>
-          <div style={{border:'1px solid #E5E5E5',borderRadius:10,overflow:'hidden',marginBottom:10}}>
-            {entries.map(e => (
-              <label key={e.ledger_id}
-                style={{display:'flex',alignItems:'center',gap:10,padding:10,borderBottom:'1px solid #F5F5F5',cursor:'pointer'}}>
-                <input
-                  type="checkbox"
-                  checked={selectedIds.includes(e.ledger_id)}
-                  onChange={() => toggle(e.ledger_id)}
-                  style={{width:16,height:16,flexShrink:0,accentColor:'#1A1A1A'}}
-                />
-                <div style={{minWidth:0,flex:1}}>
-                  <p style={{fontSize:12,fontWeight:700,color:'#1A1A1A',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
-                    {e.description || e.fee_component}
-                  </p>
-                  <p style={{fontSize:10,color:'#888'}}>
-                    Due {e.due_date || '—'} · <span style={{textTransform:'capitalize'}}>{e.status}</span>
-                  </p>
-                </div>
-                <p style={{fontSize:13,fontWeight:800,color:'#1A1A1A',flexShrink:0}}>₹{fmt(e.net_amount)}</p>
-              </label>
-            ))}
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
+            <span style={{fontSize:11,color:'#888'}}>Select the fees to collect</span>
+            <div style={{display:'flex',gap:12,fontSize:11}}>
+              <button type="button" onClick={() => setIds(entries.map(e => e.ledger_id))}
+                style={{color:'#E88A1A',fontWeight:700,background:'none',border:'none',cursor:'pointer',padding:0}}>Select all</button>
+              <button type="button" onClick={() => setIds([])}
+                style={{color:'#888',fontWeight:700,background:'none',border:'none',cursor:'pointer',padding:0}}>Clear</button>
+            </div>
+          </div>
+
+          <div style={{border:'1px solid #E5E5E5',borderRadius:10,overflow:'hidden',marginBottom:10,maxHeight:220,overflowY:'auto'}}>
+            {entries.map(e => {
+              const paid = Number(e.amount_paid || 0);
+              return (
+                <label key={e.ledger_id}
+                  style={{display:'flex',alignItems:'center',gap:10,padding:10,borderBottom:'1px solid #F5F5F5',cursor:'pointer'}}>
+                  <input
+                    type="checkbox"
+                    checked={ids.includes(e.ledger_id)}
+                    onChange={() => toggle(e.ledger_id)}
+                    style={{width:16,height:16,flexShrink:0,accentColor:'#1A1A1A'}}
+                  />
+                  <div style={{minWidth:0,flex:1}}>
+                    <p style={{fontSize:12,fontWeight:700,color:'#1A1A1A',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                      {e.description || e.fee_component}
+                    </p>
+                    {paid > 0 ? (
+                      <p style={{fontSize:10,color:'#a16207'}}>Paid ₹{fmt(paid)} of ₹{fmt(e.net_amount)}</p>
+                    ) : (
+                      <p style={{fontSize:10,color:'#888'}}>Due {e.due_date || '—'} · <span style={{textTransform:'capitalize'}}>{e.status}</span></p>
+                    )}
+                  </div>
+                  <p style={{fontSize:13,fontWeight:800,color:'#1A1A1A',flexShrink:0}}>₹{fmt(remainingOf(e))}</p>
+                </label>
+              );
+            })}
           </div>
 
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 12px',background:'#F8F8F8',borderRadius:10,marginBottom:12}}>
             <span style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:'#666'}}>Total to collect</span>
-            <span style={{fontSize:16,fontWeight:800,color:'#1A1A1A'}}>₹{fmt(total)}</span>
+            <span style={{fontSize:16,fontWeight:800,color:'#1A1A1A'}}>₹{fmt(selectedRemaining)}</span>
           </div>
+
+          {ids.length >= 1 && (
+            <div style={{marginBottom:10}}>
+              <label style={formLabel}>Amount to collect <span style={{color:'#aaa',fontWeight:400,textTransform:'none'}}>(blank = full)</span></label>
+              <input
+                className="m-input" type="number" min="0" step="0.01" max={selectedRemaining}
+                placeholder={`Full: ₹${fmt(selectedRemaining)}`}
+                value={partial}
+                onChange={(e) => setPartial(e.target.value)}
+              />
+              <p style={{fontSize:10,color:'#aaa',marginTop:4}}>
+                Leave blank to collect the full ₹{fmt(selectedRemaining)}. Enter a smaller amount to record a partial payment{ids.length > 1 ? ' (applied oldest fee first)' : ''}.
+              </p>
+            </div>
+          )}
 
           <div style={{marginBottom:10}}>
             <label style={formLabel}>Payment Method</label>
             <select className="m-input" value={method} onChange={(e) => setMethod(e.target.value)}>
-              {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+              {payMethods.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
             </select>
           </div>
 
-          {method !== 'cash' && (
+          {method === 'split' && (
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,padding:10,border:'1px solid #fed7aa',background:'#fff7ed',borderRadius:10,marginBottom:10}}>
+              <div>
+                <label style={formLabel}>Cash</label>
+                <input className="m-input" type="number" min={0} step="0.01" value={splitCash} onChange={(e) => setSplitCash(e.target.value)} placeholder="0" />
+              </div>
+              <div>
+                <label style={formLabel}>Online</label>
+                <input className="m-input" type="number" min={0} step="0.01" value={splitOnline} onChange={(e) => setSplitOnline(e.target.value)} placeholder="0" />
+              </div>
+              <p style={{gridColumn:'1 / span 2',fontSize:10,color:'#888'}}>Cash + Online must equal the amount being collected.</p>
+            </div>
+          )}
+
+          {method !== 'cash' && method !== 'split' && (
             <div style={{marginBottom:10}}>
               <label style={formLabel}>Transaction ID</label>
               <input className="m-input" value={txn} onChange={(e) => setTxn(e.target.value)} placeholder="UTR / cheque no." />
@@ -783,9 +1077,9 @@ const CollectFeeSheet = ({
       )}
 
       <div style={{display:'flex',gap:8,marginTop:12}}>
-        <button onClick={onClose} className="m-btn m-btn-outline" style={{flex:1}}>Cancel</button>
+        <button onClick={close} className="m-btn m-btn-outline" style={{flex:1}}>Cancel</button>
         {!loading && entries.length > 0 && (
-          <button onClick={onConfirm} disabled={paying || !selectedIds.length}
+          <button onClick={pay} disabled={paying || !ids.length}
             className="m-btn"
             style={{flex:1,background:'#E88A1A',color:'#FFF'}}
             data-testid="m-upg-collect-confirm">
@@ -817,22 +1111,76 @@ const ConfirmReject = ({ reason, setReason, onCancel, onConfirm, busy }) => (
   </Sheet>
 );
 
-const ViewSheet = ({ row, onClose }) => (
-  <Sheet title="Upgradation Details" onClose={onClose}>
-    <DetailRow label="Student" value={row.student_name || row.student_id} />
-    <DetailRow label="Admission" value={row.admission_number} mono />
-    <DetailRow label="Academic Year" value={row.academic_year} />
-    <DetailRow label="From" value={`${row.from_class}-${row.from_section}${row.from_stream ? ` (${row.from_stream})` : ''}`} />
-    <DetailRow label="To" value={`${row.to_class}-${row.to_section}${row.to_stream ? ` (${row.to_stream})` : ''}`} />
-    {row.upgradation_fee > 0 && (
-      <DetailRow label="Upgradation Fee" value={`₹${fmt(row.upgradation_fee)}`} />
-    )}
-    <DetailRow label="Submitted" value={row.created_at?.slice(0, 10) || '—'} />
-    <DetailRow label="Status" value={(row.status || 'pending_approval').replace('_', ' ')} />
-    {row.notes && <DetailRow label="Notes" value={row.notes} />}
-    {row.reject_reason && <DetailRow label="Reject Reason" value={row.reject_reason} accent="#dc2626" />}
-  </Sheet>
-);
+// View details + per-payment timeline (partial payments generate multiple
+// receipts on the same upgradation_fee_ledger_id). Mirrors desktop.
+const ViewSheet = ({ row, onClose, openPreview }) => {
+  const [payments, setPayments] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const ledgerId = row?.upgradation_fee_ledger_id;
+    if (!row?.student_id || !ledgerId) { setPayments([]); return; }
+    let active = true;
+    setLoading(true);
+    api.get('/fees/payments', { params: { student_id: row.student_id } })
+      .then(res => {
+        if (!active) return;
+        const all = Array.isArray(res.data) ? res.data : [];
+        const filtered = all.filter(p => (p.installment_ids || []).includes(ledgerId));
+        filtered.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+        setPayments(filtered);
+      })
+      .catch(() => { if (active) setPayments([]); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [row]);
+
+  return (
+    <Sheet title="Upgradation Details" onClose={onClose}>
+      <DetailRow label="Student" value={row.student_name || row.student_id} />
+      <DetailRow label="Admission" value={row.admission_number} mono />
+      <DetailRow label="Academic Year" value={row.academic_year} />
+      <DetailRow label="From" value={`${row.from_class}-${row.from_section}${row.from_stream ? ` (${row.from_stream})` : ''}`} />
+      <DetailRow label="To" value={`${row.to_class}-${row.to_section}${row.to_stream ? ` (${row.to_stream})` : ''}`} />
+      {row.upgradation_fee > 0 && <DetailRow label="Upgradation Fee" value={`₹${fmt(row.upgradation_fee)}`} />}
+      <DetailRow label="Submitted" value={row.created_at?.slice(0, 10) || '—'} />
+      <DetailRow label="Status" value={(row.status || 'pending_approval').replace('_', ' ')} />
+      {row.notes && <DetailRow label="Notes" value={row.notes} />}
+      {row.reject_reason && <DetailRow label="Reject Reason" value={row.reject_reason} accent="#dc2626" />}
+
+      {row.upgradation_fee > 0 && (
+        <div style={{marginTop:14,paddingTop:12,borderTop:'1px solid #F0F0F0'}}>
+          <p style={{fontSize:13,fontWeight:700,color:'#1A1A1A',marginBottom:8}}>Payment History</p>
+          {loading ? (
+            <p style={{fontSize:11,color:'#888',display:'flex',alignItems:'center',gap:6}}><Loader2 size={12} className="animate-spin" /> Loading…</p>
+          ) : payments.length === 0 ? (
+            <p style={{fontSize:11,color:'#888'}}>No payments recorded yet.</p>
+          ) : (
+            <div style={{display:'flex',flexDirection:'column',gap:6}}>
+              {payments.map(p => (
+                <div key={p.payment_id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,padding:'8px 10px',background:'#F8F8F8',border:'1px solid #F0F0F0',borderRadius:8}}>
+                  <div style={{minWidth:0}}>
+                    <p style={{fontSize:12,fontWeight:700,color:'#1A1A1A'}}>
+                      ₹{fmt(p.amount)} <span style={{fontWeight:400,color:'#888',textTransform:'capitalize'}}>· {(p.payment_method || 'cash').replace('_', ' ')}</span>
+                    </p>
+                    <p style={{fontSize:10,color:'#888',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                      {p.payment_date || p.created_at?.slice(0, 10)}{p.receipt_number ? ` · ${p.receipt_number}` : ''}
+                    </p>
+                  </div>
+                  <button onClick={() => openPreview(p.payment_id, p.receipt_number)}
+                    title="Preview / download receipt"
+                    style={{background:'none',border:'none',padding:4,cursor:'pointer',color:'#64748b',flexShrink:0}}>
+                    <Download size={16} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </Sheet>
+  );
+};
 
 const DetailRow = ({ label, value, mono, accent }) => (
   <div style={{display:'flex',justifyContent:'space-between',gap:12,padding:'8px 0',borderBottom:'1px solid #F5F5F5'}}>

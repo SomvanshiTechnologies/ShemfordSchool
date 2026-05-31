@@ -5,13 +5,12 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { Badge } from './ui/badge';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs';
 import { toast } from 'sonner';
-import { Lock, Building2, CheckCircle, XCircle, Loader2, User as UserIcon } from 'lucide-react';
+import { Lock, Loader2, User as UserIcon, Trash2, AlertTriangle } from 'lucide-react';
 
 const SettingsPage = () => {
-  const { user, setAuthUser } = useAuth();
-  const isAdmin = user?.role === 'admin';
+  const { user, setAuthUser, isAdmin } = useAuth();
 
   // ── My profile (all users) ───────────────────────────────────────────────
   // System-generated logins (no real email) use a synthetic address — hide it
@@ -43,7 +42,6 @@ const SettingsPage = () => {
         name: meForm.name.trim(),
         phone: meForm.phone?.trim() || null,
       };
-      // Only send email when the user typed one (blank = keep current login email)
       if (meForm.email?.trim()) payload.email = meForm.email.trim();
       const res = await api.put('/auth/me', payload);
       if (typeof setAuthUser === 'function') setAuthUser(res.data);
@@ -84,251 +82,249 @@ const SettingsPage = () => {
     }
   };
 
-  // ── School profile (admin only) ──────────────────────────────────────────
-  const [profile, setProfile] = useState(null);
-  const [profileLoading, setProfileLoading] = useState(false);
-  const [profileSaving, setProfileSaving] = useState(false);
-
-  // ── System status (admin only) ───────────────────────────────────────────
-  const [systemStatus, setSystemStatus] = useState(null);
+  // ── Account deletion: my own request (all users) ─────────────────────────
+  const [myDelReq, setMyDelReq] = useState(undefined); // undefined=loading, null=none
+  const [showDelDialog, setShowDelDialog] = useState(false);
+  const [delReason, setDelReason] = useState('');
+  const [delLoading, setDelLoading] = useState(false);
 
   useEffect(() => {
-    if (isAdmin) {
-      setProfileLoading(true);
-      Promise.all([
-        api.get('/settings/school'),
-        api.get('/settings/system'),
-      ])
-        .then(([profileRes, statusRes]) => {
-          setProfile(profileRes.data);
-          setSystemStatus(statusRes.data);
-        })
-        .catch(() => toast.error('Failed to load settings'))
-        .finally(() => setProfileLoading(false));
-    }
-  }, [isAdmin]);
+    let active = true;
+    api.get('/account-deletion/my-request')
+      .then(r => { if (active) setMyDelReq(r.data?.request || null); })
+      .catch(() => { if (active) setMyDelReq(null); });
+    return () => { active = false; };
+  }, [user?.user_id]);
 
-  const handleProfileSave = async (e) => {
-    e.preventDefault();
-    setProfileSaving(true);
+  const submitDeletion = async () => {
+    setDelLoading(true);
     try {
-      const res = await api.put('/settings/school', profile);
-      setProfile(res.data);
-      toast.success('School profile saved');
-    } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to save profile');
-    } finally {
-      setProfileSaving(false);
-    }
+      const res = await api.post('/account-deletion/request', { reason: delReason.trim() || undefined });
+      setMyDelReq(res.data.request);
+      setShowDelDialog(false);
+      setDelReason('');
+      toast.success('Deletion request sent to admin for approval.');
+    } catch (e) {
+      if (!e._handled) toast.error(e.response?.data?.detail || 'Failed to submit request');
+    } finally { setDelLoading(false); }
   };
 
+  const cancelDeletion = async () => {
+    if (!myDelReq) return;
+    setDelLoading(true);
+    try {
+      await api.post(`/account-deletion/${myDelReq.request_id}/cancel`);
+      setMyDelReq(null);
+      toast.success('Deletion request cancelled.');
+    } catch (e) {
+      if (!e._handled) toast.error(e.response?.data?.detail || 'Failed to cancel');
+    } finally { setDelLoading(false); }
+  };
+
+  const triggerCls = "justify-start gap-2 px-3 py-2.5 rounded-xl text-slate-600 data-[state=active]:bg-slate-100 data-[state=active]:text-slate-900 data-[state=active]:shadow-none";
+
   return (
-    <div className="max-w-2xl mx-auto space-y-6 p-6">
+    <div className="max-w-4xl p-6">
       <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Settings</h1>
 
-      {/* ── My Profile (all users) ── */}
-      <Card className="border border-slate-200 shadow-none rounded-xl">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-bold uppercase tracking-wider flex items-center gap-2">
-            <UserIcon className="h-4 w-4" strokeWidth={1.5} /> My Profile
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleProfileUpdate} className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label className="text-xs font-bold uppercase tracking-wider">Name</Label>
-                <Input
-                  className="h-10 rounded-xl border-slate-200 focus:border-slate-900 focus:ring-0"
-                  value={meForm.name}
-                  onChange={e => setMeForm(f => ({ ...f, name: e.target.value }))}
-                  required
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-bold uppercase tracking-wider">Phone</Label>
-                <Input
-                  className="h-10 rounded-xl border-slate-200 focus:border-slate-900 focus:ring-0"
-                  value={meForm.phone}
-                  onChange={e => setMeForm(f => ({ ...f, phone: e.target.value }))}
-                  placeholder="—"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-bold uppercase tracking-wider text-slate-500">Email</Label>
-                <Input
-                  type="email"
-                  className="h-10 rounded-xl"
-                  placeholder="you@example.com (optional)"
-                  value={meForm.email}
-                  onChange={e => setMeForm(f => ({ ...f, email: e.target.value }))}
-                  data-testid="profile-email-input"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-bold uppercase tracking-wider text-slate-500">Role</Label>
-                <Input className="h-10 rounded-xl bg-slate-50 text-slate-500 capitalize" value={user?.role || ''} disabled />
-              </div>
-            </div>
-            <p className="text-[11px] text-slate-500">Add or update your email to log in with it. You can also log in with your admission/employee ID. Role can't be changed here — contact an admin.</p>
-            <div className="flex justify-end">
-              <Button type="submit" className="rounded-xl" disabled={meSaving}>
-                {meSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" strokeWidth={1.5} />}
-                Save Profile
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
+      <Tabs defaultValue="profile" orientation="vertical" className="mt-6 flex flex-col sm:flex-row gap-6">
+        <TabsList className="h-auto w-full sm:w-52 shrink-0 flex-row sm:flex-col items-stretch gap-1 bg-transparent p-0 overflow-x-auto sm:sticky sm:top-6 sm:self-start">
+          <TabsTrigger value="profile" className={triggerCls}>
+            <UserIcon className="h-4 w-4" strokeWidth={1.5} /> Profile
+          </TabsTrigger>
+          <TabsTrigger value="password" className={triggerCls}>
+            <Lock className="h-4 w-4" strokeWidth={1.5} /> Password
+          </TabsTrigger>
+        </TabsList>
 
-      {/* ── Change Password ── */}
-      <Card className="border border-slate-200 shadow-none rounded-xl">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-bold uppercase tracking-wider flex items-center gap-2">
-            <Lock className="h-4 w-4" strokeWidth={1.5} /> Change Password
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleChangePassword} className="space-y-4">
-            <div className="space-y-1.5">
-              <Label className="text-xs font-bold uppercase tracking-wider">Current Password</Label>
-              <Input
-                type="password"
-                className="h-10 rounded-xl border-slate-200 focus:border-slate-900 focus:ring-0"
-                value={pwForm.current_password}
-                onChange={e => setPwForm(p => ({ ...p, current_password: e.target.value }))}
-                required
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs font-bold uppercase tracking-wider">New Password</Label>
-              <Input
-                type="password"
-                className="h-10 rounded-xl border-slate-200 focus:border-slate-900 focus:ring-0"
-                value={pwForm.new_password}
-                onChange={e => setPwForm(p => ({ ...p, new_password: e.target.value }))}
-                required
-                minLength={8}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs font-bold uppercase tracking-wider">Confirm New Password</Label>
-              <Input
-                type="password"
-                className={`h-10 rounded-xl border-slate-200 focus:ring-0 ${
-                  pwForm.confirm && pwForm.confirm !== pwForm.new_password
-                    ? 'border-red-400 focus:border-red-400'
-                    : 'focus:border-slate-900'
-                }`}
-                value={pwForm.confirm}
-                onChange={e => setPwForm(p => ({ ...p, confirm: e.target.value }))}
-                required
-              />
-            </div>
-            <Button
-              type="submit"
-              disabled={pwLoading}
-              className="bg-slate-900 text-white hover:bg-slate-800 rounded-xl text-xs uppercase tracking-wider font-semibold h-10"
-            >
-              {pwLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              Update Password
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-
-      {/* ── School Profile (admin only) ── */}
-      {isAdmin && (
-        <Card className="border border-slate-200 shadow-none rounded-xl">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-bold uppercase tracking-wider flex items-center gap-2">
-              <Building2 className="h-4 w-4" strokeWidth={1.5} /> School Profile
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {profileLoading || !profile ? (
-              <div className="flex items-center justify-center h-24">
-                <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
-              </div>
-            ) : (
-              <form onSubmit={handleProfileSave} className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  {[
-                    { key: 'school_name', label: 'School Name', full: true },
-                    { key: 'principal_name', label: 'Principal Name', full: true },
-                    { key: 'address', label: 'Address', full: true },
-                    { key: 'city', label: 'City' },
-                    { key: 'state', label: 'State' },
-                    { key: 'pincode', label: 'PIN Code' },
-                    { key: 'phone', label: 'Phone' },
-                    { key: 'email', label: 'Email' },
-                    { key: 'website', label: 'Website' },
-                    { key: 'affiliation_number', label: 'Affiliation No.' },
-                  ].map(({ key, label, full }) => (
-                    <div key={key} className={`space-y-1.5 ${full ? 'col-span-2' : ''}`}>
-                      <Label className="text-xs font-bold uppercase tracking-wider">{label}</Label>
+        {/* Single static panel — only the inner content changes per tab */}
+        <div className="flex-1 min-w-0 self-start w-full rounded-2xl border border-slate-200 bg-white overflow-hidden">
+          {/* ── Profile tab: profile + delete account ── */}
+          <TabsContent value="profile" className="mt-0 divide-y divide-slate-100">
+            <Card className="border-0 shadow-none rounded-none bg-transparent">
+              <CardHeader className="pt-4 pb-2">
+                <CardTitle className="text-sm font-bold uppercase tracking-wider flex items-center gap-2">
+                  <UserIcon className="h-4 w-4" strokeWidth={1.5} /> My Profile
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pb-4">
+                <form onSubmit={handleProfileUpdate} className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-bold uppercase tracking-wider">Name</Label>
                       <Input
-                        className="h-10 rounded-xl border-slate-200 focus:border-slate-900 focus:ring-0 text-sm"
-                        value={profile[key] || ''}
-                        onChange={e => setProfile(p => ({ ...p, [key]: e.target.value }))}
+                        className="h-10 rounded-xl border-slate-200 focus:border-slate-900 focus:ring-0"
+                        value={meForm.name}
+                        onChange={e => setMeForm(f => ({ ...f, name: e.target.value }))}
+                        required
                       />
                     </div>
-                  ))}
-                </div>
-                <Button
-                  type="submit"
-                  disabled={profileSaving}
-                  className="bg-slate-900 text-white hover:bg-slate-800 rounded-xl text-xs uppercase tracking-wider font-semibold h-10"
-                >
-                  {profileSaving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                  Save Profile
-                </Button>
-              </form>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ── System Status (admin only) ── */}
-      {isAdmin && systemStatus && (
-        <Card className="border border-slate-200 shadow-none rounded-xl">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-bold uppercase tracking-wider">System Configuration</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {[
-                { key: 'email_configured', label: 'Email (Resend)', description: 'Password reset and payment confirmation emails' },
-                { key: 'stripe_configured', label: 'Stripe Payments', description: 'Online fee collection via credit/debit card' },
-                { key: 'oauth_configured', label: 'Google Sign-In', description: 'OAuth login for parents' },
-              ].map(({ key, label, description }) => (
-                <div key={key} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
-                  <div>
-                    <p className="text-sm font-medium">{label}</p>
-                    <p className="text-xs text-slate-500">{description}</p>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-bold uppercase tracking-wider">Phone</Label>
+                      <Input
+                        className="h-10 rounded-xl border-slate-200 focus:border-slate-900 focus:ring-0"
+                        value={meForm.phone}
+                        onChange={e => setMeForm(f => ({ ...f, phone: e.target.value }))}
+                        placeholder="—"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-bold uppercase tracking-wider text-slate-500">Email</Label>
+                      <Input
+                        type="email"
+                        className="h-10 rounded-xl"
+                        placeholder="you@example.com (optional)"
+                        value={meForm.email}
+                        onChange={e => setMeForm(f => ({ ...f, email: e.target.value }))}
+                        data-testid="profile-email-input"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-bold uppercase tracking-wider text-slate-500">Role</Label>
+                      <Input className="h-10 rounded-xl bg-slate-50 text-slate-500 capitalize" value={user?.role || ''} disabled />
+                    </div>
                   </div>
-                  <Badge
-                    variant="outline"
-                    className={`text-xs ${
-                      systemStatus[key]
-                        ? 'border-green-200 bg-green-50 text-green-700'
-                        : 'border-gray-200 bg-gray-50 text-gray-500'
-                    }`}
-                  >
-                    {systemStatus[key] ? (
-                      <><CheckCircle className="h-3 w-3 mr-1" /> Configured</>
-                    ) : (
-                      <><XCircle className="h-3 w-3 mr-1" /> Not configured</>
+                  <p className="text-[11px] text-slate-500">Add or update your email to log in with it. You can also log in with your admission/employee ID. Role can't be changed here — contact an admin.</p>
+                  <div className="flex justify-end">
+                    <Button type="submit" className="rounded-xl" disabled={meSaving}>
+                      {meSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" strokeWidth={1.5} />}
+                      Save Profile
+                    </Button>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
+
+            {/* ── Delete My Account (Danger Zone — non-admins only) ── */}
+            {!isAdmin && (
+            <Card className="border-0 shadow-none rounded-none bg-transparent">
+              <CardHeader className="pt-4 pb-2">
+                <CardTitle className="text-sm font-bold uppercase tracking-wider flex items-center gap-2 text-red-700">
+                  <Trash2 className="h-4 w-4" strokeWidth={1.5} /> Delete My Account
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {myDelReq === undefined ? (
+                  <div className="flex items-center h-10"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></div>
+                ) : myDelReq && myDelReq.status === 'pending' ? (
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-200 p-3">
+                      <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                      <p className="text-sm text-amber-800">
+                        Your account deletion request is <strong>pending admin approval</strong>. Once approved, your account and all your data are permanently deleted.
+                      </p>
+                    </div>
+                    <Button variant="outline" className="rounded-xl" onClick={cancelDeletion} disabled={delLoading}>
+                      {delLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                      Cancel Request
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-sm text-slate-600">
+                      Permanently delete your account and all associated data. Your request is sent to an administrator for approval; once approved it <strong>cannot be undone</strong>.
+                    </p>
+                    {myDelReq && myDelReq.status === 'rejected' && (
+                      <p className="text-xs text-red-600">Your previous request was rejected{myDelReq.rejection_reason ? `: “${myDelReq.rejection_reason}”` : '.'}</p>
                     )}
-                  </Badge>
-                </div>
-              ))}
+                    <Button
+                      className="bg-red-600 hover:bg-red-700 text-white rounded-xl"
+                      onClick={() => { setDelReason(''); setShowDelDialog(true); }}
+                      data-testid="delete-account-btn"
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" /> Request Account Deletion
+                    </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            )}
+          </TabsContent>
+
+          {/* ── Password tab ── */}
+          <TabsContent value="password" className="mt-0">
+            <Card className="border-0 shadow-none rounded-none bg-transparent">
+              <CardHeader className="pt-4 pb-2">
+                <CardTitle className="text-sm font-bold uppercase tracking-wider flex items-center gap-2">
+                  <Lock className="h-4 w-4" strokeWidth={1.5} /> Change Password
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pb-4">
+                <form onSubmit={handleChangePassword} className="space-y-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold uppercase tracking-wider">Current Password</Label>
+                    <Input
+                      type="password"
+                      className="h-10 rounded-xl border-slate-200 focus:border-slate-900 focus:ring-0"
+                      value={pwForm.current_password}
+                      onChange={e => setPwForm(p => ({ ...p, current_password: e.target.value }))}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold uppercase tracking-wider">New Password</Label>
+                    <Input
+                      type="password"
+                      className="h-10 rounded-xl border-slate-200 focus:border-slate-900 focus:ring-0"
+                      value={pwForm.new_password}
+                      onChange={e => setPwForm(p => ({ ...p, new_password: e.target.value }))}
+                      required
+                      minLength={8}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold uppercase tracking-wider">Confirm New Password</Label>
+                    <Input
+                      type="password"
+                      className={`h-10 rounded-xl border-slate-200 focus:ring-0 ${
+                        pwForm.confirm && pwForm.confirm !== pwForm.new_password
+                          ? 'border-red-400 focus:border-red-400'
+                          : 'focus:border-slate-900'
+                      }`}
+                      value={pwForm.confirm}
+                      onChange={e => setPwForm(p => ({ ...p, confirm: e.target.value }))}
+                      required
+                    />
+                  </div>
+                  <Button
+                    type="submit"
+                    disabled={pwLoading}
+                    className="bg-slate-900 text-white hover:bg-slate-800 rounded-xl text-xs uppercase tracking-wider font-semibold h-10"
+                  >
+                    {pwLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                    Update Password
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </div>
+      </Tabs>
+
+      {/* Confirm deletion-request dialog */}
+      {showDelDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => !delLoading && setShowDelDialog(false)}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md space-y-4 shadow-xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 text-red-700">
+              <AlertTriangle className="h-5 w-5" />
+              <h3 className="text-lg font-semibold">Delete My Account</h3>
             </div>
-            <p className="text-xs text-slate-500 mt-4">
-              To configure services, update the backend <code className="bg-slate-100 px-1 rounded">.env</code> file and restart the server.
+            <p className="text-sm text-slate-600">
+              This sends a deletion request to an administrator. Once they approve it, your account and <strong>all of your data are permanently deleted</strong> and cannot be recovered.
             </p>
-          </CardContent>
-        </Card>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-bold uppercase tracking-wider">Reason (optional)</Label>
+              <Input className="h-10 rounded-xl" value={delReason} onChange={e => setDelReason(e.target.value)} placeholder="Why are you leaving?" />
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="outline" className="rounded-xl" onClick={() => setShowDelDialog(false)} disabled={delLoading}>Cancel</Button>
+              <Button className="bg-red-600 hover:bg-red-700 text-white rounded-xl" onClick={submitDeletion} disabled={delLoading} data-testid="delete-account-confirm">
+                {delLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Trash2 className="h-4 w-4 mr-2" />}
+                Send Request
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

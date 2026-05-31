@@ -118,12 +118,19 @@ async def submit_attendance(request: Request):
         if status not in ["present", "absent", "leave"]:
             continue
 
-        # (#11) Verify student exists and belongs to this class before marking
-        if not await db.students.find_one(
+        # (#11) Verify student exists and belongs to this class before marking.
+        stu = await db.students.find_one(
             {"student_id": student_id, "is_active": True, "class_name": class_name},
-            {"_id": 0, "student_id": 1}
-        ):
+            {"_id": 0, "student_id": 1, "admission_date": 1}
+        )
+        if not stu:
             logger.warning("Skipping attendance for unknown/inactive student %s in %s", student_id, class_name)
+            continue
+        # Track attendance only on/after the student's admission date — a student
+        # can't be present/absent before they joined the school.
+        adm = (stu.get("admission_date") or "")[:10]
+        if adm and date < adm:
+            logger.info("Skipping attendance for %s on %s — before admission date %s", student_id, date, adm)
             continue
 
         att = AttendanceRecord(

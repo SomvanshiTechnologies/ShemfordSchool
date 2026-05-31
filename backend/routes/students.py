@@ -289,7 +289,7 @@ async def get_students(
         "mother_name": 1, "mother_phone": 1,
         "fee_status": 1, "is_active": 1, "app_locked": 1,
         "roll_number": 1, "user_id": 1, "parent_id": 1,
-        "is_sibling": 1,
+        "is_sibling": 1, "admission_date": 1,
     }
 
     limit = max(1, min(limit, 200))
@@ -404,6 +404,20 @@ async def update_student(student_id: str, request: Request):
     await db.students.update_one({"student_id": student_id}, {"$set": body})
     updated = await db.students.find_one({"student_id": student_id}, {"_id": 0})
 
+    # Keep the linked LOGIN account's email in sync. A login email must be
+    # unique to one account — reusing another account's email would merge two
+    # people (e.g. two students sharing one login → attendance/marks/fees bleed).
+    if "email" in body:
+        new_email = (body.get("email") or "").strip().lower()
+        uid = updated.get("user_id")
+        if new_email:
+            clash = await db.users.find_one(
+                {"email": new_email, "user_id": {"$ne": uid}}, {"_id": 0, "user_id": 1})
+            if clash:
+                raise HTTPException(status_code=400, detail="That email is already used by another account. Please use a unique email.")
+            if uid:
+                await db.users.update_one({"user_id": uid}, {"$set": {"email": new_email}})
+
     # If class or stream changed, refresh fee status (full regen via upgradation flow)
     if "class_name" in changes or "stream" in changes:
         from routes.fees import refresh_overdue_for_student
@@ -495,16 +509,30 @@ async def reset_student_password(student_id: str, request: Request):
     if len(new_password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
 
-    # Look up user account: prefer user_id link, fall back to email
+    # Look up user account: prefer the explicit user_id link.
     user_account = None
     if student.get("user_id"):
         user_account = await db.users.find_one({"user_id": student["user_id"]}, {"_id": 0})
+    # Fall back to email ONLY when that account isn't already owned by a
+    # DIFFERENT student — sharing one login account between two students bleeds
+    # their attendance/marks/fees data.
     if not user_account and student.get("email"):
-        user_account = await db.users.find_one({"email": student["email"]}, {"_id": 0})
+        candidate = await db.users.find_one({"email": student["email"]}, {"_id": 0})
+        if candidate:
+            owner = await db.students.find_one(
+                {"user_id": candidate["user_id"], "student_id": {"$ne": student_id}},
+                {"_id": 0, "student_id": 1},
+            )
+            if not owner:
+                user_account = candidate
 
-    # If still no account (legacy student onboarded before auto-account creation), make one
+    # If still no account, create a DEDICATED one. Use the student's email only
+    # when it's free; otherwise use a unique synthetic address so two students
+    # never share a login.
     if not user_account:
-        email = student.get("email") or f"{student_id.lower()}@student.shemford.in"
+        email = (student.get("email") or "").strip().lower()
+        if not email or await db.users.find_one({"email": email}, {"_id": 0, "user_id": 1}):
+            email = f"{student_id.lower()}@student.shemford.in"
         student_user = UserBase(
             email=email,
             name=f"{student.get('first_name', '')} {student.get('last_name', '')}".strip(),
@@ -528,11 +556,14 @@ async def reset_student_password(student_id: str, request: Request):
     # Hash for auth; also persist plaintext on student record so admin can re-view/share.
     await db.users.update_one(
         {"user_id": user_account["user_id"]},
-        {"$set": {"password_hash": hash_password(new_password)}}
+        {"$set": {"password_hash": hash_password(new_password), "is_active": True}}
     )
+    # Persist the new password AND ensure the student is LINKED to this account.
+    # Older records resolved the account only by email and never stored user_id;
+    # without the link, admission-number login can't find the account.
     await db.students.update_one(
         {"student_id": student_id},
-        {"$set": {"temp_password": new_password}}
+        {"$set": {"temp_password": new_password, "user_id": user_account["user_id"]}}
     )
 
     return {

@@ -49,7 +49,9 @@ RAZORPAY_KEY_ID         = os.environ.get("RAZORPAY_KEY_ID", "rzp_test_SYVHBGyYvw
 RAZORPAY_KEY_SECRET     = os.environ.get("RAZORPAY_KEY_SECRET", "7dVFviqOrMI6d9xVMRiFXuoJ")
 RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
 
-LOCK_TTL_MINUTES    = 10       # fee-entry lock expiry
+LOCK_TTL_MINUTES    = 5        # fee-entry lock expiry; auto-frees an abandoned
+                               # (hard-closed) payment quickly. Normal cancel /
+                               # dismiss / failure releases the lock immediately.
 RECEIPT_PREFIX      = "SFS"    # receipt number prefix
 # Set ALLOW_PARTIAL_PAYMENT=true in .env to allow paying less than the full due amount.
 # When false (default), partial amounts are rejected.

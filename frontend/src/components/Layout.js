@@ -13,7 +13,7 @@ import {
   LayoutDashboard, Users, GraduationCap, UserCog, Calendar,
   CreditCard, FileText, Bell, BookOpen, TicketCheck, MessageSquare,
   BarChart3, LogOut, Menu, X, School, AlertTriangle, ArrowUpCircle, Settings, Wallet,
-  History, Search, Loader2, ChevronDown, Check, Pencil,
+  History, Search, Loader2, ChevronDown, Check, Pencil, Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { displaySection } from '../lib/utils';
@@ -42,6 +42,7 @@ const ALL_MENU_ITEMS = [
   { name: 'Audit Trails',           icon: History,          path: '/audit-trail',         roles: ['admin'] },
   { name: 'Issues',                 icon: TicketCheck,      path: '/issues',              roles: ['admin', 'teacher', 'student', 'parent'] },
   { name: 'Messages',               icon: MessageSquare,    path: '/messages',            roles: ['admin', 'teacher', 'student', 'parent'] },
+  { name: 'Deletion Requests',      icon: Trash2,           path: '/account-deletions',   roles: ['admin'] },
   { name: 'Settings',               icon: Settings,         path: '/settings',            roles: ['admin', 'teacher', 'student', 'parent', 'accountant'] },
 ];
 
@@ -50,7 +51,7 @@ const SIDEBAR_SECTIONS = [
   { label: 'Academic',      names: ['Students', 'Classes', 'Attendance', 'My Attendance', "Children's Attendance", 'Marks', 'My Marks', 'Syllabus'] },
   { label: 'Finance',       names: ['Fees', 'My Fees', 'Payroll'] },
   { label: 'Administration',names: ['Employees', 'Users', 'Announcements', 'Reports', 'Upgradation', 'Audit Trails'] },
-  { label: 'Community',     names: ['Issues', 'Messages'] },
+  { label: 'Community',     names: ['Issues', 'Messages', 'Deletion Requests'] },
   { label: null,             names: ['Settings'] },
 ];
 

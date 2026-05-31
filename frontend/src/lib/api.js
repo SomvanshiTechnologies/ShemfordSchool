@@ -111,7 +111,11 @@ api.interceptors.response.use(
     }
 
     if (status === 403) {
-      toast.error('You do not have permission to perform this action.');
+      // Surface the backend's real reason when present (e.g. "This academic
+      // session is closed and available in read-only mode") instead of a
+      // generic message that misleads admins.
+      const detail = error.response?.data?.detail;
+      toast.error(typeof detail === 'string' && detail ? detail : 'You do not have permission to perform this action.');
       error._handled = true;
       return Promise.reject(error);
     }

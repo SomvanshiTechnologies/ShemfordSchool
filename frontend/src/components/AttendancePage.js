@@ -190,7 +190,10 @@ const MarkAttendanceView = () => {
         api.get('/attendance', { params: { entity_type: 'student', date: selectedDate, class_name: selectedClass, section: selectedSection } }),
         api.get('/attendance/session-status', { params: { class_name: selectedClass, section: selectedSection, date: selectedDate } }),
       ]).then(([s, a, sess]) => {
-        const studentList = s.data.students ?? s.data ?? [];
+        // Only students admitted on/before the selected date — a student isn't
+        // tracked for attendance before they joined.
+        const studentList = (s.data.students ?? s.data ?? [])
+          .filter(stu => !stu.admission_date || String(stu.admission_date).slice(0, 10) <= selectedDate);
         const attMap = {};
         a.data.forEach(r => { attMap[r.entity_id] = r.status; });
         setStudents(studentList);

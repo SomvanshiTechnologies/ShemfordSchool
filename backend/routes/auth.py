@@ -741,6 +741,42 @@ async def update_user_role(user_id: str, request: Request):
     return {"message": "Role updated"}
 
 
+@router.post("/users/{user_id}/reset-password")
+async def admin_reset_user_password(user_id: str, request: Request):
+    """Admin: set or generate a password for ANY user (student, teacher,
+    parent, accountant, admin). Returns the plaintext so the admin can share it.
+    """
+    admin = await require_roles(UserRole.ADMIN)(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    target = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    new_password = (body.get("password") or "").strip() or secrets.token_urlsafe(8)
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    await db.users.update_one(
+        {"user_id": user_id},
+        {"$set": {"password_hash": hash_password(new_password), "is_active": True}},
+    )
+    # Mirror the plaintext onto the linked student/employee record so it shows
+    # in their detail panel (same UX as the Students/Employees password views).
+    await db.students.update_one({"user_id": user_id}, {"$set": {"temp_password": new_password}})
+    await db.employees.update_one({"user_id": user_id}, {"$set": {"temp_password": new_password}})
+    # Force re-login everywhere with the new password.
+    try:
+        await revoke_all_refresh_tokens(user_id)
+    except Exception:
+        pass
+    await create_audit_log("user", user_id, "password_reset", {"by_admin": True}, admin)
+    return {"message": "Password updated", "password": new_password, "email": target.get("email")}
+
+
 @router.get("/users/search")
 async def search_users(request: Request, q: Optional[str] = None, role: Optional[str] = None):
     user = await get_current_user(request)

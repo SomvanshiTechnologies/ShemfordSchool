@@ -116,6 +116,26 @@ class UserResponse(BaseModel):
     created_at: datetime
 
 
+class AccountDeletionRequest(BaseModel):
+    """A user's request to permanently delete their own account. Goes through
+    admin approval; on approval every record keyed to the user's own identity
+    (user_id / their student_id / employee_id) is hard-deleted."""
+    model_config = ConfigDict(extra="ignore")
+    request_id: str = Field(default_factory=lambda: f"del_{uuid.uuid4().hex[:12]}")
+    user_id: str
+    user_name: Optional[str] = None
+    user_email: Optional[str] = None
+    user_role: Optional[str] = None
+    reason: Optional[str] = None
+    status: str = "pending"  # pending | approved | rejected | cancelled
+    requested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    reviewed_by: Optional[str] = None
+    reviewed_by_name: Optional[str] = None
+    reviewed_at: Optional[str] = None
+    rejection_reason: Optional[str] = None
+    deleted_counts: Optional[Dict[str, int]] = None
+
+
 class StudentBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
     student_id: str = Field(default_factory=lambda: f"STU{datetime.now().year}{uuid.uuid4().hex[:6].upper()}")

@@ -40,7 +40,6 @@ const MobileStudents = () => {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(!initialCache);
   const [refreshing, setRefreshing] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(initialCache?.pages || 1);
   const [total, setTotal] = useState(initialCache?.total || 0);
@@ -60,12 +59,11 @@ const MobileStudents = () => {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showCsvImport, setShowCsvImport] = useState(false);
 
-  const fetchStudents = useCallback(async (pg = 1, q = '', append = false) => {
+  const fetchStudents = useCallback(async (pg = 1, q = '') => {
     const cacheKey = `m-students:${q || ''}:${pg}`;
-    const cached = !append && getCached(cacheKey);
+    const cached = getCached(cacheKey);
 
-    if (append) setLoadingMore(true);
-    else if (cached) { // SWR: show stale, revalidate in background
+    if (cached) { // SWR: show stale, revalidate in background
       setStudents(cached.students);
       setTotalPages(cached.pages);
       setTotal(cached.total);
@@ -80,14 +78,14 @@ const MobileStudents = () => {
       if (q.trim()) params.search = q.trim();
       const r = await api.get('/students', { params });
       const arr = Array.isArray(r.data) ? r.data : (r.data?.students ?? []);
-      const pages = r.data?.pages ?? 1;
-      const tot = r.data?.total ?? arr.length;
-      setStudents(prev => append ? [...prev, ...arr] : arr);
+      const pages = parseInt(r.headers?.['x-total-pages'] ?? r.data?.pages ?? 1, 10) || 1;
+      const tot = parseInt(r.headers?.['x-total-count'] ?? r.data?.total ?? arr.length, 10) || arr.length;
+      setStudents(arr);
       setTotalPages(pages);
       setTotal(tot);
-      if (!append) setCached(cacheKey, { students: arr, pages, total: tot });
+      setCached(cacheKey, { students: arr, pages, total: tot });
     } catch {}
-    finally { setLoading(false); setLoadingMore(false); setRefreshing(false); }
+    finally { setLoading(false); setRefreshing(false); }
   }, []);
 
   const fetchClasses = useCallback(async () => {
@@ -101,24 +99,12 @@ const MobileStudents = () => {
 
   useEffect(() => { fetchStudents(1, '', false); fetchClasses(); }, [fetchStudents, fetchClasses]);
 
-  // Window-level infinite scroll — the page uses document scroll, not an inner scroller.
-  useEffect(() => {
-    const handleScroll = () => {
-      if (loadingMore || loading) return;
-      const scrollTop = window.scrollY || document.documentElement.scrollTop;
-      const clientHeight = window.innerHeight;
-      const scrollHeight = document.documentElement.scrollHeight;
-      if (scrollTop + clientHeight >= scrollHeight - 200) {
-        setPage(prev => {
-          const next = prev + 1;
-          if (next <= totalPages) { fetchStudents(next, search, true); return next; }
-          return prev;
-        });
-      }
-    };
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, [loadingMore, loading, totalPages, search, fetchStudents]);
+  const goToPage = (pg) => {
+    if (pg < 1 || pg > totalPages || loading) return;
+    setPage(pg);
+    fetchStudents(pg, search);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   const handleSearch = (val) => {
     setSearch(val);
@@ -278,16 +264,20 @@ const MobileStudents = () => {
             </span>
           </div>
         ))}
-        {loadingMore && (
-          <div style={{textAlign:'center',padding:'12px 0',color:'#888',fontSize:12}}>Loading more...</div>
-        )}
-        {!loadingMore && page >= totalPages && students.length === 0 && (
+        {!loading && students.length === 0 && (
           <div className="m-empty"><Users className="m-empty-icon" /><p>No students found</p></div>
         )}
-        {!loadingMore && page >= totalPages && students.length > 0 && (
-          <div style={{textAlign:'center',padding:'12px 0',color:'#aaa',fontSize:11}}>{total} students total</div>
-        )}
       </div>
+
+      {students.length > 0 && totalPages > 1 && (
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,marginTop:12,marginBottom:8}}>
+          <span style={{fontSize:11,color:'#888'}}>Page {page} of {totalPages} · {total} total</span>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <button className="m-btn m-btn-outline m-btn-sm" style={{width:'auto'}} disabled={page <= 1 || loading} onClick={() => goToPage(page - 1)}>Prev</button>
+            <button className="m-btn m-btn-outline m-btn-sm" style={{width:'auto'}} disabled={page >= totalPages || loading} onClick={() => goToPage(page + 1)}>Next</button>
+          </div>
+        </div>
+      )}
 
       {selected && (
         <StudentDetailSheet

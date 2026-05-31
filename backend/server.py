@@ -50,6 +50,7 @@ from routes.payroll import router as payroll_router
 from routes.admin import router as admin_router
 from routes.pos_payments import router as pos_router
 from routes.voice_notes import router as voice_notes_router
+from routes.account_deletion import router as account_deletion_router
 from middleware.rate_limiter import RateLimitMiddleware
 from middleware.rbac import RBACEnforcementMiddleware
 
@@ -60,7 +61,7 @@ for router in [
     syllabus_router, issues_router, classes_router, onboarding_router,
     reports_router, payments_router, notifications_router, utilities_router,
     upgradation_router, settings_router, razorpay_router, payroll_router,
-    admin_router, pos_router, voice_notes_router,
+    admin_router, pos_router, voice_notes_router, account_deletion_router,
 ]:
     app.include_router(router, prefix="/api")
 

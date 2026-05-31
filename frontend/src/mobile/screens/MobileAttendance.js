@@ -232,7 +232,10 @@ const StudentsTab = ({ classes, isAdmin }) => {
         api.get('/attendance', { params: { entity_type: 'student', date: selDate, class_name: selClass, section: selSection } }),
         api.get('/attendance/session-status', { params: { class_name: selClass, section: selSection, date: selDate } }),
       ]);
-      const studentList = s.data?.students ?? (Array.isArray(s.data) ? s.data : []);
+      // Only students admitted on/before the selected date — a student isn't
+      // tracked for attendance before they joined.
+      const studentList = (s.data?.students ?? (Array.isArray(s.data) ? s.data : []))
+        .filter(stu => !stu.admission_date || String(stu.admission_date).slice(0, 10) <= selDate);
       const m = {};
       (Array.isArray(a.data) ? a.data : []).forEach(r => { m[r.entity_id] = r.status; });
       setStudents(studentList);
