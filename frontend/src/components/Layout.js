@@ -84,10 +84,10 @@ const SidebarSessionSelector = () => {
 
   if (!viewSession) return null;
 
-  // Switching only changes which session the admin is *viewing* — it does NOT
-  // change the active/operational session. Browsing a past year is read-only;
-  // operations stay on the active (present) year. To change the active session,
-  // use Manage Sessions → Activate.
+  // Switching changes which session the admin is *viewing* (and writing to) — it
+  // does NOT change the active/operational session. Any session is fully editable
+  // and behaves exactly like the active one; writes are scoped to the viewed year.
+  // To change the active session, use Manage Sessions → Activate.
   const doSwitch = (name) => {
     setViewSession(name);
     setPending(null);

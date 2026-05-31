@@ -207,17 +207,10 @@ async def session_status(academic_year: str) -> str:
 
 
 async def ensure_session_writable(academic_year: str):
-    """
-    Phase 2 — archive protection. Raise 403 if the given session is archived
-    (read-only). Used by write endpoints across modules. Unknown sessions are
-    treated as writable (backward-compatible).
-    """
-    from fastapi import HTTPException
-    if academic_year and await session_status(academic_year) == "archived":
-        raise HTTPException(
-            status_code=403,
-            detail="This academic session is closed and available in read-only mode.",
-        )
+    """No-op. Archived/closed sessions remain fully editable — every session
+    behaves exactly like the active session. Kept so existing call sites need
+    no change."""
+    return
 
 
 def get_fy_prefix() -> str:
@@ -994,7 +987,8 @@ async def record_admission_payment(request: Request):
 
     # Fetch pending one-time + yearly + first-month tuition
     academic_year = student.get("academic_year", current_academic_year())
-    await ensure_session_writable(academic_year)  # archive protection
+    # Closed/archived sessions remain editable for fees (admin may collect or
+    # adjust dues for prior years). No archive block here.
     all_months = get_academic_year_months(academic_year)
     first_month = all_months[0]
     admission_month = student.get("admission_date", "")[:7] or first_month
@@ -1319,8 +1313,8 @@ async def pay_fee(request: Request):
     if not entries_to_pay:
         raise HTTPException(status_code=400, detail="No pending fees to pay")
 
-    # Archive protection — block collecting against an archived session.
-    await ensure_session_writable(entries_to_pay[0].get("academic_year"))
+    # Closed/archived sessions remain editable for fee collection — pending dues
+    # can always be settled regardless of session status.
 
     # Per-entry payable = remaining_balance if set, else fall back to net_amount
     # (older rows created before the partial-payment fields existed).

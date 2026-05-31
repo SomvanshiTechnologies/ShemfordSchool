@@ -141,7 +141,8 @@ async def generate_payroll(body: GeneratePayrollRequest, request: Request, backg
     - Returns summary of generated / skipped / failed records.
     """
     user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
-    await ensure_active_session(request)  # previous sessions are read-only
+    # Closed/non-active sessions are editable for payroll (admin may back-fill or
+    # adjust historical runs). Records are scoped to the browsed session.
 
     if not (1 <= body.month <= 12):
         raise HTTPException(status_code=400, detail="Month must be between 1 and 12.")

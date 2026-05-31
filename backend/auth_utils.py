@@ -300,24 +300,15 @@ async def session_window(request):
 
 
 async def ensure_active_session(request):
-    """Backend-level read-only enforcement. Any write (create/update/delete,
-    bulk import, etc.) is allowed ONLY when the client is operating in the
-    current active session. Previous/upcoming sessions are read-only.
+    """Returns the active session name.
 
-    Independent of the frontend — call this at the START of every write endpoint
-    that mutates session-owned data (attendance, marks, fees, announcements,
-    issues, messages, promotions, payroll runs, admissions, …). Returns the
-    active session name for convenience.
+    Write-blocking on non-active sessions has been intentionally DISABLED — every
+    academic session is fully editable and behaves exactly like the active session
+    (admins may back-fill / adjust attendance, marks, fees, payroll, admissions, …
+    for any year). Reads stay scoped per session via the X-Academic-Year header.
+    Kept as a no-op so existing call sites need no change.
     """
-    from fastapi import HTTPException
-    ay = request_session(request)
-    active = await active_session_name()
-    if ay and active and ay != active:
-        raise HTTPException(
-            status_code=403,
-            detail="This academic session is closed and available in read-only mode.",
-        )
-    return active
+    return await active_session_name()
 
 
 async def session_created_at_filter(request):
