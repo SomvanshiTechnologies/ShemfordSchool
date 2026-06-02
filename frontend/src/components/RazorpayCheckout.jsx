@@ -40,7 +40,7 @@ function useRazorpayScript() {
   return loaded;
 }
 
-export function RazorpayCheckout({ studentId, ledgerIds = [], onSuccess, onCancel, disabled = false, children }) {
+export function RazorpayCheckout({ studentId, ledgerIds = [], onSuccess, onCancel, disabled = false, className, children }) {
   const scriptLoaded   = useRazorpayScript();
   const [busy, setBusy] = useState(false);
   const orderRef       = useRef(null);   // store current order to cancel on unmount
@@ -165,15 +165,11 @@ export function RazorpayCheckout({ studentId, ledgerIds = [], onSuccess, onCance
     }
   }, [scriptLoaded, studentId, ledgerIds, busy, onSuccess, onCancel]);
 
-  // Guard: don't render at all if Razorpay not configured
-  const razorpayEnabled = !!process.env.REACT_APP_RAZORPAY_KEY_ID;
-  if (!razorpayEnabled) return null;
-
   return (
     <Button
       onClick={handlePayment}
       disabled={disabled || busy || !ledgerIds.length}
-      className="bg-[#E88A1A] hover:bg-[#d07a0e] text-white gap-2"
+      className={`bg-[#E88A1A] hover:bg-[#d07a0e] text-white gap-2 ${className || ''}`}
     >
       {busy ? (
         <><Loader2 className="h-4 w-4 animate-spin" /> Processing…</>

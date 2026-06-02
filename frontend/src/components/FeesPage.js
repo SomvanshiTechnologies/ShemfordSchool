@@ -2354,8 +2354,8 @@ const LedgerView = ({
                         ) : entry.status === 'waived' ? (
                           <span className="text-xs text-slate-400">—</span>
                         ) : readOnly ? (
-                          <RazorpayCheckout studentId={studentId} ledgerIds={[entry.ledger_id]} onSuccess={onRazorpaySuccess} onCancel={() => {}}>
-                            <CreditCard className="h-3 w-3 mr-1" />Pay
+                          <RazorpayCheckout studentId={studentId} ledgerIds={[entry.ledger_id]} onSuccess={onRazorpaySuccess} onCancel={() => {}} className="h-8 px-3 text-xs">
+                            <CreditCard className="h-3 w-3 mr-1" />Pay Now
                           </RazorpayCheckout>
                         ) : (
                           <div className="flex items-center gap-1">
