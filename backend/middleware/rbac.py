@@ -42,6 +42,11 @@ _PUBLIC_PREFIXES: tuple = (
     "/api/payments/razorpay/verify-mobile",    # verify callback from mobile HTML page
 )
 
+# Paths matched by suffix (dynamic segments in the middle of the path)
+_PUBLIC_SUFFIXES: tuple = (
+    "/revoke-request",   # account-deletion revoke — request_id acts as identity token
+)
+
 
 # ── Middleware ────────────────────────────────────────────────────────────────
 
@@ -74,6 +79,11 @@ class RBACEnforcementMiddleware(BaseHTTPMiddleware):
         # Public prefix
         for prefix in _PUBLIC_PREFIXES:
             if path.startswith(prefix):
+                return await call_next(request)
+
+        # Public suffix (dynamic-segment paths)
+        for suffix in _PUBLIC_SUFFIXES:
+            if path.endswith(suffix):
                 return await call_next(request)
 
         # ── Credential presence check ─────────────────────────────────────────

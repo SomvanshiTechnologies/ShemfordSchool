@@ -181,7 +181,33 @@ async def login_user(credentials: UserLogin):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     if not user.get("is_active", True):
+        # Check if this is a deletion-pending account so the frontend can show the revoke option
+        del_req = await db.account_deletion_requests.find_one(
+            {"user_id": user["user_id"], "status": {"$in": ["pending", "revoke_pending", "approved"]}},
+            {"_id": 0, "request_id": 1, "status": 1, "expires_at": 1, "final_deletion_at": 1},
+            sort=[("requested_at", -1)],
+        )
+        if del_req:
+            import json as _json
+            # Choose the relevant expiry window for display
+            expires = (del_req.get("final_deletion_at") if del_req["status"] == "approved"
+                       else del_req.get("expires_at"))
+            raise HTTPException(status_code=403, detail=_json.dumps({
+                "code": "DELETION_PENDING",
+                "request_id": del_req["request_id"],
+                "request_status": del_req["status"],
+                "expires_at": expires,
+            }))
         raise HTTPException(status_code=403, detail="Account is deactivated")
+
+    # Block web login for students whose admin has restricted them to app-only
+    if credentials.platform == "web" and user.get("role") == "student":
+        stu = await db.students.find_one({"user_id": user["user_id"]}, {"_id": 0, "web_login_enabled": 1})
+        if stu and stu.get("web_login_enabled") is False:
+            raise HTTPException(
+                status_code=403,
+                detail="APP_ONLY_LOGIN"
+            )
 
     # Update last_login (#28)
     now_iso = datetime.now(timezone.utc).isoformat()

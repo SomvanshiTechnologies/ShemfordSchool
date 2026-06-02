@@ -111,10 +111,12 @@ api.interceptors.response.use(
     }
 
     if (status === 403) {
-      // Surface the backend's real reason when present (e.g. "This academic
-      // session is closed and available in read-only mode") instead of a
-      // generic message that misleads admins.
       const detail = error.response?.data?.detail;
+      // DELETION_PENDING is a structured JSON payload handled by the login page
+      // — don't show it as a generic toast.
+      if (typeof detail === 'string' && detail.startsWith('{"code":"DELETION_PENDING"')) {
+        return Promise.reject(error);
+      }
       toast.error(typeof detail === 'string' && detail ? detail : 'You do not have permission to perform this action.');
       error._handled = true;
       return Promise.reject(error);

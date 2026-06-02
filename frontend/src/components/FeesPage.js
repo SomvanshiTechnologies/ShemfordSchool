@@ -1026,22 +1026,21 @@ const FeesPage = () => {
                   </div>
                 ) : (
                   <div className="border border-slate-200 rounded-xl overflow-hidden">
-                    <div className="grid grid-cols-7 gap-4 px-4 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                      <span>Admission No.</span><span>Student</span><span>Class</span><span>Section</span><span>Academic Year</span><span>Mobile</span><span className="text-right">Pending</span>
+                    <div className="grid grid-cols-6 gap-4 px-4 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      <span>Admission No.</span><span>Student</span><span>Class</span><span>Section</span><span>Academic Year</span><span>Pending</span>
                     </div>
                     {filteredCollect.slice((collectPage - 1) * COLLECT_PAGE_SIZE, collectPage * COLLECT_PAGE_SIZE).map(s => (
                       <button
                         key={s.student_id}
                         onClick={() => selectSearchResult({ student_id: s.student_id, name: s.name, admission_number: s.admission_number, class_name: s.class_name, section: s.section, stream: s.stream })}
-                        className="w-full text-left grid grid-cols-7 gap-4 px-4 py-3 hover:bg-orange-50 border-b border-slate-100 last:border-0 items-center transition-colors"
+                        className="w-full text-left grid grid-cols-6 gap-4 px-4 py-3 hover:bg-orange-50 border-b border-slate-100 last:border-0 items-center transition-colors"
                       >
                         <p className="text-sm text-slate-600 font-mono">{s.admission_number || '—'}</p>
                         <p className="text-sm font-semibold text-slate-900 truncate">{s.name}</p>
                         <p className="text-sm text-slate-600">{s.class_name || '—'}{s.stream ? ` (${s.stream})` : ''}</p>
                         <p className="text-sm text-slate-600">{s.section || '—'}</p>
                         <p className="text-sm text-slate-600">{s.academic_year || viewSession || '—'}</p>
-                        <p className="text-sm text-slate-600 font-mono">{s.mobile || '—'}</p>
-                        <div className="text-right">
+                        <div>
                           <p className="text-sm font-bold text-red-600">₹{Number(s.total_due || 0).toLocaleString('en-IN')}</p>
                           {s.entries_overdue > 0 && <p className="text-[10px] text-red-400">{s.entries_overdue} overdue</p>}
                         </div>

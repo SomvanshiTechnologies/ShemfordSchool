@@ -179,6 +179,18 @@ const MobileStudents = () => {
     }
   };
 
+  const handleToggleWebLogin = async (student) => {
+    const newVal = student.web_login_enabled === false ? true : false;
+    try {
+      await api.patch(`/students/${student.student_id}/web-login`, { web_login_enabled: newVal });
+      setSelected(prev => prev ? { ...prev, web_login_enabled: newVal } : prev);
+      setStudents(prev => prev.map(s => s.student_id === student.student_id ? { ...s, web_login_enabled: newVal } : s));
+      toast.success(newVal ? 'Login enabled' : 'Login restricted to app only');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Failed to update');
+    }
+  };
+
   const handleReactivate = async (student) => {
     try {
       await api.put(`/students/${student.student_id}/reactivate`);
@@ -296,6 +308,7 @@ const MobileStudents = () => {
           onDeactivate={() => setDeactivateTarget(selected)}
           onReactivate={() => handleReactivate(selected)}
           onResetPassword={resetStudentPassword}
+          onToggleWebLogin={() => handleToggleWebLogin(selected)}
         />
       )}
 
@@ -363,7 +376,7 @@ const StudentDetailSheet = ({
   student, loading, isAdmin,
   currentPw, currentPwVisible, setCurrentPwVisible,
   parentPw, parentPwVisible, setParentPwVisible,
-  onCopy, onClose, onEdit, onDeactivate, onReactivate, onResetPassword,
+  onCopy, onClose, onEdit, onDeactivate, onReactivate, onResetPassword, onToggleWebLogin,
 }) => {
   const [pwInput, setPwInput] = useState('');
   const [pwBusy, setPwBusy] = useState(false);
@@ -517,6 +530,25 @@ const StudentDetailSheet = ({
                 </div>
               </div>
             </>
+          )}
+
+          {isAdmin && isActive && (
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 14px',background:'#FFF',border:'1px solid rgba(0,0,0,0.04)',borderRadius:12,marginTop:8}}>
+              <div>
+                <p style={{fontSize:13,fontWeight:700,color:'#1A1A1A'}}>Portal Login</p>
+                <p style={{fontSize:11,color:'#888',marginTop:2}}>
+                  {student.web_login_enabled !== false ? 'Can login via website & app' : 'App login only'}
+                </p>
+              </div>
+              <label style={{display:'flex',alignItems:'center',cursor:'pointer'}}>
+                <input
+                  type="checkbox"
+                  style={{width:20,height:20,accentColor:'#E88A1A',cursor:'pointer'}}
+                  checked={student.web_login_enabled !== false}
+                  onChange={onToggleWebLogin}
+                />
+              </label>
+            </div>
           )}
 
           <div style={{height:8}} />

@@ -63,7 +63,7 @@ export const AuthProvider = ({ children }) => {
   }, [checkAuth]);
 
   const login = async (email, password) => {
-    const response = await axios.post(`${API}/auth/login`, { email, password });
+    const response = await axios.post(`${API}/auth/login`, { email, password, platform: "web" });
     const { token: newToken, refresh_token, user: userData } = response.data;
     localStorage.setItem('auth_token', newToken);
     if (refresh_token) localStorage.setItem('refresh_token', refresh_token);

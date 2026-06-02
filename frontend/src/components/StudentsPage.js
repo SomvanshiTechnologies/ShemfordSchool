@@ -17,6 +17,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Badge } from './ui/badge';
+import { Checkbox } from './ui/checkbox';
 import { Progress } from './ui/progress';
 import {
   Dialog,
@@ -151,6 +152,7 @@ const StudentsPage = () => {
   // onboarding — but Split is included alongside Cash / Cheque / Bank / Online.
   const [onbPaymentMethods, setOnbPaymentMethods] = useState(PAYMENT_METHODS);
   useEffect(() => { fetchPaymentMethods({ withPos: false }).then(setOnbPaymentMethods); }, []);
+  const [receiptPreview, setReceiptPreview] = useState(null); // { url, paymentId, receiptNumber }
 
   const fetchStudents = useCallback(async (pg = 1, search = searchTerm) => {
     const cacheKey = `students:${viewSession}:${filterClass}:${filterSection}:${filterStatus}:${pg}:${search}`;
@@ -385,6 +387,7 @@ const StudentsPage = () => {
 
       // 2. Record the admission fee payment immediately (if fee breakdown exists)
       let receiptNumber = null;
+      let admissionPaymentId = null;
       if (admissionResult.admission_time_fee > 0 || onbFeeData?.fee_breakdown?.length > 0) {
         setOnbPaymentLoading(true);
         try {
@@ -415,6 +418,7 @@ const StudentsPage = () => {
           }
           const payRes = await api.post('/fees/admission-payment', payPayload);
           receiptNumber = payRes.data.receipt_number;
+          admissionPaymentId = payRes.data.payment?.payment_id || payRes.data.payment_id;
           toast.success(payRes.data.message || `Payment recorded — Receipt: ${receiptNumber}`);
         } catch (payErr) {
           // Non-fatal: admission succeeded but payment recording failed
@@ -422,13 +426,61 @@ const StudentsPage = () => {
         } finally { setOnbPaymentLoading(false); }
       }
 
-      setOnbResult({ ...admissionResult, receipt_number: receiptNumber });
+      setOnbResult({ ...admissionResult, receipt_number: receiptNumber, admission_payment_id: admissionPaymentId });
       setOnbStep(5);
+      if (admissionPaymentId) openReceiptPreview(admissionPaymentId, receiptNumber);
       fetchStudents(page, searchTerm);
       toast.success(`Student admitted! Admission No: ${admissionResult.admission_number}`);
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to complete admission');
     } finally { setOnbLoading(false); }
+  };
+
+  const handleToggleWebLogin = async (studentId, currentEnabled) => {
+    const newVal = !currentEnabled;
+    try {
+      await api.patch(`/students/${studentId}/web-login`, { web_login_enabled: newVal });
+      setStudents(prev => prev.map(s => s.student_id === studentId ? { ...s, web_login_enabled: newVal } : s));
+      toast.success(newVal ? 'Login enabled' : 'Login restricted to app only');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Failed to update');
+    }
+  };
+
+  const handleToggleAllWebLogin = async (enableAll) => {
+    try {
+      await api.patch('/students/web-login/bulk', { web_login_enabled: enableAll });
+      setStudents(prev => prev.map(s => ({ ...s, web_login_enabled: enableAll })));
+      toast.success(enableAll ? 'Login enabled for all students' : 'Login restricted to app for all students');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Failed to update');
+    }
+  };
+
+  const openReceiptPreview = async (paymentId, receiptNumber) => {
+    if (!paymentId) return;
+    try {
+      const res = await api.get(`/fees/receipt/${paymentId}/pdf`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      setReceiptPreview({ url, paymentId, receiptNumber });
+    } catch {
+      toast.error('Receipt generated but preview failed.');
+    }
+  };
+  const closeReceiptPreview = () => {
+    if (receiptPreview?.url) URL.revokeObjectURL(receiptPreview.url);
+    setReceiptPreview(null);
+  };
+  const downloadReceipt = async (paymentId) => {
+    if (!paymentId) return;
+    try {
+      const res = await api.get(`/fees/receipt/${paymentId}/pdf`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch {
+      toast.error('Failed to open receipt');
+    }
   };
 
   // ===== DEACTIVATE / REACTIVATE =====
@@ -974,11 +1026,38 @@ const StudentsPage = () => {
             <div className="overflow-x-auto">
             <Table>
               <TableHeader><TableRow>
-                <TableHead>Admission No.</TableHead><TableHead>Name</TableHead><TableHead>Class</TableHead><TableHead>Academic Year</TableHead><TableHead>Parent</TableHead><TableHead>Fee Status</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead>
+                <TableHead className="w-[52px] text-center">
+                  {(() => {
+                    const active = filteredStudents.filter(s => s.is_active !== false);
+                    const allEnabled = active.length > 0 && active.every(s => s.web_login_enabled !== false);
+                    const noneEnabled = active.length > 0 && active.every(s => s.web_login_enabled === false);
+                    return (
+                      <div className="flex justify-center">
+                        <Checkbox
+                          checked={allEnabled ? true : noneEnabled ? false : 'indeterminate'}
+                          onCheckedChange={() => handleToggleAllWebLogin(!allEnabled)}
+                          title={allEnabled ? 'Disable portal login for all' : 'Enable portal login for all'}
+                          className="data-[state=checked]:bg-orange-500 data-[state=checked]:border-orange-500 data-[state=indeterminate]:bg-orange-300 data-[state=indeterminate]:border-orange-300"
+                        />
+                      </div>
+                    );
+                  })()}
+                </TableHead><TableHead>Admission No.</TableHead><TableHead>Name</TableHead><TableHead>Class</TableHead><TableHead>Academic Year</TableHead><TableHead>Parent</TableHead><TableHead>Fee Status</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead>
               </TableRow></TableHeader>
               <TableBody>
                 {filteredStudents.map((student) => (
                   <TableRow key={student.student_id} data-testid={`student-row-${student.student_id}`} className={!student.is_active ? 'opacity-60 bg-slate-50' : ''}>
+                    <TableCell className="text-center">
+                      <div className="flex justify-center">
+                        <Checkbox
+                          checked={student.web_login_enabled !== false}
+                          onCheckedChange={() => handleToggleWebLogin(student.student_id, student.web_login_enabled !== false)}
+                          title={student.web_login_enabled !== false ? 'Portal login enabled — uncheck to restrict to app only' : 'App only — check to enable portal login'}
+                          disabled={!student.is_active}
+                          className="data-[state=checked]:bg-orange-500 data-[state=checked]:border-orange-500"
+                        />
+                      </div>
+                    </TableCell>
                     <TableCell className="font-mono text-sm select-none" onCopy={e => e.preventDefault()} onContextMenu={e => e.preventDefault()}>{student.admission_number}</TableCell>
                     <TableCell>
                       <p className="font-medium text-foreground flex items-center gap-2">
@@ -1671,9 +1750,17 @@ const StudentsPage = () => {
                     </>
                   )}
                   {onbResult.receipt_number && (
-                    <div className="flex justify-between">
+                    <div className="flex justify-between items-center">
                       <span className="text-muted-foreground">Payment Receipt</span>
-                      <span className="font-mono font-bold text-emerald-700">{onbResult.receipt_number}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-emerald-700">{onbResult.receipt_number}</span>
+                        {onbResult.admission_payment_id && (
+                          <Button size="sm" variant="outline" className="h-7 px-2 text-xs"
+                            onClick={() => openReceiptPreview(onbResult.admission_payment_id, onbResult.receipt_number)}>
+                            <Download className="h-3 w-3 mr-1" /> View
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   )}
                   {onbSkipDocs && (
@@ -1697,6 +1784,34 @@ const StudentsPage = () => {
               </DialogFooter>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ===== RECEIPT PREVIEW ===== */}
+      <Dialog open={!!receiptPreview} onOpenChange={(open) => { if (!open) closeReceiptPreview(); }}>
+        <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col p-0 gap-0" aria-describedby={undefined}>
+          <DialogHeader className="p-4 border-b">
+            <DialogTitle className="flex items-center gap-2">
+              <CheckCircle className="h-5 w-5 text-green-600" />
+              Payment recorded
+              {receiptPreview?.receiptNumber && (
+                <span className="text-xs font-mono text-muted-foreground ml-2">
+                  Receipt: {receiptPreview.receiptNumber}
+                </span>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 min-h-[60vh] bg-slate-100">
+            {receiptPreview?.url && (
+              <iframe src={receiptPreview.url} title="Fee receipt" className="w-full h-full min-h-[60vh] border-0" />
+            )}
+          </div>
+          <DialogFooter className="p-3 border-t gap-2">
+            <Button variant="outline" size="sm" onClick={() => downloadReceipt(receiptPreview?.paymentId)}>
+              <Download className="h-4 w-4 mr-2" /> Open in new tab
+            </Button>
+            <Button size="sm" onClick={closeReceiptPreview}>Done</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

@@ -290,6 +290,7 @@ async def get_students(
         "fee_status": 1, "is_active": 1, "app_locked": 1,
         "roll_number": 1, "user_id": 1, "parent_id": 1,
         "is_sibling": 1, "admission_date": 1,
+        "web_login_enabled": 1,
     }
 
     limit = max(1, min(limit, 200))
@@ -425,6 +426,36 @@ async def update_student(student_id: str, request: Request):
 
     await create_audit_log("student", student_id, "update", changes, user)
     return updated
+
+
+@router.patch("/students/{student_id}/web-login")
+async def toggle_web_login(student_id: str, request: Request):
+    """Enable or disable web (browser) login for a student. App login is unaffected."""
+    user = await require_roles(UserRole.ADMIN)(request)
+    body = await request.json()
+    enabled = body.get("web_login_enabled")
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail="web_login_enabled must be true or false")
+    await db.students.update_one({"student_id": student_id}, {"$set": {"web_login_enabled": enabled}})
+    await create_audit_log("student", student_id, "web_login_toggle",
+                           {"web_login_enabled": enabled}, user)
+    return {"web_login_enabled": enabled}
+
+
+@router.patch("/students/web-login/bulk")
+async def bulk_toggle_web_login(request: Request):
+    """Set web_login_enabled for all students or a specific list of student IDs."""
+    user = await require_roles(UserRole.ADMIN)(request)
+    body = await request.json()
+    enabled = body.get("web_login_enabled")
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail="web_login_enabled must be true or false")
+    student_ids = body.get("student_ids")  # None = all students
+    query = {"student_id": {"$in": student_ids}} if student_ids else {}
+    result = await db.students.update_many(query, {"$set": {"web_login_enabled": enabled}})
+    await create_audit_log("student", "bulk", "web_login_bulk_toggle",
+                           {"web_login_enabled": enabled, "count": result.modified_count}, user)
+    return {"web_login_enabled": enabled, "modified": result.modified_count}
 
 
 @router.delete("/students/{student_id}")

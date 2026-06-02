@@ -6,7 +6,7 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
-import { Mail, Lock, User, Phone, ArrowLeft, KeyRound, CheckCircle, GraduationCap, Shield, Zap } from 'lucide-react';
+import { Mail, Lock, User, Phone, ArrowLeft, KeyRound, CheckCircle, GraduationCap, Shield, Zap, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import api from '../lib/api';
 import { clampISODate, todayISO } from '../lib/dateBounds';
@@ -45,18 +45,48 @@ const LoginPage = () => {
   const [studentDob, setStudentDob]           = useState('');
   const [loginData, setLoginData]             = useState({ email: '', password: '' });
   const [registerData, setRegisterData]       = useState({ name: '', email: '', password: '', confirmPassword: '', phone: '' });
+  const [appOnlyAlert, setAppOnlyAlert]       = useState(false);
+  const [deletionPending, setDeletionPending] = useState(null); // {request_id, request_status, expires_at}
+  const [revoking, setRevoking]               = useState(false);
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setIsLoading(true);
+    setAppOnlyAlert(false);
+    setDeletionPending(null);
     try {
       await login(loginData.email, loginData.password);
       toast.success('Welcome back!');
       navigate('/dashboard');
     } catch (error) {
       const d = error.response?.data?.detail;
-      toast.error(typeof d === 'string' ? d : 'Login failed');
+      if (d === 'APP_ONLY_LOGIN') {
+        setAppOnlyAlert(true);
+      } else if (typeof d === 'string' && d.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(d);
+          if (parsed.code === 'DELETION_PENDING') {
+            setDeletionPending(parsed);
+          } else {
+            toast.error(parsed.detail || d || 'Login failed');
+          }
+        } catch { toast.error(d || 'Login failed'); }
+      } else {
+        toast.error(typeof d === 'string' ? d : 'Login failed');
+      }
     } finally { setIsLoading(false); }
+  };
+
+  const handleRevokeRequest = async () => {
+    if (!deletionPending?.request_id) return;
+    setRevoking(true);
+    try {
+      await api.post(`/account-deletion/${deletionPending.request_id}/revoke-request`);
+      setDeletionPending(prev => ({ ...prev, request_status: 'revoke_pending' }));
+      toast.success('Revoke request sent. You can login once an admin approves.');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Failed to send revoke request');
+    } finally { setRevoking(false); }
   };
 
   const handleRegister = async (e) => {
@@ -192,6 +222,48 @@ const LoginPage = () => {
             {/* ── Sign In ── */}
             <TabsContent value="login">
               <form onSubmit={handleLogin} className="space-y-4">
+                {appOnlyAlert && (
+                  <div className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800 space-y-1">
+                    <p className="font-bold flex items-center gap-2">
+                      <span>📱</span> App Login Only
+                    </p>
+                    <p>Your account is restricted to the mobile app. Please use the <strong>Shemford mobile app</strong> to login — web access has been disabled by your school admin.</p>
+                  </div>
+                )}
+                {deletionPending && (
+                  <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 space-y-2">
+                    <p className="font-bold flex items-center gap-2">⚠ Account Deletion Pending</p>
+                    {deletionPending.request_status === 'revoke_pending' ? (
+                      <p>Your restoration request has been sent to the admin. <strong>Once the admin approves, your account will be fully recovered</strong> and you can login normally.</p>
+                    ) : (
+                      <>
+                        <p>
+                          {deletionPending.request_status === 'approved'
+                            ? 'Your account deletion has been approved by an admin.'
+                            : 'Your account deletion request is pending.'}
+                          {' '}Your account is deactivated.
+                        </p>
+                        {deletionPending.expires_at && (
+                          <p className="text-xs">
+                            Request window closes: <strong>{new Date(deletionPending.expires_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
+                          </p>
+                        )}
+                        <button
+                          type="button"
+                          disabled={revoking}
+                          onClick={handleRevokeRequest}
+                          className="w-full mt-1 py-2 px-4 rounded-lg bg-red-700 text-white text-sm font-semibold hover:bg-red-800 disabled:opacity-60 flex items-center justify-center gap-2"
+                        >
+                          {revoking ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                          Send Revoke Request to Admin
+                        </button>
+                        <p className="text-[11px] text-red-600">
+                          Your request will be sent to the admin for approval. You can login once the admin restores your account.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                )}
                 <Field label="Email / ID" icon={Mail}  type="text"    placeholder="Email or ID"    value={loginData.email}    onChange={e => setLoginData({ ...loginData, email: e.target.value })}    required data-testid="login-email-input" />
                 <Field label="Password"      icon={Lock}  type="password" placeholder="Enter your password" value={loginData.password}  onChange={e => setLoginData({ ...loginData, password: e.target.value })} required data-testid="login-password-input" />
 

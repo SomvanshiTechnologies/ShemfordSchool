@@ -147,7 +147,7 @@ async def request_upgrade(student_id: str, request: Request):
             detail=f"Student was already upgraded to {blocking['to_class']} in {academic_year}."
         )
     if blocking and blocking.get("status") == "pending_approval":
-        if has_pending_dues:
+        if has_pending_dues and not body.get("upgradation_fee_pre_paid", False):
             # Still owes fees — keep it queued for manual approval after collection.
             raise HTTPException(
                 status_code=409,
@@ -155,6 +155,9 @@ async def request_upgrade(student_id: str, request: Request):
                         "An upgrade request for this student is already awaiting approval. "
                         "Collect the pending dues, then approve it from Upgradation History."),
             )
+        if body.get("upgradation_fee_pre_paid", False):
+            # Fee collected first — remove the queued request so we can promote directly
+            await db.upgradation_records.delete_one({"upgradation_id": blocking["upgradation_id"]})
         # No dues now — refresh the queued request to the freshly selected
         # target and complete it immediately (no manual approval needed).
         await _validate_upgrade_target(student, to_class, to_section, to_stream, academic_year,
@@ -209,6 +212,26 @@ async def request_upgrade(student_id: str, request: Request):
     )
     upg_dict = upg.model_dump()
     upg_dict["created_at"] = upg_dict["created_at"].isoformat()
+
+    # Upgradation fee was collected BEFORE the upgrade request — promote directly
+    # without recording in history (same path as no-dues auto-approve).
+    if body.get("upgradation_fee_pre_paid", False):
+        upg_dict.pop("_id", None)
+        await create_audit_log("upgradation", upg.upgradation_id, "direct-upgrade-fee-paid", {
+            "student_id": student_id,
+            "to": f"{to_class}/{to_section}/{to_stream}",
+            "academic_year": academic_year,
+        }, user)
+        approval = await _perform_upgrade_approval(upg_dict, user, auto=True)
+        return {
+            "upgradation": {**upg_dict, **approval},
+            "status": "approved",
+            "auto_approved": True,
+            "message": f"Student upgraded to {to_class}.",
+            "upgradation_fee": approval["upgradation_fee"],
+            "upgradation_fee_paid": True,
+            "ledger_entries_created": approval["ledger_entries_created"],
+        }
 
     # Clean account (no pending dues) → upgrade immediately WITHOUT recording it
     # in Upgradation History. History is the approval queue for dues-driven
@@ -289,7 +312,7 @@ async def _perform_upgrade_approval(upg: dict, user: dict, *, auto: bool = False
             "student_id": upg["student_id"],
             "academic_year": upg["academic_year"],
             "fee_component": "upgradation",
-            "status": {"$in": ["pending", "overdue", "partially_paid"]},
+            "status": {"$in": ["pending", "overdue", "partially_paid", "paid"]},
         }, {"_id": 0, "ledger_id": 1})
         if existing_fee:
             upg_ledger_id = existing_fee["ledger_id"]
@@ -496,6 +519,83 @@ async def reject_upgrade(upgradation_id: str, request: Request):
     }
 
 
+@router.post("/students/{student_id}/upgrade/create-fee-entry")
+async def create_upgrade_fee_entry(student_id: str, request: Request):
+    """
+    Pre-creates the upgradation fee ledger entry so the admin can collect it
+    via /fees/pay BEFORE requesting the upgrade. Reuses any existing unpaid entry.
+    Returns {ledger_id, upgradation_fee}.
+    """
+    user = await require_roles(UserRole.ADMIN)(request)
+    body = await request.json()
+
+    student = await db.students.find_one({"student_id": student_id, "is_active": True}, {"_id": 0})
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    to_class = body.get("to_class")
+    to_section = body.get("to_section")
+    to_stream = body.get("to_stream")
+    academic_year = body.get("academic_year", current_academic_year())
+
+    if not to_class or not to_section:
+        raise HTTPException(status_code=400, detail="to_class and to_section are required")
+
+    to_section = _stream_section(to_class, to_section, to_stream)
+    cfg = await _validate_upgrade_target(student, to_class, to_section, to_stream, academic_year,
+                                          allow_capacity_override=False)
+    upgradation_fee = cfg.get("upgradation_fee", 0)
+
+    if upgradation_fee <= 0:
+        return {"ledger_id": None, "upgradation_fee": 0}
+
+    # Reuse existing unpaid entry to avoid duplicate charges
+    existing = await db.student_ledger.find_one({
+        "student_id": student_id,
+        "academic_year": academic_year,
+        "fee_component": "upgradation",
+        "status": {"$in": ["pending", "overdue", "partially_paid"]},
+    }, {"_id": 0, "ledger_id": 1})
+    if existing:
+        ledger_id = existing["ledger_id"]
+    else:
+        due_day = cfg.get("due_day", 10)
+        now = datetime.now()
+        due_date = f"{now.year}-{str(now.month).zfill(2)}-{str(due_day).zfill(2)}"
+        entry = StudentLedgerEntry(
+            student_id=student_id,
+            admission_number=student.get("admission_number", ""),
+            class_name=to_class,
+            stream=to_stream,
+            academic_year=academic_year,
+            fee_component="upgradation",
+            fee_type="one_time",
+            description=f"Upgradation Fee ({student['class_name']} → {to_class})",
+            gross_amount=upgradation_fee,
+            net_amount=upgradation_fee,
+            due_date=due_date,
+            status="pending",
+        )
+        d = entry.model_dump()
+        d["created_at"] = d["created_at"].isoformat()
+        await db.student_ledger.insert_one(d)
+        ledger_id = entry.ledger_id
+
+    # Link the ledger entry back to any matching pending_approval record so
+    # get_upgradation_history can sync fee-paid status from the live ledger.
+    await db.upgradation_records.update_many(
+        {
+            "student_id": student_id,
+            "academic_year": academic_year,
+            "status": "pending_approval",
+            "upgradation_fee_ledger_id": None,
+        },
+        {"$set": {"upgradation_fee_ledger_id": ledger_id}},
+    )
+
+    return {"ledger_id": ledger_id, "upgradation_fee": upgradation_fee}
+
+
 @router.post("/students/{student_id}/upgrade/pay-fee")
 async def pay_upgradation_fee(student_id: str, request: Request):
     """
@@ -654,6 +754,39 @@ async def get_upgradation_history(
         ).to_list(len(ledger_ids))
         ledger_map = {row["ledger_id"]: row for row in ledger_rows}
 
+    # For records whose ledger_id is not set yet (e.g. "Send for Approval" path),
+    # do a fallback bulk lookup by student_id + academic_year + fee_component.
+    unlinked = [
+        r for r in records
+        if not r.get("upgradation_fee_ledger_id") and r.get("upgradation_fee", 0) > 0
+    ]
+    fallback_map = {}  # (student_id, academic_year) -> ledger entry
+    if unlinked:
+        keys = list({(r["student_id"], r["academic_year"]) for r in unlinked})
+        student_id_list = list({k[0] for k in keys})
+        ay_list = list({k[1] for k in keys})
+        fallback_rows = await db.student_ledger.find(
+            {
+                "student_id": {"$in": student_id_list},
+                "academic_year": {"$in": ay_list},
+                "fee_component": "upgradation",
+            },
+            {"_id": 0, "student_id": 1, "academic_year": 1,
+             "ledger_id": 1, "status": 1, "paid_date": 1, "payment_id": 1, "receipt_number": 1},
+        ).to_list(500)
+        for row in fallback_rows:
+            fallback_map[(row["student_id"], row["academic_year"])] = row
+        # Also link the ledger_id back to the upgradation_records so future calls are fast
+        for row in fallback_rows:
+            await db.upgradation_records.update_many(
+                {
+                    "student_id": row["student_id"],
+                    "academic_year": row["academic_year"],
+                    "upgradation_fee_ledger_id": None,
+                },
+                {"$set": {"upgradation_fee_ledger_id": row["ledger_id"]}},
+            )
+
     # Bulk-fetch each student's outstanding dues (pending/overdue), grouped by
     # student + academic_year, so the approval queue can flag students who still
     # owe fees. The TARGET year is excluded per-record below (the upgradation fee
@@ -673,15 +806,19 @@ async def get_upgradation_history(
 
     result = []
     for r in records:
-        # Sync fee-paid status from the linked ledger entry (DB-driven, not cached)
+        # Sync fee-paid status from the live ledger (DB-driven, never stale)
         lid = r.get("upgradation_fee_ledger_id")
-        if lid and lid in ledger_map:
-            entry = ledger_map[lid]
+        entry = (ledger_map.get(lid) if lid
+                 else fallback_map.get((r["student_id"], r.get("academic_year"))))
+        if entry:
             r["upgradation_fee_paid"] = entry.get("status") == "paid"
             r["upgradation_fee_status"] = entry.get("status", "pending")
             r["upgradation_fee_paid_date"] = entry.get("paid_date")
             r["upgradation_fee_payment_id"] = entry.get("payment_id")
             r["upgradation_fee_receipt"] = entry.get("receipt_number")
+            # Stamp the ledger_id on the record if it was missing
+            if not lid:
+                r["upgradation_fee_ledger_id"] = entry["ledger_id"]
         elif r.get("upgradation_fee", 0) > 0:
             r["upgradation_fee_status"] = "paid" if r.get("upgradation_fee_paid") else "pending"
         else:

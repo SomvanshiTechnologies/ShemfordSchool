@@ -206,17 +206,31 @@ const SettingsPage = () => {
               <CardContent>
                 {myDelReq === undefined ? (
                   <div className="flex items-center h-10"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></div>
+                ) : myDelReq && myDelReq.status === 'revoke_pending' ? (
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-2 rounded-xl bg-blue-50 border border-blue-200 p-3">
+                      <AlertTriangle className="h-4 w-4 text-blue-600 mt-0.5 shrink-0" />
+                      <p className="text-sm text-blue-800">
+                        Your restoration request has been sent to the admin. <strong>Once approved, your account will be fully recovered</strong> and you can login normally.
+                      </p>
+                    </div>
+                  </div>
                 ) : myDelReq && myDelReq.status === 'pending' ? (
                   <div className="space-y-3">
                     <div className="flex items-start gap-2 rounded-xl bg-amber-50 border border-amber-200 p-3">
                       <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
                       <p className="text-sm text-amber-800">
-                        Your account deletion request is <strong>pending admin approval</strong>. Once approved, your account and all your data are permanently deleted.
+                        Your account deletion request is <strong>pending admin approval</strong>. Your account is deactivated.
+                        {myDelReq.expires_at && (
+                          <span className="block mt-1 text-xs text-amber-700">
+                            You can revoke this by {new Date(myDelReq.expires_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.
+                          </span>
+                        )}
                       </p>
                     </div>
                     <Button variant="outline" className="rounded-xl" onClick={cancelDeletion} disabled={delLoading}>
                       {delLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-                      Cancel Request
+                      Cancel Request &amp; Restore Account
                     </Button>
                   </div>
                 ) : (

@@ -101,6 +101,7 @@ class UserLogin(BaseModel):
     # Kept as a plain string (not EmailStr) so non-email identifiers validate.
     email: str
     password: str
+    platform: Optional[str] = None  # "web" | "app" — used to enforce app-only login restriction
 
 
 class UserResponse(BaseModel):
@@ -127,11 +128,13 @@ class AccountDeletionRequest(BaseModel):
     user_email: Optional[str] = None
     user_role: Optional[str] = None
     reason: Optional[str] = None
-    status: str = "pending"  # pending | approved | rejected | cancelled
+    status: str = "pending"  # pending | approved | rejected | cancelled | revoke_pending | revoke_approved | revoke_rejected
     requested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: Optional[str] = None   # ISO string — 15 days after requested_at
     reviewed_by: Optional[str] = None
     reviewed_by_name: Optional[str] = None
     reviewed_at: Optional[str] = None
+    revoke_requested_at: Optional[str] = None
     rejection_reason: Optional[str] = None
     deleted_counts: Optional[Dict[str, int]] = None
 
