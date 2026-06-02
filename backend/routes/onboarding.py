@@ -171,8 +171,8 @@ async def set_onboarding_class(onboarding_id: str, request: Request):
     app = await db.onboarding.find_one({"onboarding_id": onboarding_id}, {"_id": 0})
     if not app:
         raise HTTPException(status_code=404, detail="Application not found")
-    if app["status"] not in ["draft"]:
-        raise HTTPException(status_code=400, detail=f"Cannot change class at status: {app['status']}")
+    if app["status"] == "completed":
+        raise HTTPException(status_code=400, detail="Cannot change class — admission is already completed.")
 
     class_name = body.get("class_name")
     section = body.get("section")
