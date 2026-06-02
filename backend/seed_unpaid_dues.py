@@ -100,7 +100,7 @@ async def seed():
                     "academic_year":      "2025-2026",
                     "fee_component":      FEE_TYPE_COMPONENTS[ft],
                     "fee_type":           ft,
-                    "description":        f"{FEE_TYPE_COMPONENTS[ft].replace('_', ' ').title()} (seeded due)",
+                    "description":        f"{FEE_TYPE_COMPONENTS[ft].replace('_', ' ').title()}",
                     "month":              ((today.month + i) % 12) + 1 if ft == "monthly" else None,
                     "gross_amount":       float(amt),
                     "concession_amount":  0.0,

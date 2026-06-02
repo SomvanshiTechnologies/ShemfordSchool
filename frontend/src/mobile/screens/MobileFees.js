@@ -468,7 +468,7 @@ const Stat = ({ label, value, color }) => (
 
 const LedgerRow = ({ entry, checked, onToggle, disabled }) => {
   const isPaid = entry.status === 'paid' || entry.status === 'waived';
-  const label = entry.description || entry.label || entry.component_label || entry.month || '—';
+  const label = (entry.description || entry.label || entry.component_label || entry.month || '—').replace(' (seeded due)', '');
   return (
     <label style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',borderTop:'1px solid #F5F5F5',cursor: disabled ? 'default' : 'pointer',opacity: disabled ? 0.7 : 1}}>
       <input

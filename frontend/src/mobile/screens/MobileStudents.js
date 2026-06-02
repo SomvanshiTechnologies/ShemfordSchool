@@ -191,6 +191,16 @@ const MobileStudents = () => {
     }
   };
 
+  const handleToggleAllWebLogin = async (enableAll) => {
+    try {
+      await api.patch('/students/web-login/bulk', { web_login_enabled: enableAll });
+      setStudents(prev => prev.map(s => ({ ...s, web_login_enabled: enableAll })));
+      toast.success(enableAll ? 'Login enabled for all students' : 'Login restricted to app for all students');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Failed to update');
+    }
+  };
+
   const handleReactivate = async (student) => {
     try {
       await api.put(`/students/${student.student_id}/reactivate`);
@@ -237,10 +247,26 @@ const MobileStudents = () => {
         )}
       </div>
 
-      <div style={{position:'relative',marginBottom:16}}>
+      <div style={{position:'relative',marginBottom:10}}>
         <Search size={16} style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',color:'#888'}} />
         <input className="m-input" style={{paddingLeft:38}} placeholder="Search students..." value={search} onChange={e => handleSearch(e.target.value)} />
       </div>
+
+      {isAdmin && students.length > 0 && (
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 12px',background:'#FFF',border:'1px solid rgba(0,0,0,0.06)',borderRadius:10,marginBottom:14}}>
+          <span style={{fontSize:12,fontWeight:600,color:'#555'}}>Portal Login (all students)</span>
+          <div style={{display:'flex',gap:6}}>
+            <button
+              onClick={() => handleToggleAllWebLogin(true)}
+              style={{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:7,border:'1px solid #bbf7d0',background:'#dcfce7',color:'#15803d',cursor:'pointer'}}
+            >Enable All</button>
+            <button
+              onClick={() => handleToggleAllWebLogin(false)}
+              style={{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:7,border:'1px solid #fecaca',background:'#fee2e2',color:'#dc2626',cursor:'pointer'}}
+            >App Only</button>
+          </div>
+        </div>
+      )}
 
       <div className="m-list">
         {students.map(s => (

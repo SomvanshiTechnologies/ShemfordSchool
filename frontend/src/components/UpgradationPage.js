@@ -786,8 +786,8 @@ export default function UpgradationPage() {
               </div>
               <Button
                 onClick={doGraduate}
-                disabled={graduating}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                disabled={graduating || selected.fee_status === 'pending' || selected.fee_status === 'overdue'}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {graduating ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Processing...</> : 'Mark as 12th Passed Out'}
               </Button>
@@ -829,7 +829,7 @@ export default function UpgradationPage() {
                           : 'bg-amber-100 text-amber-700';
                         return (
                           <tr key={e.ledger_id}>
-                            <td className="px-3 py-2 text-slate-700">{e.description || e.fee_component}</td>
+                            <td className="px-3 py-2 text-slate-700">{(e.description || e.fee_component || '').replace(' (seeded due)', '')}</td>
                             <td className="px-3 py-2 text-slate-500">{e.due_date || '—'}</td>
                             <td className="px-3 py-2">
                               <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${badgeCls}`}>
@@ -1213,19 +1213,21 @@ export default function UpgradationPage() {
                   onChange={e => setUpgFeeDate(e.target.value)}
                 />
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs font-bold uppercase tracking-wider">
-                  Amount to collect <span className="text-slate-400 font-normal normal-case">(leave blank to pay in full)</span>
-                </Label>
-                <Input
-                  type="number" min="0" step="0.01" max={upgFeeRecord.upgradation_fee}
-                  className="h-9 text-sm"
-                  placeholder={`Full: ₹${fmt(upgFeeRecord.upgradation_fee)}`}
-                  value={upgFeePartial}
-                  onChange={e => setUpgFeePartial(e.target.value)}
-                />
-                <p className="text-[10px] text-slate-400">Enter a smaller amount to record a partial payment.</p>
-              </div>
+              {upgFeeMethod !== 'split' && (
+                <div className="space-y-1">
+                  <Label className="text-xs font-bold uppercase tracking-wider">
+                    Amount to collect <span className="text-slate-400 font-normal normal-case">(leave blank to pay in full)</span>
+                  </Label>
+                  <Input
+                    type="number" min="0" step="0.01" max={upgFeeRecord.upgradation_fee}
+                    className="h-9 text-sm"
+                    placeholder={`Full: ₹${fmt(upgFeeRecord.upgradation_fee)}`}
+                    value={upgFeePartial}
+                    onChange={e => setUpgFeePartial(e.target.value)}
+                  />
+                  <p className="text-[10px] text-slate-400">Enter a smaller amount to record a partial payment.</p>
+                </div>
+              )}
               <div className="space-y-1">
                 <Label className="text-xs font-bold uppercase tracking-wider">Payment Method</Label>
                 <Select value={upgFeeMethod} onValueChange={setUpgFeeMethod}>
@@ -1236,17 +1238,23 @@ export default function UpgradationPage() {
                 </Select>
               </div>
               {upgFeeMethod === 'split' && (
-                <div className="grid grid-cols-2 gap-3 p-3 rounded-xl border border-orange-200 bg-orange-50">
-                  <div className="space-y-1">
-                    <Label className="text-xs font-bold uppercase tracking-wider">Cash</Label>
-                    <Input type="number" min={0} step="0.01" className="h-9 text-sm" value={upgFeeSplitCash} onChange={e => setUpgFeeSplitCash(e.target.value)} placeholder="0" />
+                <>
+                  <div className="grid grid-cols-2 gap-3 p-3 rounded-xl border border-orange-200 bg-orange-50">
+                    <div className="space-y-1">
+                      <Label className="text-xs font-bold uppercase tracking-wider">Cash</Label>
+                      <Input type="number" min={0} step="0.01" className="h-9 text-sm" value={upgFeeSplitCash} onChange={e => setUpgFeeSplitCash(e.target.value)} placeholder="0" />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs font-bold uppercase tracking-wider">Online</Label>
+                      <Input type="number" min={0} step="0.01" className="h-9 text-sm" value={upgFeeSplitOnline} onChange={e => setUpgFeeSplitOnline(e.target.value)} placeholder="0" />
+                    </div>
+                    <p className="col-span-2 text-[10px] text-slate-500">Cash + Online must equal the total amount.</p>
                   </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs font-bold uppercase tracking-wider">Online</Label>
-                    <Input type="number" min={0} step="0.01" className="h-9 text-sm" value={upgFeeSplitOnline} onChange={e => setUpgFeeSplitOnline(e.target.value)} placeholder="0" />
+                  <div className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Amount to collect</span>
+                    <span className="text-base font-bold text-slate-900">₹{fmt((parseFloat(upgFeeSplitCash) || 0) + (parseFloat(upgFeeSplitOnline) || 0))}</span>
                   </div>
-                  <p className="col-span-2 text-[10px] text-slate-500">Cash + Online must equal the total amount.</p>
-                </div>
+                </>
               )}
               {upgFeeMethod !== 'cash' && upgFeeMethod !== 'split' && (
                 <div className="space-y-1">
@@ -1386,7 +1394,7 @@ export default function UpgradationPage() {
                         }}
                       />
                       <span className="flex-1">
-                        {e.description || e.fee_component}
+                        {(e.description || e.fee_component || '').replace(' (seeded due)', '')}
                         {isMandatory && <span className="ml-1.5 text-[10px] font-semibold text-orange-600 uppercase tracking-wide">Required</span>}
                         {paid > 0 && (
                           <span className="block text-[10px] text-amber-600">Paid ₹{fmt(paid)} of ₹{fmt(e.net_amount)}</span>
@@ -1406,7 +1414,7 @@ export default function UpgradationPage() {
                     return s + remaining;
                   }, 0))}
                 </p>
-                {collectIds.length >= 1 && (() => {
+                {collectIds.length >= 1 && collectMethod !== 'split' && (() => {
                   // Total still due across the selected fees — a smaller amount
                   // is a partial payment, spread oldest-first across them.
                   const selectedRemaining = pendingEntries
@@ -1443,19 +1451,25 @@ export default function UpgradationPage() {
                   </Select>
                 </div>
                 {collectMethod === 'split' && (
-                  <div className="grid grid-cols-2 gap-2 p-3 rounded-xl border border-orange-200 bg-orange-50">
-                    <div className="space-y-1">
-                      <Label className="text-xs">Cash</Label>
-                      <Input type="number" min={0} step="0.01" value={collectSplitCash} onChange={e => setCollectSplitCash(e.target.value)} placeholder="0" />
+                  <>
+                    <div className="grid grid-cols-2 gap-2 p-3 rounded-xl border border-orange-200 bg-orange-50">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Cash</Label>
+                        <Input type="number" min={0} step="0.01" value={collectSplitCash} onChange={e => setCollectSplitCash(e.target.value)} placeholder="0" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Online</Label>
+                        <Input type="number" min={0} step="0.01" value={collectSplitOnline} onChange={e => setCollectSplitOnline(e.target.value)} placeholder="0" />
+                      </div>
+                      <p className="col-span-2 text-[10px] text-slate-500">
+                        Cash + Online must equal the total being collected.
+                      </p>
                     </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs">Online</Label>
-                      <Input type="number" min={0} step="0.01" value={collectSplitOnline} onChange={e => setCollectSplitOnline(e.target.value)} placeholder="0" />
+                    <div className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                      <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Amount to collect</span>
+                      <span className="text-base font-bold text-slate-900">₹{fmt((parseFloat(collectSplitCash) || 0) + (parseFloat(collectSplitOnline) || 0))}</span>
                     </div>
-                    <p className="col-span-2 text-[10px] text-slate-500">
-                      Cash + Online must equal the total being collected.
-                    </p>
-                  </div>
+                  </>
                 )}
                 {collectMethod !== 'cash' && collectMethod !== 'split' && (
                   <div className="space-y-1">

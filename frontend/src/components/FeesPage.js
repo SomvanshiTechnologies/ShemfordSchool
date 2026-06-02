@@ -2063,7 +2063,7 @@ const FeeTypeDropdown = ({ label, entries, payLedgerIds, setPayLedgerIds }) => {
           <div className="max-h-56 overflow-y-auto">
           {entries.map(e => {
             const isSel = payLedgerIds.includes(e.ledger_id);
-            const entryLabel = e.description || e.month || e.ledger_id;
+            const entryLabel = (e.description || e.month || e.ledger_id).replace(' (seeded due)', '');
             const amount = e.remaining_balance > 0 ? e.remaining_balance : e.net_amount;
             return (
               <label key={e.ledger_id} className={`flex items-center gap-3 px-3 py-2.5 border-b border-slate-50 last:border-0 cursor-pointer hover:bg-orange-50 ${isSel ? 'bg-orange-50/50' : ''}`}>
@@ -2313,7 +2313,7 @@ const LedgerView = ({
                       className={`hover:bg-slate-50 ${entry.status === 'overdue' ? 'bg-red-50/40 border-l-2 border-red-400' : ''}`}
                     >
                       <TableCell className="text-sm font-medium">
-                        {entry.description}
+                        {(entry.description || '').replace(' (seeded due)', '')}
                       </TableCell>
                       <TableCell className="text-sm">{fmt(entry.gross_amount)}</TableCell>
                       <TableCell className="text-sm">

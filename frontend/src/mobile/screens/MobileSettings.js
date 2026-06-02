@@ -186,14 +186,26 @@ const MobileSettings = () => {
             </p>
             {myDelReq === undefined ? (
               <Loader2 size={18} className="animate-spin" color="#aaa" />
+            ) : myDelReq && myDelReq.status === 'revoke_pending' ? (
+              <div style={{display:'flex',gap:8,padding:12,background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:12}}>
+                <AlertTriangle size={16} color="#1d4ed8" style={{flexShrink:0,marginTop:2}} />
+                <p style={{fontSize:13,color:'#1e40af'}}>Your restoration request has been sent to the admin. <strong>Once approved, your account will be fully recovered</strong> and you can login normally.</p>
+              </div>
             ) : myDelReq && myDelReq.status === 'pending' ? (
               <>
                 <div style={{display:'flex',gap:8,padding:12,background:'#fffbeb',border:'1px solid #fde68a',borderRadius:12,marginBottom:12}}>
                   <AlertTriangle size={16} color="#d97706" style={{flexShrink:0,marginTop:2}} />
-                  <p style={{fontSize:13,color:'#92400e'}}>Your deletion request is <strong>pending admin approval</strong>. Once approved, your account and all your data are permanently deleted.</p>
+                  <div>
+                    <p style={{fontSize:13,color:'#92400e'}}>Your deletion request is <strong>pending admin approval</strong>. Once approved, your account and all your data are permanently deleted.</p>
+                    {myDelReq.expires_at && (
+                      <p style={{fontSize:11,color:'#b45309',marginTop:4}}>
+                        You can revoke this by {new Date(myDelReq.expires_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.
+                      </p>
+                    )}
+                  </div>
                 </div>
                 <button onClick={cancelDeletion} disabled={delLoading} className="m-btn m-btn-outline" style={{width:'100%'}}>
-                  {delLoading ? <Loader2 size={14} className="animate-spin" /> : null} Cancel Request
+                  {delLoading ? <Loader2 size={14} className="animate-spin" /> : null} Cancel Request &amp; Restore Account
                 </button>
               </>
             ) : (

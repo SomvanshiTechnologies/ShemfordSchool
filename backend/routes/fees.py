@@ -863,6 +863,10 @@ async def get_student_ledger(student_id: str, request: Request):
         {"student_id": student_id}, {"_id": 0}
     ).sort([("fee_type", 1), ("due_date", 1)]).to_list(500)
 
+    for e in entries:
+        if isinstance(e.get("description"), str):
+            e["description"] = e["description"].replace(" (seeded due)", "")
+
     # Auto-generate ledger entries when a student has none (e.g. seeded before fee config existed)
     if not entries:
         academic_year_val = student.get("academic_year", current_academic_year())
