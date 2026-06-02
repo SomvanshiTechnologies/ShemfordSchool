@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../lib/api';
 import { getCached, setCached } from '../lib/pageCache';
+import { copyText } from '../lib/clipboard';
 
 const TopProgressBar = ({ active }) =>
   active ? (
@@ -479,7 +480,7 @@ const UsersPage = () => {
               <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl p-3">
                 <code className="text-sm font-mono flex-1 break-all">{pwResult.password}</code>
                 <Button size="sm" variant="outline" className="rounded-lg shrink-0"
-                  onClick={async () => { try { await navigator.clipboard.writeText(pwResult.password); toast.success('Copied'); } catch { toast.error('Copy failed'); } }}>
+                  onClick={async () => { const ok = await copyText(pwResult.password); toast[ok ? 'success' : 'error'](ok ? 'Copied' : 'Copy failed'); }}>
                   <Copy className="h-3.5 w-3.5" />
                 </Button>
               </div>
