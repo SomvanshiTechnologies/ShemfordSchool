@@ -11,6 +11,115 @@ import {
   ArrowLeft, Settings, FileText, Mail, RefreshCw, Receipt,
 } from 'lucide-react';
 
+// ─── Mobile Razorpay button ────────────────────────────────────────────────
+// Self-contained: loads the Razorpay script, creates an order, opens the
+// checkout modal, and verifies on the backend. Used by student fee view.
+const MobileRazorpayButton = ({ studentId, ledgerIds, amount, onSuccess, style }) => {
+  const [busy, setBusy] = useState(false);
+  const orderRef = useRef(null);
+
+  const loadScript = () => new Promise((resolve) => {
+    if (window.Razorpay) { resolve(true); return; }
+    const s = document.createElement('script');
+    s.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
+    document.body.appendChild(s);
+  });
+
+  // Cancel order on unmount if mid-payment
+  useEffect(() => () => {
+    if (orderRef.current) {
+      api.post('/payments/razorpay/cancel', { internal_order_id: orderRef.current }).catch(() => {});
+      orderRef.current = null;
+    }
+  }, []);
+
+  const pay = async () => {
+    if (busy || !ledgerIds.length) return;
+    const ok = await loadScript();
+    if (!ok) { toast.error('Failed to load payment module. Check your internet.'); return; }
+    setBusy(true);
+    let orderId = null;
+    try {
+      const { data: order } = await api.post('/payments/razorpay/create-order', {
+        student_id: studentId, ledger_ids: ledgerIds,
+      });
+      orderId = order.internal_order_id;
+      orderRef.current = orderId;
+      api.post('/payments/razorpay/initiate', { internal_order_id: orderId }).catch(() => {});
+
+      await new Promise((resolve, reject) => {
+        const options = {
+          key: order.key_id,
+          amount: order.amount_paise,
+          currency: order.currency,
+          name: 'Shemford Futuristic School',
+          description: order.description,
+          image: '/logo.webp',
+          order_id: order.rzp_order_id,
+          prefill: { name: order.student_name, email: order.student_email, contact: order.student_phone },
+          theme: { color: '#E88A1A' },
+          handler: async (response) => {
+            try {
+              const { data: result } = await api.post('/payments/razorpay/verify', {
+                razorpay_order_id:   response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature:  response.razorpay_signature,
+              });
+              orderRef.current = null;
+              toast.success(`Payment successful! Receipt: ${result.receipt_number}`);
+              onSuccess?.(result);
+              resolve(result);
+            } catch (err) {
+              const msg = err.response?.data?.detail || 'Payment verification failed.';
+              toast.error(msg); reject(new Error(msg));
+            }
+          },
+          modal: {
+            ondismiss: async () => {
+              try { await api.post('/payments/razorpay/cancel', { internal_order_id: orderId }); } catch (_) {}
+              orderRef.current = null;
+              resolve(null);
+            },
+            escape: false, backdropclose: false,
+          },
+        };
+        const rzp = new window.Razorpay(options);
+        rzp.on('payment.failed', async (response) => {
+          try { await api.post('/payments/razorpay/cancel', { internal_order_id: orderId }); } catch (_) {}
+          orderRef.current = null;
+          toast.error(`Payment failed: ${response.error?.description || 'Unknown error'}`);
+          reject(new Error('Payment failed'));
+        });
+        rzp.open();
+      });
+    } catch (err) {
+      if (orderId) { api.post('/payments/razorpay/cancel', { internal_order_id: orderId }).catch(() => {}); orderRef.current = null; }
+      if (!err._handled && !err.message?.includes('Payment failed')) {
+        toast.error(err.response?.data?.detail || err.message || 'Payment could not be started.', { duration: 6000 });
+      }
+    } finally { setBusy(false); }
+  };
+
+  if (!process.env.REACT_APP_RAZORPAY_KEY_ID) return null;
+
+  return (
+    <button onClick={pay} disabled={busy || !ledgerIds.length}
+      style={{
+        display:'flex', alignItems:'center', justifyContent:'center', gap:8,
+        width:'100%', padding:'14px', borderRadius:14, border:'none', cursor:'pointer',
+        background:'#E88A1A', color:'#FFF', fontSize:15, fontWeight:800,
+        boxShadow:'0 6px 20px rgba(232,138,26,0.35)',
+        opacity: (busy || !ledgerIds.length) ? 0.6 : 1,
+        ...style,
+      }}>
+      {busy ? <Loader2 size={18} className="animate-spin" /> : <CreditCard size={18} />}
+      {busy ? 'Processing…' : `Pay Now — ₹${Number(amount || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
+    </button>
+  );
+};
+
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 const fmt = (n) => n != null ? `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 0 })}` : '—';
@@ -328,7 +437,7 @@ const SECTION_DEFS = [
   { key: 'monthly', label: 'Monthly Tuition' },
 ];
 
-const Ledger = ({ ledger, payIds, setPayIds, onPay }) => {
+const Ledger = ({ ledger, payIds, setPayIds, onPay, renderPayButton }) => {
   const [expanded, setExpanded] = useState({ one_time: true, yearly: true, monthly: false });
   const { student, summary, ledger: grouped } = ledger;
 
@@ -441,7 +550,6 @@ const Ledger = ({ ledger, payIds, setPayIds, onPay }) => {
       {/* Floating pay bar above the bottom nav */}
       {payIds.length > 0 && (
         <>
-          {/* Spacer so the last entry isn't hidden behind the floating bar */}
           <div style={{height:80}} />
           <div style={{
             position:'fixed',
@@ -449,9 +557,14 @@ const Ledger = ({ ledger, payIds, setPayIds, onPay }) => {
             bottom:`calc(76px + env(safe-area-inset-bottom, 0px))`,
             zIndex:90,
           }}>
-            <button onClick={onPay} style={{...actionBtn('dark'), width:'100%', padding:'14px', boxShadow:'0 6px 20px rgba(0,0,0,0.18)'}}>
-              <CreditCard size={16} /> Collect {fmt(selectedTotal)}
-            </button>
+            {renderPayButton
+              ? renderPayButton({ payIds, total: selectedTotal })
+              : (
+                <button onClick={onPay} style={{...actionBtn('dark'), width:'100%', padding:'14px', boxShadow:'0 6px 20px rgba(0,0,0,0.18)'}}>
+                  <CreditCard size={16} /> Collect {fmt(selectedTotal)}
+                </button>
+              )
+            }
           </div>
         </>
       )}
@@ -1394,12 +1507,20 @@ const ParentStudentFees = ({ isParent }) => {
       )}
 
       {ledger && (
-        <>
-          <Ledger ledger={ledger} payIds={payIds} setPayIds={setPayIds} onPay={() => isParent && setShowPay(true)} />
-          {!isParent && payIds.length > 0 && (
-            <p style={{fontSize:11,color:'#888',textAlign:'center',marginTop:8}}>Only parents can pay online from the mobile app.</p>
-          )}
-        </>
+        <Ledger
+          ledger={ledger}
+          payIds={payIds}
+          setPayIds={setPayIds}
+          onPay={isParent ? () => setShowPay(true) : undefined}
+          renderPayButton={!isParent ? ({ payIds: ids, total }) => (
+            <MobileRazorpayButton
+              studentId={selected?.student_id}
+              ledgerIds={ids}
+              amount={total}
+              onSuccess={() => { setPayIds([]); loadLedger(selected.student_id); }}
+            />
+          ) : undefined}
+        />
       )}
 
       {showPay && (

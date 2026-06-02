@@ -325,10 +325,14 @@ const FeesPage = () => {
   // selected session rather than the calendar year.
   useEffect(() => {
     if (viewSession) setSelectedYear(viewSession);
-    setSelectedStudentId('');
-    setStudentLedger(null);
-    setStudentSearch('');
-    setStudentSearchResults([]);
+    // Only clear the selected student for admins — parents/students stay on
+    // their own record regardless of which session is viewed.
+    if (isAdmin) {
+      setSelectedStudentId('');
+      setStudentLedger(null);
+      setStudentSearch('');
+      setStudentSearchResults([]);
+    }
     setPayLedgerIds([]);
     // Refresh the bulk student/concession list for the newly selected session
     // so it doesn't linger on the previous year's data (the due chart and
