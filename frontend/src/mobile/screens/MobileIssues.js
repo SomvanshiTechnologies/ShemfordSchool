@@ -167,15 +167,15 @@ const MobileIssues = () => {
       </div>
 
       {/* Status filter tabs */}
-      <div style={{display:'flex',gap:6,padding:4,background:'#F0F0F0',borderRadius:12,marginBottom:12,overflowX:'auto'}}>
+      <div style={{display:'flex',gap:6,padding:4,background:'transparent',borderRadius:12,marginBottom:12,overflowX:'auto',scrollbarWidth:'none',msOverflowStyle:'none'}}>
         {STATUS_TABS.map(t => (
           <button key={t.key || 'all'} onClick={() => setFilterStatus(t.key)}
             style={{
-              flex:'1 0 auto',padding:'8px 12px',borderRadius:8,border:'none',whiteSpace:'nowrap',
+              flex:'1 0 auto',padding:'8px 12px',borderRadius:12,border:'none',whiteSpace:'nowrap',
               background: filterStatus === t.key ? '#FFF' : 'transparent',
               color: filterStatus === t.key ? '#1A1A1A' : '#888',
               fontSize:12,fontWeight:700,cursor:'pointer',
-              boxShadow: filterStatus === t.key ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+              boxShadow: filterStatus === t.key ? '0 1px 4px rgba(0,0,0,0.10)' : 'none',
             }}>
             {t.label}
           </button>

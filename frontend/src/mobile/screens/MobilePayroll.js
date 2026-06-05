@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+﻿import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSession } from '../../contexts/SessionContext';
 import api from '../../lib/api';
-import { previewInTab, previewExcelHtml } from '../../lib/preview';
+import { previewInTab, previewExcelHtml, downloadPdf } from '../../lib/preview';
 import { clampISODate } from '../../lib/dateBounds';
 import { toast } from 'sonner';
 import {
@@ -21,7 +21,7 @@ const STATUS = {
   paid:     { bg: '#dcfce7', color: '#15803d', label: 'paid' },
 };
 
-// "Rs." prefix (not ₹) — keeps parity with PDF payslips / Excel exports.
+// "Rs." prefix (not Rs.) — keeps parity with PDF payslips / Excel exports.
 const fmt = (n) => `Rs. ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const PAGE_SIZE = 20;
@@ -91,6 +91,9 @@ const AdminPayrollView = ({ canManage }) => {
   const [payDate, setPayDate] = useState('');
   const [payRef, setPayRef] = useState('');
   const [actionLoading, setActionLoading] = useState('');
+  const [editRecord, setEditRecord] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const monthYear = `${year}-${String(month).padStart(2, '0')}`;
 
@@ -141,10 +144,17 @@ const AdminPayrollView = ({ canManage }) => {
     finally { setGenerating(false); }
   };
 
-  const approve = async (id) => {
-    setActionLoading(id + '_approve');
+  const approve = async (rec) => {
+    const missing = [];
+    if (!rec.bank_account_number) missing.push('Bank Account Number');
+    if (!rec.bank_ifsc) missing.push('IFSC Code');
+    if (missing.length) {
+      toast.error(`Cannot approve: missing ${missing.join(', ')}. Update employee bank details and regenerate.`);
+      return;
+    }
+    setActionLoading(rec.payroll_id + '_approve');
     try {
-      await api.post(`/payroll/${id}/approve`);
+      await api.post(`/payroll/${rec.payroll_id}/approve`);
       toast.success('Payroll approved');
       load();
     } catch (e) { if (!e._handled) toast.error(e.response?.data?.detail || 'Failed to approve'); }
@@ -169,9 +179,41 @@ const AdminPayrollView = ({ canManage }) => {
     finally { setActionLoading(''); }
   };
 
-  const downloadPayslip = (id) => previewInTab(
+  const openEdit = (rec) => {
+    setEditRecord(rec);
+    setEditForm({
+      lwp_days: String(rec.lwp_days ?? 0),
+      pf_deduction: String(rec.pf_deduction ?? 0),
+      esi_deduction: String(rec.esi_deduction ?? 0),
+      tds_deduction: String(rec.tds_deduction ?? 0),
+      other_deductions: String(rec.other_deductions ?? 0),
+      deduction_remarks: rec.deduction_remarks ?? '',
+    });
+  };
+
+  const saveEdit = async () => {
+    if (!editRecord) return;
+    setSavingEdit(true);
+    try {
+      await api.put(`/payroll/${editRecord.payroll_id}`, {
+        lwp_days: parseFloat(editForm.lwp_days) || 0,
+        pf_deduction: parseFloat(editForm.pf_deduction) || 0,
+        esi_deduction: parseFloat(editForm.esi_deduction) || 0,
+        tds_deduction: parseFloat(editForm.tds_deduction) || 0,
+        other_deductions: parseFloat(editForm.other_deductions) || 0,
+        deduction_remarks: editForm.deduction_remarks || undefined,
+      });
+      toast.success('Deductions updated');
+      setEditRecord(null);
+      load();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed to update'); }
+    finally { setSavingEdit(false); }
+  };
+
+  const downloadPayslip = (id, empName) => downloadPdf(
     () => api.get(`/payroll/${id}/payslip`, { responseType: 'blob' }),
-    { kind: 'pdf', errorMessage: 'Failed to load payslip' },
+    `payslip-${empName || id}.pdf`,
+    'Failed to download payslip',
   );
 
   const exportExcel = () => previewExcelHtml(
@@ -255,15 +297,21 @@ const AdminPayrollView = ({ canManage }) => {
                   <p style={{fontSize:10,color:'#aaa'}}>Gross {fmt(r.gross_salary)} · LWP {r.lwp_days ?? 0}d</p>
                 </div>
                 <div style={{display:'flex',gap:6,flexShrink:0}}>
-                  <button onClick={() => downloadPayslip(r.payroll_id)} title="Payslip"
+                  <button onClick={() => downloadPayslip(r.payroll_id, r.employee_name || r.employee_id)} title="Payslip"
                     style={{display:'flex',alignItems:'center',gap:4,padding:'8px 10px',borderRadius:8,background:'#FFF',border:'1px solid #E5E5E5',fontSize:11,fontWeight:700,color:'#1A1A1A',cursor:'pointer'}}>
                     <Download size={14} />
                   </button>
                   {canManage && r.status === 'draft' && (
-                    <button onClick={() => approve(r.payroll_id)} disabled={actionLoading === r.payroll_id + '_approve'}
-                      style={{display:'flex',alignItems:'center',gap:4,padding:'8px 10px',borderRadius:8,background:'#dbeafe',border:'1px solid #bfdbfe',fontSize:11,fontWeight:700,color:'#1e40af',cursor:'pointer'}}>
-                      {actionLoading === r.payroll_id + '_approve' ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />} Approve
-                    </button>
+                    <>
+                      <button onClick={() => openEdit(r)} title="Edit deductions"
+                        style={{display:'flex',alignItems:'center',gap:4,padding:'8px 10px',borderRadius:8,background:'#FFF',border:'1px solid #E5E5E5',fontSize:11,fontWeight:700,color:'#1A1A1A',cursor:'pointer'}}>
+                        <FileText size={14} />
+                      </button>
+                      <button onClick={() => approve(r)} disabled={actionLoading === r.payroll_id + '_approve'}
+                        style={{display:'flex',alignItems:'center',gap:4,padding:'8px 10px',borderRadius:8,background:'#dbeafe',border:'1px solid #bfdbfe',fontSize:11,fontWeight:700,color:'#1e40af',cursor:'pointer'}}>
+                        {actionLoading === r.payroll_id + '_approve' ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />} Approve
+                      </button>
+                    </>
                   )}
                   {canManage && r.status === 'approved' && (
                     <button onClick={() => openPay(r)}
@@ -311,7 +359,7 @@ const AdminPayrollView = ({ canManage }) => {
           </div>
           <div style={{marginBottom:10}}>
             <label style={formLabel}>Payment Date</label>
-            <input className="m-input" type="date" min={sessionBounds.start || undefined} max={sessionToday || undefined}
+            <input className="m-input" type="date" lang="en-IN" min={sessionBounds.start || undefined} max={sessionToday || undefined}
               value={payDate} onChange={(e) => setPayDate(clampISODate(e.target.value, { min: sessionBounds.start, max: sessionToday }))} />
           </div>
           <div style={{marginBottom:12}}>
@@ -322,6 +370,36 @@ const AdminPayrollView = ({ canManage }) => {
             <button onClick={() => setPayRecord(null)} className="m-btn m-btn-outline" style={{flex:1}}>Cancel</button>
             <button onClick={markPaid} disabled={!payDate || !!actionLoading} className="m-btn" style={{flex:1,background:'#16a34a',color:'#FFF'}}>
               {actionLoading ? <Loader2 size={14} className="animate-spin" /> : <CreditCard size={14} />} Confirm
+            </button>
+          </div>
+        </Sheet>
+      )}
+
+      {editRecord && (
+        <Sheet title={`Edit Deductions — ${editRecord.employee_name}`} onClose={() => !savingEdit && setEditRecord(null)}>
+          <p style={{fontSize:11,color:'#888',marginBottom:10}}>Gross: {fmt(editRecord.gross_salary)}</p>
+          {[
+            { key: 'lwp_days', label: 'LWP Days', hint: 'Leave Without Pay days' },
+            { key: 'pf_deduction', label: 'PF (Rs.)', hint: 'Auto: 12% of salary ≤ Rs.15,000' },
+            { key: 'esi_deduction', label: 'ESI (Rs.)', hint: 'Auto: 0.75% if gross ≤ Rs.21,000' },
+            { key: 'tds_deduction', label: 'TDS (Rs.)', hint: 'Enter manually per month' },
+            { key: 'other_deductions', label: 'Other Deductions (Rs.)', hint: '' },
+          ].map(({ key, label, hint }) => (
+            <div key={key} style={{marginBottom:10}}>
+              <label style={{display:'block',fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:'#666',marginBottom:2}}>{label}</label>
+              {hint && <p style={{fontSize:10,color:'#aaa',marginBottom:4}}>{hint}</p>}
+              <input className="m-input" type="number" min={0} step="0.01"
+                value={editForm[key] ?? ''} onChange={e => setEditForm(f => ({ ...f, [key]: e.target.value }))} />
+            </div>
+          ))}
+          <div style={{marginBottom:14}}>
+            <label style={{display:'block',fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:'#666',marginBottom:4}}>Remarks (optional)</label>
+            <input className="m-input" value={editForm.deduction_remarks ?? ''} onChange={e => setEditForm(f => ({ ...f, deduction_remarks: e.target.value }))} />
+          </div>
+          <div style={{display:'flex',gap:8}}>
+            <button onClick={() => setEditRecord(null)} className="m-btn m-btn-outline" style={{flex:1}}>Cancel</button>
+            <button onClick={saveEdit} disabled={savingEdit} className="m-btn" style={{flex:1,background:'#1A1A1A',color:'#FFF'}}>
+              {savingEdit ? <Loader2 size={14} className="animate-spin" /> : null} Save
             </button>
           </div>
         </Sheet>
@@ -357,9 +435,10 @@ const EmployeePayrollView = () => {
     return () => { active = false; };
   }, [year]);
 
-  const downloadPayslip = (id) => previewInTab(
+  const downloadPayslip = (id, month) => downloadPdf(
     () => api.get(`/payroll/${id}/payslip`, { responseType: 'blob' }),
-    { kind: 'pdf', errorMessage: 'Failed to load payslip' },
+    `payslip-${MONTHS[month - 1] || id}.pdf`,
+    'Failed to download payslip',
   );
   const downloadYearly = () => empId && previewInTab(
     () => api.get(`/payroll/employee/${empId}/yearly-statement/${year}`, { responseType: 'blob' }),
@@ -418,7 +497,7 @@ const EmployeePayrollView = () => {
                   <p style={{fontSize:14,fontWeight:800,color:'#15803d'}}>{fmt(r.net_salary)}</p>
                   <StatusBadge status={r.status} />
                 </div>
-                <button onClick={() => downloadPayslip(r.payroll_id)} title="Payslip"
+                <button onClick={() => downloadPayslip(r.payroll_id, r.month)} title="Payslip"
                   style={{display:'flex',alignItems:'center',padding:'8px',borderRadius:8,background:'#FFF',border:'1px solid #E5E5E5',color:'#1A1A1A',cursor:'pointer'}}>
                   <Download size={14} />
                 </button>

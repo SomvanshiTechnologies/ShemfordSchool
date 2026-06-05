@@ -135,10 +135,13 @@ api.interceptors.response.use(
     }
 
     // Network / timeout errors (no response at all)
-    // Use a fixed toast id so multiple concurrent failing calls only show one toast
+    // Skip aborted requests (AbortController cleanup) — not a real network error.
     if (!error.response) {
-      toast.error('Cannot reach the server. Please check your connection.', { id: 'network-error' });
-      error._handled = true;
+      const isCancelled = error.code === 'ERR_CANCELED' || error.name === 'AbortError' || error.name === 'CanceledError';
+      if (!isCancelled) {
+        toast.error('Cannot reach the server. Please check your connection.', { id: 'network-error' });
+        error._handled = true;
+      }
     }
 
     return Promise.reject(error);

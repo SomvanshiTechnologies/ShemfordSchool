@@ -233,7 +233,7 @@ const AnnouncementsPage = () => {
       setClasses(classesRes.data);
       setCached('announcements:all', { announcements: announcementsRes.data, classes: classesRes.data });
     } catch (error) {
-      if (!cached) toast.error('Failed to fetch announcements');
+      if (!cached && !error?._handled) toast.error('Failed to fetch announcements');
     } finally {
       setLoading(false);
       setRefreshing(false);

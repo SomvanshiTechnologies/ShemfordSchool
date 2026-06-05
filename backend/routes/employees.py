@@ -94,11 +94,6 @@ async def create_employee(employee: EmployeeCreate, request: Request):
         await db.users.insert_one(user_dict)
 
         employee_dict["user_id"] = user_obj.user_id
-        # Persist plaintext temp password on employee record so admin can view/share
-        # later from the edit dialog — same UX choice as the students collection.
-        employee_dict["temp_password"] = temp_password
-
-    temp_pw = employee_dict.get("temp_password")
 
     # Encrypt PII bank fields before storage
     encrypt_bank_fields(employee_dict)
@@ -110,10 +105,10 @@ async def create_employee(employee: EmployeeCreate, request: Request):
                           {"employee": strip_pii_for_audit(employee.model_dump())}, user)
 
     result = decrypt_bank_fields(employee_dict)
-    if temp_pw:
+    if temp_password:
         result["linked_account"] = {
             "email": employee.email,
-            "temp_password": temp_pw,
+            "temp_password": temp_password,
             "message": "Login account auto-created. Share credentials securely."
         }
 
@@ -177,7 +172,7 @@ async def reset_employee_password(employee_id: str, request: Request):
     dialog can use the same UX.
     """
     import string
-    await require_roles(UserRole.ADMIN)(request)
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     body = await request.json()
 
     employee = await db.employees.find_one({"employee_id": employee_id}, {"_id": 0})
@@ -220,7 +215,7 @@ async def reset_employee_password(employee_id: str, request: Request):
         await db.users.insert_one(u_dict)
         await db.employees.update_one(
             {"employee_id": employee_id},
-            {"$set": {"user_id": new_user.user_id, "email": email, "temp_password": new_password}},
+            {"$set": {"user_id": new_user.user_id, "email": email}},
         )
         return {
             "message": "Employee account created and password set",
@@ -232,29 +227,10 @@ async def reset_employee_password(employee_id: str, request: Request):
         {"user_id": user_account["user_id"]},
         {"$set": {"password_hash": hash_password(new_password)}},
     )
-    await db.employees.update_one(
-        {"employee_id": employee_id},
-        {"$set": {"temp_password": new_password}},
-    )
     return {
         "message": "Password reset successfully",
         "password": new_password,
         "email": employee.get("email"),
-    }
-
-
-@router.get("/employees/{employee_id}/password")
-async def get_employee_password_hint(employee_id: str, request: Request):
-    """Admin-only: returns the last-reset password stored on the employee
-    record. Empty if never generated or wiped after a self-service change."""
-    await require_roles(UserRole.ADMIN)(request)
-    employee = await db.employees.find_one({"employee_id": employee_id}, {"_id": 0})
-    if not employee:
-        raise HTTPException(status_code=404, detail="Employee not found")
-    return {
-        "password": employee.get("temp_password") or None,
-        "email": employee.get("email"),
-        "has_account": bool(employee.get("user_id") or employee.get("email")),
     }
 
 
@@ -444,7 +420,7 @@ async def link_employee_user(employee_id: str, request: Request):
 
     await db.employees.update_one(
         {"employee_id": employee_id},
-        {"$set": {"user_id": user_obj.user_id, "temp_password": temp_password}}
+        {"$set": {"user_id": user_obj.user_id}}
     )
 
     await create_audit_log("employee", employee_id, "link-user", {"user_id": user_obj.user_id, "role": role}, user)

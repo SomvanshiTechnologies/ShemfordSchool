@@ -36,11 +36,25 @@ const StudentDashboard = () => {
     </div>
   );
 
+  if (!studentInfo) return (
+    <div data-testid="m-student-dashboard">
+      <div className="m-header">
+        <div><h1>Hi, {user?.name || 'Student'}</h1><p className="m-header-sub">Student Portal</p></div>
+        <div className="m-avatar" style={{background:'#1A1A1A',color:'#FFF'}}>{user?.name?.charAt(0) || 'S'}</div>
+      </div>
+      <div className="m-empty" style={{marginTop:32}}>
+        <GraduationCap className="m-empty-icon" />
+        <p style={{fontWeight:700,fontSize:14,color:'#1A1A1A',marginBottom:6}}>Account Not Linked</p>
+        <p style={{fontSize:12,color:'#888',textAlign:'center',lineHeight:1.5}}>Your login is not linked to a student record. Please contact the school administrator.</p>
+      </div>
+    </div>
+  );
+
   return (
     <div data-testid="m-student-dashboard">
       <div className="m-header">
-        <div><h1>Hi, {studentInfo?.first_name || 'Student'}</h1><p className="m-header-sub">Class {studentInfo?.class_name}-{studentInfo?.section}</p></div>
-        <div className="m-avatar" style={{background:'#1A1A1A',color:'#FFF'}}>{studentInfo?.first_name?.charAt(0) || 'S'}</div>
+        <div><h1>Hi, {studentInfo.first_name}</h1><p className="m-header-sub">Class {studentInfo.class_name}-{studentInfo.section}</p></div>
+        <div className="m-avatar" style={{background:'#1A1A1A',color:'#FFF'}}>{studentInfo.first_name?.charAt(0) || 'S'}</div>
       </div>
 
       {/* Attendance ring card */}
@@ -52,13 +66,15 @@ const StudentDashboard = () => {
           </svg>
           <div style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',color:'#FFF',fontWeight:800,fontSize:18}}>{pct}%</div>
         </div>
-        <p style={{fontSize:12,color:'#888'}}>Attendance — {present} of {total} days</p>
+        <p style={{fontSize:12,color:'#888'}}>{total > 0 ? `Attendance — ${present} of ${total} days` : 'No attendance records yet'}</p>
       </div>
 
-      <div className="m-stat-grid">
-        <div className="m-stat"><p className="m-stat-label">Present</p><p className="m-stat-value">{present}</p></div>
-        <div className="m-stat m-stat-accent"><p className="m-stat-label">Absent</p><p className="m-stat-value">{total - present}</p></div>
-      </div>
+      {total > 0 && (
+        <div className="m-stat-grid">
+          <div className="m-stat"><p className="m-stat-label">Present</p><p className="m-stat-value">{present}</p></div>
+          <div className="m-stat m-stat-accent"><p className="m-stat-label">Absent</p><p className="m-stat-value">{total - present}</p></div>
+        </div>
+      )}
 
       <p className="m-section">Quick Access</p>
       <div className="m-actions">

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Shemford School — Razorpay Payment Integration
 ===============================================
 
@@ -332,7 +332,7 @@ async def create_razorpay_order(body: CreateOrderRequest, request: Request):
                 detail="Partial payment is not enabled. Please pay the full amount."
             )
         if body.amount_override_paise < 100:
-            raise HTTPException(status_code=400, detail="Minimum payable amount is ₹1.")
+            raise HTTPException(status_code=400, detail="Minimum payable amount is Rs.1.")
         if body.amount_override_paise > total_paise:
             raise HTTPException(
                 status_code=400,
@@ -342,8 +342,8 @@ async def create_razorpay_order(body: CreateOrderRequest, request: Request):
             is_partial = True
             charge_paise = body.amount_override_paise
 
-    if charge_paise < 100:    # Razorpay minimum: ₹1
-        raise HTTPException(status_code=400, detail="Minimum payable amount is ₹1.")
+    if charge_paise < 100:    # Razorpay minimum: Rs.1
+        raise HTTPException(status_code=400, detail="Minimum payable amount is Rs.1.")
 
     # ── 4b. Fraud detection ───────────────────────────────────────────────────
     # Block students who have racked up too many failed attempts in the recent window.
@@ -438,7 +438,7 @@ async def create_razorpay_order(body: CreateOrderRequest, request: Request):
                            {"rzp_order_id": rzp_order["id"], "amount_paise": charge_paise,
                             "is_partial": is_partial, "ledger_ids": body.ledger_ids}, user)
 
-    logger.info("Razorpay order created: %s (%s) student=%s ₹%.2f%s rid=%s",
+    logger.info("Razorpay order created: %s (%s) student=%s Rs.%.2f%s rid=%s",
                 internal_order_id, rzp_order["id"], body.student_id, charge_rupees,
                 " [PARTIAL]" if is_partial else "",
                 getattr(request.state, "request_id", "-"))
@@ -633,7 +633,7 @@ async def verify_razorpay_payment(body: VerifyRequest, request: Request, backgro
                             "receipt_number": receipt_number,
                             "amount_rupees": order["amount_rupees"]}, user)
 
-    logger.info("Payment verified: order=%s pay=%s student=%s ₹%.2f receipt=%s rid=%s",
+    logger.info("Payment verified: order=%s pay=%s student=%s Rs.%.2f receipt=%s rid=%s",
                 body.razorpay_order_id, body.razorpay_payment_id,
                 order["student_id"], order["amount_rupees"], receipt_number,
                 getattr(request.state, "request_id", "-"))
@@ -920,14 +920,14 @@ async def initiate_refund(body: RefundRequest, request: Request):
     await create_audit_log("razorpay_order", body.internal_order_id, "REFUND_INITIATED",
                            {"refund_id": refund["id"], "refund_amount": refund_rupees}, user)
 
-    logger.info("Refund initiated: order=%s refund=%s ₹%.2f by %s",
+    logger.info("Refund initiated: order=%s refund=%s Rs.%.2f by %s",
                 body.internal_order_id, refund["id"], refund_rupees, user["user_id"])
 
     return {
         "status": "refund_initiated",
         "refund_id": refund["id"],
         "refund_amount": refund_rupees,
-        "message": f"Refund of ₹{refund_rupees:,.2f} initiated successfully.",
+        "message": f"Refund of Rs.{refund_rupees:,.2f} initiated successfully.",
     }
 
 
@@ -1108,7 +1108,7 @@ async def razorpay_checkout_page(internal_order_id: str, request: Request):
   <div class="logo">Shemford Futuristic School</div>
   <div class="sub">Secure Fee Payment</div>
   <div style="font-size:15px;font-weight:600;color:#1a1a1a">{student_name}</div>
-  <div class="amount">₹{order["amount_rupees"]:,.2f}</div>
+  <div class="amount">Rs.{order["amount_rupees"]:,.2f}</div>
   <button class="btn" id="pay-btn" onclick="startPayment()">Pay Now</button>
   <div class="msg" id="msg"></div>
 </div>

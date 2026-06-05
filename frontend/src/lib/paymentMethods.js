@@ -10,8 +10,18 @@ export const PAYMENT_METHODS = [
   { value: 'cheque', label: 'Cheque' },
   { value: 'bank_transfer', label: 'Bank Transfer' },
   { value: 'online', label: 'Online / UPI' },
-  { value: 'split', label: 'Split (Cash + Online)' },
+  { value: 'split', label: 'Split' },
 ];
+
+// Map stored value → display label for payment history rendering.
+const _DEFAULT_LABELS = Object.fromEntries(
+  [...PAYMENT_METHODS, { value: 'pos_terminal', label: 'POS Terminal' }].map(m => [m.value, m.label])
+);
+
+export function fmtPaymentMethod(value) {
+  if (!value) return '—';
+  return _DEFAULT_LABELS[value] || value.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
 
 export const PAYMENT_METHODS_WITH_POS = [
   ...PAYMENT_METHODS,

@@ -32,7 +32,10 @@ logger = logging.getLogger(__name__)
 # (max_requests, window_seconds)
 _ROUTE_LIMITS: dict[str, Tuple[int, int]] = {
     # ── Authentication ────────────────────────────────────────────────────────
-    "POST /api/auth/login":             (10,   60),
+    # Login: per-credential brute-force is handled in the route itself (5 failures
+    # → 15-min lockout). The IP limit here is a DoS guard only — set high enough
+    # that the credential limiter always fires first for a single attacker.
+    "POST /api/auth/login":             (20,  900),
     "POST /api/auth/register":          (5,    60),
     "POST /api/auth/forgot-password":   (3,  3600),
     "POST /api/auth/refresh":           (20,   60),
@@ -116,10 +119,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     "Rate limit exceeded: ip=%s %s %s count=%d/%d retry_after=%ds",
                     ip, method, path, current_count, max_req, retry_after
                 )
+                retry_minutes = max(1, round(retry_after / 60))
                 return JSONResponse(
                     status_code=429,
                     content={
-                        "detail": "Too many requests. Please slow down.",
+                        "detail": f"Too many failed login attempts. Please try again after {retry_minutes} minute{'s' if retry_minutes != 1 else ''}.",
                         "retry_after": retry_after,
                     },
                     headers={

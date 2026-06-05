@@ -149,6 +149,9 @@ async def admin_create_user(user: UserCreate, request: Request):
 _RESET_MAX_ATTEMPTS = 3
 _RESET_WINDOW_SECONDS = 60 * 60  # 1 hour
 
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_LOCKOUT_MINUTES = 15
+
 
 @router.post("/auth/login")
 async def login_user(credentials: UserLogin):
@@ -157,6 +160,24 @@ async def login_user(credentials: UserLogin):
     # stored record. Emails are always stored lowercased by our seed/register
     # flows, but real users and autocorrect frequently add case or spaces.
     identifier = (credentials.email or "").strip()
+    rl_key = f"login:{identifier.lower()}"
+
+    # Brute-force guard: after _LOGIN_MAX_ATTEMPTS failures within the lockout
+    # window, block further attempts for _LOGIN_LOCKOUT_MINUTES minutes.
+    lockout_window_start = datetime.now(timezone.utc) - timedelta(minutes=_LOGIN_LOCKOUT_MINUTES)
+    attempt_doc = await db.reset_attempts.find_one({"email": rl_key}, {"_id": 0})
+    if attempt_doc:
+        last_attempt = attempt_doc.get("last_attempt")
+        if isinstance(last_attempt, str):
+            last_attempt = datetime.fromisoformat(last_attempt)
+        if last_attempt and getattr(last_attempt, "tzinfo", None) is None:
+            last_attempt = last_attempt.replace(tzinfo=timezone.utc)
+        if (last_attempt and last_attempt > lockout_window_start
+                and attempt_doc.get("attempts", 0) >= _LOGIN_MAX_ATTEMPTS):
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many failed login attempts. Please try again after {_LOGIN_LOCKOUT_MINUTES} minutes."
+            )
 
     # Resolve the account by any of: email, student admission number, or
     # employee ID. Students log in with their admission number, employees with
@@ -178,6 +199,13 @@ async def login_user(credentials: UserLogin):
             user = await db.users.find_one({"user_id": emp["user_id"]}, {"_id": 0})
 
     if not user or not verify_password(credentials.password, user.get("password_hash", "")):
+        # Increment failure counter; same response whether user exists or not
+        # (prevents user-enumeration via different error messages).
+        await db.reset_attempts.update_one(
+            {"email": rl_key},
+            {"$inc": {"attempts": 1}, "$set": {"last_attempt": datetime.now(timezone.utc).isoformat()}},
+            upsert=True,
+        )
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     if not user.get("is_active", True):
@@ -208,6 +236,10 @@ async def login_user(credentials: UserLogin):
                 status_code=403,
                 detail="APP_ONLY_LOGIN"
             )
+
+    # Successful login — clear the failure counter so the account is not
+    # left locked after a legitimate user recovers their password.
+    await db.reset_attempts.delete_one({"email": rl_key})
 
     # Update last_login (#28)
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -790,10 +822,6 @@ async def admin_reset_user_password(user_id: str, request: Request):
         {"user_id": user_id},
         {"$set": {"password_hash": hash_password(new_password), "is_active": True}},
     )
-    # Mirror the plaintext onto the linked student/employee record so it shows
-    # in their detail panel (same UX as the Students/Employees password views).
-    await db.students.update_one({"user_id": user_id}, {"$set": {"temp_password": new_password}})
-    await db.employees.update_one({"user_id": user_id}, {"$set": {"temp_password": new_password}})
     # Force re-login everywhere with the new password.
     try:
         await revoke_all_refresh_tokens(user_id)

@@ -210,7 +210,7 @@ async def get_students(
         student = await db.students.find_one({"user_id": user["user_id"]}, {"_id": 0})
         return {"students": [student] if student else [], "total": 1, "page": 1, "pages": 1}
     elif user["role"] == UserRole.PARENT:
-        query["parent_id"] = user["user_id"]
+        query["$or"] = [{"parent_id": user["user_id"]}, {"parent_email": user["email"]}]
     elif user["role"] == UserRole.TEACHER:
         assigned = await get_teacher_assigned_classes(user["user_id"])
         if assigned:
@@ -524,7 +524,7 @@ async def reactivate_student(student_id: str, request: Request):
 
 @router.post("/students/{student_id}/reset-password")
 async def reset_student_password(student_id: str, request: Request):
-    await require_roles(UserRole.ADMIN)(request)
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     body = await request.json()
 
     student = await db.students.find_one({"student_id": student_id}, {"_id": 0})
@@ -579,60 +579,24 @@ async def reset_student_password(student_id: str, request: Request):
             {"$set": {
                 "user_id": student_user.user_id,
                 "email": email,
-                "temp_password": new_password,
             }}
         )
         return {"message": "Student account created and password set", "password": new_password, "email": email}
 
-    # Hash for auth; also persist plaintext on student record so admin can re-view/share.
     await db.users.update_one(
         {"user_id": user_account["user_id"]},
         {"$set": {"password_hash": hash_password(new_password), "is_active": True}}
     )
-    # Persist the new password AND ensure the student is LINKED to this account.
-    # Older records resolved the account only by email and never stored user_id;
-    # without the link, admission-number login can't find the account.
+    # Ensure the student record is linked to this user account.
     await db.students.update_one(
         {"student_id": student_id},
-        {"$set": {"temp_password": new_password, "user_id": user_account["user_id"]}}
+        {"$set": {"user_id": user_account["user_id"]}}
     )
 
     return {
         "message": "Password reset successfully",
         "password": new_password,
         "email": student.get("email")
-    }
-
-
-@router.get("/students/{student_id}/password")
-async def get_student_password_hint(student_id: str, request: Request):
-    """
-    Returns the auto-generated / last-reset password stored on the student record.
-    Admin-only. Empty if never generated or wiped after a self-service change.
-    """
-    await require_roles(UserRole.ADMIN)(request)
-    student = await db.students.find_one({"student_id": student_id}, {"_id": 0})
-    if not student:
-        raise HTTPException(status_code=404, detail="Student not found")
-    return {
-        "password": student.get("temp_password") or None,
-        "email": student.get("email"),
-        "has_account": bool(student.get("user_id") or student.get("email")),
-    }
-
-
-@router.get("/students/{student_id}/parent-password")
-async def get_parent_password_hint(student_id: str, request: Request):
-    await require_roles(UserRole.ADMIN)(request)
-    student = await db.students.find_one({"student_id": student_id}, {"_id": 0})
-    if not student:
-        raise HTTPException(status_code=404, detail="Student not found")
-    parent_email = student.get("parent_email")
-    return {
-        "password": student.get("parent_temp_password") or None,
-        "email": parent_email or None,
-        "has_account": bool(parent_email),
-        "parent_name": student.get("parent_name", "")
     }
 
 

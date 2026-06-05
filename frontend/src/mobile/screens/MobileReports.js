@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+﻿import React, { useState, useEffect, useMemo } from 'react';
 import api from '../../lib/api';
 import { getCached, setCached } from '../../lib/pageCache';
 import { previewInTab, previewReportInTab } from '../../lib/preview';
+import { fmtPaymentMethod } from '../../lib/paymentMethods';
 import { toast } from 'sonner';
 import {
   BarChart3, Download, FileText, Loader2, Clock, Calendar, CreditCard,
@@ -42,7 +43,7 @@ const dateMonthsAgo = (n) => {
   return d.toISOString().slice(0, 10);
 };
 
-const inr = (n) => (n == null || isNaN(n) ? '—' : `₹${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`);
+const inr = (n) => (n == null || isNaN(n) ? '—' : `Rs.${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`);
 const inrXls = (n) => (n == null || isNaN(n) ? '—' : `Rs. ${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`);
 
 const downloadReport = async (endpoint, params, kind = 'pdf') => {
@@ -153,7 +154,7 @@ const FinancialTab = () => {
       const r = await api.get('/reports/financial', { params });
       setReport(r.data);
       if (r.data?.transaction_count === 0) toast.info('No transactions for the selected period');
-    } catch { toast.error('Failed to fetch financial report'); }
+    } catch (e) { if (!e?._handled) toast.error('Failed to fetch financial report'); }
     finally { setLoading(false); }
   };
 
@@ -172,7 +173,7 @@ const FinancialTab = () => {
             ? `${((report.total_collection / (report.total_collection + report.total_pending)) * 100).toFixed(1)}%`
             : '—' },
     ];
-    const pmRows = Object.entries(report.by_payment_method || {}).map(([k, v]) => ({ k, v: inrXls(v) }));
+    const pmRows = Object.entries(report.by_payment_method || {}).map(([k, v]) => ({ k: fmtPaymentMethod(k), v: inrXls(v) }));
     const mRows  = Object.entries(report.by_month || {}).map(([k, v]) => ({ k, v: inrXls(v) }));
     previewReportInTab('Financial Report', [
       { title: 'Summary',          columns: [{ label: 'Metric', get: r => r.k }, { label: 'Value', get: r => r.v }], rows: summaryRows },
@@ -201,14 +202,14 @@ const FinancialTab = () => {
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
         <div>
           <label style={formLabel}>Start Date</label>
-          <input type="date" className="m-input" value={startDate}
+          <input type="date" lang="en-IN" className="m-input" value={startDate}
             onChange={(e) => setStartDate(e.target.value)}
             onClick={(e) => { if (e.currentTarget.showPicker) e.currentTarget.showPicker(); }}
             style={{cursor:'pointer'}} />
         </div>
         <div>
           <label style={formLabel}>End Date</label>
-          <input type="date" className="m-input" value={endDate}
+          <input type="date" lang="en-IN" className="m-input" value={endDate}
             onChange={(e) => setEndDate(e.target.value)}
             onClick={(e) => { if (e.currentTarget.showPicker) e.currentTarget.showPicker(); }}
             style={{cursor:'pointer'}} />
@@ -250,7 +251,7 @@ const FinancialTab = () => {
               <div className="m-list" style={{marginBottom:12}}>
                 {pmEntries.map(([k, v]) => (
                   <div key={k} className="m-list-item">
-                    <span style={{fontSize:13,fontWeight:600,color:'#1A1A1A',textTransform:'capitalize'}}>{k.replace(/_/g, ' ')}</span>
+                    <span style={{fontSize:13,fontWeight:600,color:'#1A1A1A'}}>{fmtPaymentMethod(k)}</span>
                     <span style={{fontSize:13,fontWeight:800,color:'#1A1A1A'}}>{inr(v)}</span>
                   </div>
                 ))}
@@ -298,7 +299,7 @@ const AcademicTab = ({ classes }) => {
       if (selSection) params.section = selSection;
       const r = await api.get('/reports/academic', { params });
       setReport(r.data);
-    } catch { toast.error('Failed to fetch academic report'); }
+    } catch (e) { if (!e?._handled) toast.error('Failed to fetch academic report'); }
     finally { setLoading(false); }
   };
 
@@ -334,7 +335,7 @@ const AcademicTab = ({ classes }) => {
           <select className="m-input" value={selClass}
             onChange={(e) => { setSelClass(e.target.value); setSelSection(''); }}>
             <option value="">Select</option>
-            {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || `Class ${c.name}`}</option>)}
+            {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || (c.name.startsWith('Class ') ? c.name : `Class ${c.name}`)}</option>)}
           </select>
         </div>
         <div>
@@ -425,7 +426,7 @@ const AttendanceTab = ({ classes }) => {
       const r = await api.get('/reports/attendance', { params });
       setReport(r.data);
       if (!r.data?.total_records) toast.info('No attendance records for the selected filter');
-    } catch { toast.error('Failed to fetch attendance report'); }
+    } catch (e) { if (!e?._handled) toast.error('Failed to fetch attendance report'); }
     finally { setLoading(false); }
   };
 
@@ -466,7 +467,7 @@ const AttendanceTab = ({ classes }) => {
         <label style={formLabel}>Class</label>
         <select className="m-input" value={attClass} onChange={(e) => setAttClass(e.target.value)}>
           <option value="">All Classes</option>
-          {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || `Class ${c.name}`}</option>)}
+          {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || (c.name.startsWith('Class ') ? c.name : `Class ${c.name}`)}</option>)}
         </select>
       </div>
 
@@ -481,14 +482,14 @@ const AttendanceTab = ({ classes }) => {
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
         <div>
           <label style={formLabel}>Start Date</label>
-          <input type="date" className="m-input" value={attStart}
+          <input type="date" lang="en-IN" className="m-input" value={attStart}
             onChange={(e) => { setAttStart(e.target.value); setAttDate(''); }}
             onClick={(e) => { if (e.currentTarget.showPicker) e.currentTarget.showPicker(); }}
             style={{cursor:'pointer'}} />
         </div>
         <div>
           <label style={formLabel}>End Date</label>
-          <input type="date" className="m-input" value={attEnd}
+          <input type="date" lang="en-IN" className="m-input" value={attEnd}
             onChange={(e) => { setAttEnd(e.target.value); setAttDate(''); }}
             onClick={(e) => { if (e.currentTarget.showPicker) e.currentTarget.showPicker(); }}
             style={{cursor:'pointer'}} />

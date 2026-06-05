@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../lib/api';
 import { getCached, setCached } from '../lib/pageCache';
 import { copyText } from '../lib/clipboard';
@@ -84,8 +84,6 @@ const EmployeesPage = () => {
   const [pwResult, setPwResult] = useState(null);
   const [pwLoading, setPwLoading] = useState(false);
   const [pwVisible, setPwVisible] = useState(false);
-  const [currentPw, setCurrentPw] = useState(null);
-  const [currentPwVisible, setCurrentPwVisible] = useState(false);
   const [formData, setFormData] = useState({
     employee_id: '',
     first_name: '',
@@ -152,7 +150,7 @@ const EmployeesPage = () => {
       setTotalEmployees(total);
       setTotalPages(pages);
     } catch (error) {
-      if (!cached && !append) toast.error('Failed to fetch employees');
+      if (!cached && !append && !error?._handled) toast.error('Failed to fetch employees');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -235,15 +233,7 @@ const EmployeesPage = () => {
 
   const handleViewEmployee = (employee) => {
     setSelectedEmployee(employee);
-    setCurrentPw(null);
-    setCurrentPwVisible(false);
     setShowViewDialog(true);
-    (async () => {
-      try {
-        const r = await api.get(`/employees/${employee.employee_id}/password`);
-        setCurrentPw(r.data?.password || null);
-      } catch { /* admin-only endpoint; non-admin viewers just won't see the row */ }
-    })();
   };
 
   const handleEditEmployee = (employee) => {
@@ -261,21 +251,9 @@ const EmployeesPage = () => {
       department: employee.department || '',
       salary: employee.salary || '',
     });
-    // Reset password-management state so the dialog starts clean each open
     setPwInput('');
     setPwResult(null);
     setPwVisible(false);
-    setCurrentPw(null);
-    setCurrentPwVisible(false);
-
-    // Load the existing temp password (if any) so the admin can re-share it
-    (async () => {
-      try {
-        const r = await api.get(`/employees/${employee.employee_id}/password`);
-        setCurrentPw(r.data?.password || null);
-      } catch { /* non-fatal — just hides the "Current password" row */ }
-    })();
-
     setShowEditDialog(true);
   };
 
@@ -285,8 +263,6 @@ const EmployeesPage = () => {
       const body = generate ? {} : { password: pwInput };
       const res = await api.post(`/employees/${selectedEmployee.employee_id}/reset-password`, body);
       setPwResult(res.data);
-      setCurrentPw(res.data.password);
-      setCurrentPwVisible(true);
       setPwInput('');
       setPwVisible(true);
       toast.success('Password updated successfully');
@@ -505,6 +481,7 @@ const EmployeesPage = () => {
                     <Input
                       id="dob"
                       type="date"
+                      lang="en-IN"
                       max={todayISO()}
                       value={formData.date_of_birth}
                       onChange={(e) => setFormData({...formData, date_of_birth: clampISODate(e.target.value, { max: todayISO() })})}
@@ -808,6 +785,7 @@ const EmployeesPage = () => {
                 <Input
                   id="edit_dob"
                   type="date"
+                  lang="en-IN"
                   className="w-44"
                   max={todayISO()}
                   value={editData.date_of_birth}
@@ -882,23 +860,6 @@ const EmployeesPage = () => {
                 <h4 className="font-medium mb-3 text-foreground flex items-center gap-2">
                   <KeyRound className="h-4 w-4" />Password Management
                 </h4>
-
-                {currentPw && !pwResult && (
-                  <div className="mb-3 p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-muted-foreground">Current password:</span>
-                      <code className="font-mono font-bold text-foreground bg-white px-2 py-0.5 rounded border">
-                        {currentPwVisible ? currentPw : '••••••••••'}
-                      </code>
-                      <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={() => setCurrentPwVisible(v => !v)}>
-                        {currentPwVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                      </Button>
-                      <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={async () => { const ok = await copyText(currentPw); toast[ok ? 'success' : 'error'](ok ? 'Copied' : 'Copy failed'); }}>
-                        <Copy className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </div>
-                )}
 
                 {pwResult && (
                   <div className="mb-3 p-3 rounded-lg bg-green-50 border border-green-200 text-sm">
@@ -1027,24 +988,6 @@ const EmployeesPage = () => {
                   <p className="font-medium">{selectedEmployee.email}</p>
                 </div>
                 <div>
-                  <Label className="text-muted-foreground">Password</Label>
-                  <div className="flex items-center gap-1 mt-0.5">
-                    <p className="font-medium font-mono">
-                      {currentPw == null ? '—' : currentPwVisible ? currentPw : '••••••••••'}
-                    </p>
-                    {currentPw && (
-                      <>
-                        <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => setCurrentPwVisible(v => !v)}>
-                          {currentPwVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-5 w-5" onClick={async () => { const ok = await copyText(currentPw); toast[ok ? 'success' : 'error'](ok ? 'Copied' : 'Copy failed'); }}>
-                          <Copy className="h-3 w-3" />
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <div>
                   <Label className="text-muted-foreground">Phone</Label>
                   <p className="font-medium">{selectedEmployee.phone || '-'}</p>
                 </div>
@@ -1054,7 +997,7 @@ const EmployeesPage = () => {
                 </div>
                 <div>
                   <Label className="text-muted-foreground">Salary</Label>
-                  <p className="font-medium">{selectedEmployee.salary ? `₹${selectedEmployee.salary.toLocaleString()}` : '-'}</p>
+                  <p className="font-medium">{selectedEmployee.salary ? `Rs.${selectedEmployee.salary.toLocaleString()}` : '-'}</p>
                 </div>
               </div>
               <div className="p-4 bg-muted rounded-lg">

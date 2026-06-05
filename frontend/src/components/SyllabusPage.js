@@ -137,7 +137,7 @@ const SyllabusPage = () => {
       setClasses(classesRes.data);
       setCached(cacheKey, { syllabus, classes: classesRes.data });
     } catch (error) {
-      if (!cached) toast.error('Failed to fetch syllabus data');
+      if (!cached && !error?._handled) toast.error('Failed to fetch syllabus data');
     } finally {
       setLoading(false);
     }

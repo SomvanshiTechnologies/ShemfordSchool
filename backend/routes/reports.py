@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request
+﻿from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from typing import Optional
 from datetime import datetime, timezone
@@ -229,8 +229,8 @@ def _financial_pdf(payments, total_collection, total_pending):
     # Summary
     summary_data = [
         ['Metric', 'Value'],
-        ['Total Collection', f'Rs. {total_collection:,.2f}'],
-        ['Total Pending', f'Rs. {total_pending:,.2f}'],
+        ['Total Collection', f'Rs.{total_collection:,.2f}'],
+        ['Total Pending', f'Rs.{total_pending:,.2f}'],
         ['Transactions', str(len(payments))],
     ]
     t = Table(summary_data, colWidths=[200, 200])
@@ -250,15 +250,21 @@ def _financial_pdf(payments, total_collection, total_pending):
         elements.append(Spacer(1, 8))
         table_data = [['Receipt', 'Student ID', 'Amount', 'Method', 'Month', 'Date']]
         for p in payments[:100]:
+            pd_str = p.get('payment_date', '') or ''
+            month_str = pd_str[:7] if len(pd_str) >= 7 else '-'
+            date_str = (f"{pd_str[8:10]}/{pd_str[5:7]}/{pd_str[0:4]}"
+                        if len(pd_str) >= 10 else pd_str or '-')
+            raw_method = p.get('payment_method', '') or ''
+            method_str = raw_method.replace('_', ' ').title() if raw_method else '-'
             table_data.append([
                 p.get('receipt_number', '-')[:15],
                 p.get('student_id', '-')[:15],
-                f'Rs. {p["amount"]:,.0f}',
-                p.get('payment_method', '-'),
-                p.get('month', '-'),
-                p.get('payment_date', '-'),
+                f'Rs.{p["amount"]:,.0f}',
+                method_str,
+                month_str,
+                date_str,
             ])
-        t2 = Table(table_data, colWidths=[85, 90, 70, 60, 60, 70])
+        t2 = Table(table_data, colWidths=[80, 85, 65, 80, 50, 65])
         t2.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#333333')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -299,8 +305,8 @@ def _financial_excel(payments, total_collection, total_pending):
 
     # Summary
     ws.append(["Summary"])
-    ws.append(["Total Collection", f"Rs. {total_collection:,.2f}"])
-    ws.append(["Total Pending", f"Rs. {total_pending:,.2f}"])
+    ws.append(["Total Collection", f"Rs.{total_collection:,.2f}"])
+    ws.append(["Total Pending", f"Rs.{total_pending:,.2f}"])
     ws.append(["Transactions", len(payments)])
     ws.append([])
 
@@ -315,13 +321,19 @@ def _financial_excel(payments, total_collection, total_pending):
 
     # Data
     for p in payments:
+        pd_str = p.get('payment_date', '') or ''
+        month_str = pd_str[:7] if len(pd_str) >= 7 else ''
+        date_str = (f"{pd_str[8:10]}/{pd_str[5:7]}/{pd_str[0:4]}"
+                    if len(pd_str) >= 10 else pd_str)
+        raw_method = p.get('payment_method', '') or ''
+        method_str = raw_method.replace('_', ' ').title() if raw_method else ''
         ws.append([
             p.get('receipt_number', ''),
             p.get('student_id', ''),
             p['amount'],
-            p.get('payment_method', ''),
-            p.get('month', ''),
-            p.get('payment_date', ''),
+            method_str,
+            month_str,
+            date_str,
         ])
 
     # Auto width

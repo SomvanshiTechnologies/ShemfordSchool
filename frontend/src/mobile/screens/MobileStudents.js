@@ -5,7 +5,7 @@ import { getCached, setCached, invalidatePrefix } from '../../lib/pageCache';
 import { copyText } from '../../lib/clipboard';
 import { toast } from 'sonner';
 import {
-  Users, Search, X, Copy, Eye, EyeOff, GraduationCap,
+  Users, Search, X, Copy, GraduationCap, ChevronRight,
   Plus, Upload, Edit, UserX, UserCheck, Loader2, AlertCircle, FileUp, CheckCircle,
   KeyRound, RefreshCw,
 } from 'lucide-react';
@@ -48,10 +48,6 @@ const MobileStudents = () => {
   // Detail-sheet state
   const [selected, setSelected] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [currentPw, setCurrentPw] = useState(null);
-  const [currentPwVisible, setCurrentPwVisible] = useState(false);
-  const [parentPw, setParentPw] = useState(null);
-  const [parentPwVisible, setParentPwVisible] = useState(false);
 
   // Admin flows
   const [editingStudent, setEditingStudent] = useState(null);
@@ -125,26 +121,15 @@ const MobileStudents = () => {
   const openStudent = async (student) => {
     setSelected(student);
     setDetailLoading(true);
-    setCurrentPw(null); setCurrentPwVisible(false);
-    setParentPw(null); setParentPwVisible(false);
     try {
-      const calls = [api.get(`/students/${student.student_id}`)];
-      if (isAdmin) {
-        calls.push(api.get(`/students/${student.student_id}/password`));
-        calls.push(api.get(`/students/${student.student_id}/parent-password`));
-      }
-      const [r0, r1, r2] = await Promise.allSettled(calls);
+      const [r0] = await Promise.allSettled([api.get(`/students/${student.student_id}`)]);
       if (r0.status === 'fulfilled') setSelected(r0.value.data);
-      if (r1?.status === 'fulfilled') setCurrentPw(r1.value.data.password);
-      if (r2?.status === 'fulfilled') setParentPw(r2.value.data.password);
     } catch {}
     finally { setDetailLoading(false); }
   };
 
   const closeSheet = () => {
     setSelected(null);
-    setCurrentPw(null); setCurrentPwVisible(false);
-    setParentPw(null); setParentPwVisible(false);
   };
 
   const copy = async (val, label) => {
@@ -169,8 +154,6 @@ const MobileStudents = () => {
     try {
       const body = generate ? {} : { password: customPassword };
       const res = await api.post(`/students/${selected.student_id}/reset-password`, body);
-      setCurrentPw(res.data.password);
-      setCurrentPwVisible(true);
       toast.success('Password updated');
       return res.data.password;
     } catch (e) {
@@ -252,21 +235,6 @@ const MobileStudents = () => {
         <input className="m-input" style={{paddingLeft:38}} placeholder="Search students..." value={search} onChange={e => handleSearch(e.target.value)} />
       </div>
 
-      {isAdmin && students.length > 0 && (
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 12px',background:'#FFF',border:'1px solid rgba(0,0,0,0.06)',borderRadius:10,marginBottom:14}}>
-          <span style={{fontSize:12,fontWeight:600,color:'#555'}}>Portal Login (all students)</span>
-          <div style={{display:'flex',gap:6}}>
-            <button
-              onClick={() => handleToggleAllWebLogin(true)}
-              style={{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:7,border:'1px solid #bbf7d0',background:'#dcfce7',color:'#15803d',cursor:'pointer'}}
-            >Enable All</button>
-            <button
-              onClick={() => handleToggleAllWebLogin(false)}
-              style={{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:7,border:'1px solid #fecaca',background:'#fee2e2',color:'#dc2626',cursor:'pointer'}}
-            >App Only</button>
-          </div>
-        </div>
-      )}
 
       <div className="m-list">
         {students.map(s => (
@@ -281,9 +249,36 @@ const MobileStudents = () => {
             data-testid={`m-student-${s.student_id}`}
           >
             <div style={{display:'flex',gap:10,alignItems:'center',minWidth:0,flex:1}}>
-              <div className="m-avatar" style={{background:'#F5F5F5',color:'#1A1A1A',width:36,height:36,fontSize:14,borderRadius:10}}>
-                {s.first_name?.charAt(0)}
-              </div>
+              {isAdmin && s.is_active !== false ? (
+                <label
+                  onClick={(e) => e.stopPropagation()}
+                  style={{display:'flex',alignItems:'center',cursor:'pointer',flexShrink:0}}
+                  title={s.web_login_enabled !== false ? 'Portal login enabled' : 'App only'}
+                >
+                  <input
+                    type="checkbox"
+                    style={{position:'absolute',opacity:0,width:0,height:0,appearance:'none',WebkitAppearance:'none',pointerEvents:'none'}}
+                    checked={s.web_login_enabled !== false}
+                    onChange={(e) => { e.stopPropagation(); handleToggleWebLogin(s); }}
+                  />
+                  <span style={{
+                    display:'inline-flex',alignItems:'center',justifyContent:'center',
+                    width:18,height:18,borderRadius:4,flexShrink:0,
+                    background: s.web_login_enabled !== false ? '#E88A1A' : '#FFF',
+                    border: s.web_login_enabled !== false ? 'none' : '2px solid #D1D5DB',
+                  }}>
+                    {s.web_login_enabled !== false && (
+                      <svg width="11" height="8" viewBox="0 0 11 8" fill="none">
+                        <path d="M1 4L4 7L10 1" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    )}
+                  </span>
+                </label>
+              ) : (
+                <div className="m-avatar" style={{background:'#F5F5F5',color:'#1A1A1A',width:36,height:36,fontSize:14,borderRadius:10}}>
+                  {s.first_name?.charAt(0)}
+                </div>
+              )}
               <div style={{minWidth:0,flex:1}}>
                 <p style={{fontWeight:600,fontSize:13,color:'#1A1A1A',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.first_name} {s.last_name}</p>
                 <p style={{fontSize:11,color:'#888',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.class_name}-{s.section} | {s.admission_number}</p>
@@ -300,6 +295,7 @@ const MobileStudents = () => {
             >
               {s.is_active !== false ? 'Active' : 'Inactive'}
             </span>
+            <ChevronRight size={14} style={{flexShrink:0,color:'#CCC'}} />
           </div>
         ))}
         {!loading && students.length === 0 && (
@@ -322,12 +318,7 @@ const MobileStudents = () => {
           student={selected}
           loading={detailLoading}
           isAdmin={isAdmin}
-          currentPw={currentPw}
-          currentPwVisible={currentPwVisible}
-          setCurrentPwVisible={setCurrentPwVisible}
-          parentPw={parentPw}
-          parentPwVisible={parentPwVisible}
-          setParentPwVisible={setParentPwVisible}
+          canResetPassword={canManage}
           onCopy={copy}
           onClose={closeSheet}
           onEdit={() => setEditingStudent(selected)}
@@ -399,9 +390,7 @@ const sheetOverlay = { position:'fixed', inset:0, background:'rgba(0,0,0,0.45)',
 const sheetPanel = { background:'#FFF', width:'100%', maxWidth:520, borderTopLeftRadius:20, borderTopRightRadius:20, maxHeight:'94dvh', display:'flex', flexDirection:'column', paddingBottom:'env(safe-area-inset-bottom, 0)' };
 
 const StudentDetailSheet = ({
-  student, loading, isAdmin,
-  currentPw, currentPwVisible, setCurrentPwVisible,
-  parentPw, parentPwVisible, setParentPwVisible,
+  student, loading, isAdmin, canResetPassword,
   onCopy, onClose, onEdit, onDeactivate, onReactivate, onResetPassword, onToggleWebLogin,
 }) => {
   const [pwInput, setPwInput] = useState('');
@@ -509,22 +498,10 @@ const StudentDetailSheet = ({
           <p className="m-section">Parent Login</p>
           <div style={card1col}>
             <Field label="Parent Email" value={student.parent_email} />
-            {isAdmin && (
-              <CredentialRow label="Parent Password" value={parentPw} visible={parentPwVisible}
-                onToggle={() => setParentPwVisible(v => !v)}
-                onCopy={() => onCopy(parentPw, 'Parent password')} />
-            )}
           </div>
 
-          {isAdmin && (
+          {canResetPassword && (
             <>
-              <p className="m-section">Student Login</p>
-              <div style={card1col}>
-                <CredentialRow label="Student Password" value={currentPw} visible={currentPwVisible}
-                  onToggle={() => setCurrentPwVisible(v => !v)}
-                  onCopy={() => onCopy(currentPw, 'Student password')} />
-              </div>
-
               <p className="m-section" style={{display:'flex',alignItems:'center',gap:6}}><KeyRound size={14} /> Password Management</p>
               <div style={card1col}>
                 {lastReset && (
@@ -556,25 +533,6 @@ const StudentDetailSheet = ({
                 </div>
               </div>
             </>
-          )}
-
-          {isAdmin && isActive && (
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 14px',background:'#FFF',border:'1px solid rgba(0,0,0,0.04)',borderRadius:12,marginTop:8}}>
-              <div>
-                <p style={{fontSize:13,fontWeight:700,color:'#1A1A1A'}}>Portal Login</p>
-                <p style={{fontSize:11,color:'#888',marginTop:2}}>
-                  {student.web_login_enabled !== false ? 'Can login via website & app' : 'App login only'}
-                </p>
-              </div>
-              <label style={{display:'flex',alignItems:'center',cursor:'pointer'}}>
-                <input
-                  type="checkbox"
-                  style={{width:20,height:20,accentColor:'#E88A1A',cursor:'pointer'}}
-                  checked={student.web_login_enabled !== false}
-                  onChange={onToggleWebLogin}
-                />
-              </label>
-            </div>
           )}
 
           <div style={{height:8}} />
@@ -617,26 +575,6 @@ const actionBtn = (variant) => ({
   color: variant === 'dark' ? '#FFF' : '#1A1A1A',
 });
 
-const CredentialRow = ({ label, value, visible, onToggle, onCopy }) => (
-  <div>
-    <p style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:'#AAA',marginBottom:4}}>{label}</p>
-    <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-      <span style={{fontSize:13,fontWeight:600,color:'#1A1A1A',fontFamily:'ui-monospace, SFMono-Regular, Menlo, monospace',wordBreak:'break-all'}}>
-        {value == null ? '—' : visible ? value : '••••••••••'}
-      </span>
-      {value && (
-        <>
-          <button onClick={onToggle} aria-label="Toggle visibility" style={{background:'none',border:'none',padding:4,cursor:'pointer',color:'#888',display:'inline-flex',alignItems:'center'}}>
-            {visible ? <EyeOff size={14} /> : <Eye size={14} />}
-          </button>
-          <button onClick={onCopy} aria-label="Copy" style={{background:'none',border:'none',padding:4,cursor:'pointer',color:'#888',display:'inline-flex',alignItems:'center'}}>
-            <Copy size={14} />
-          </button>
-        </>
-      )}
-    </div>
-  </div>
-);
 
 const buildEditForm = (s) => ({
   phone: s.phone || '',
@@ -739,7 +677,7 @@ const StudentEditSheet = ({ student, classes, onClose, onSaved }) => {
               <label style={formLabel}>Class</label>
               <select className="m-input" value={form.class_name} onChange={(e) => { update('class_name', e.target.value); update('section', ''); }}>
                 <option value="">Select</option>
-                {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || `Class ${c.name}`}</option>)}
+                {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || (c.name.startsWith('Class ') ? c.name : `Class ${c.name}`)}</option>)}
               </select>
             </div>
             <div>
@@ -824,15 +762,23 @@ const DocumentList = ({ studentId }) => {
   const upload = async (doc) => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.pdf,.jpg,.jpeg,.png';
+    input.accept = doc.type === 'passport_photo' ? '.jpg,.jpeg,.png' : '.pdf';
     input.onchange = async (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
+      if (file.size > 5 * 1024 * 1024) { toast.error('File too large. Maximum size is 5 MB.'); return; }
+      const _isPhoto = doc.type === 'passport_photo';
+      if (_isPhoto && !['image/jpeg','image/png'].includes(file.type) && !/(\.jpe?g|\.png)$/i.test(file.name)) {
+        toast.error('Passport photo must be a JPG or PNG image.'); return;
+      }
+      if (!_isPhoto && file.type !== 'application/pdf' && !/(\.pdf)$/i.test(file.name)) {
+        toast.error('Documents must be uploaded as PDF.'); return;
+      }
       setUploading(p => ({ ...p, [doc.type]: true }));
       try {
         const fd = new FormData();
         fd.append('file', file);
-        const upRes = await api.post('/upload', fd);
+        const upRes = await api.post(`/upload?doc_type=${doc.type}`, fd);
         const { file_url, file_name } = upRes.data;
         const docFd = new FormData();
         docFd.append('document_type', doc.type);

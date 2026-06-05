@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { ArrowUpCircle, History, Search, CheckCircle2, AlertCircle, Loader2, Eye, CreditCard, Check, X, Download } from 'lucide-react';
 import { Button } from './ui/button';
@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Badge } from './ui/badge';
 import api from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
-import { PAYMENT_METHODS_WITH_POS, fetchPaymentMethods } from '../lib/paymentMethods';
+import { PAYMENT_METHODS_WITH_POS, fetchPaymentMethods, fmtPaymentMethod } from '../lib/paymentMethods';
 import { useSession } from '../contexts/SessionContext';
 
 const STREAMS = ['Science', 'Humanities'];
@@ -31,6 +31,12 @@ const fmtClassSec = (cls, section, stream) => {
 function fmt(n) {
   return Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 }
+
+const isoToDisplay = (s) => {
+  if (!s) return '—';
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(s);
+};
 
 export default function UpgradationPage() {
   const { isAdmin } = useAuth();
@@ -99,7 +105,7 @@ export default function UpgradationPage() {
   const [paySplitOnline, setPaySplitOnline] = useState('');
   const [paying, setPaying] = useState(false);
 
-  // "Collect ₹fee & Upgrade" — pre-collect the upgradation fee before upgrading
+  // "Collect Rs.fee & Upgrade" — pre-collect the upgradation fee before upgrading
   const [upgFeeRecord, setUpgFeeRecord] = useState(null); // {ledger_id, upgradation_fee, student_id?, auto_upgrade?}
   const [showUpgFeeDialog, setShowUpgFeeDialog] = useState(false);
   const [upgFeeDate, setUpgFeeDate] = useState('');
@@ -837,10 +843,10 @@ export default function UpgradationPage() {
                               </span>
                             </td>
                             <td className="px-3 py-2 text-right font-medium text-slate-800">
-                              ₹{fmt(e.net_amount)}
+                              Rs.{fmt(e.net_amount)}
                               {isPartial && (
                                 <div className="text-[10px] font-normal text-slate-400">
-                                  Paid ₹{fmt(e.amount_paid)} · Bal ₹{fmt(e.remaining_balance)}
+                                  Paid Rs.{fmt(e.amount_paid)} · Bal Rs.{fmt(e.remaining_balance)}
                                 </div>
                               )}
                             </td>
@@ -863,7 +869,7 @@ export default function UpgradationPage() {
                       <tr>
                         <td colSpan={3} className="px-3 py-2 text-sm font-semibold text-red-700">Total Pending</td>
                         <td className="px-3 py-2 text-right font-bold text-red-700">
-                          ₹{fmt(pendingEntries.reduce((s, e) => s + (Number(e.remaining_balance) > 0 ? Number(e.remaining_balance) : Number(e.net_amount)), 0))}
+                          Rs.{fmt(pendingEntries.reduce((s, e) => s + (Number(e.remaining_balance) > 0 ? Number(e.remaining_balance) : Number(e.net_amount)), 0))}
                         </td>
                         <td />
                       </tr>
@@ -889,7 +895,7 @@ export default function UpgradationPage() {
                     disabled={upgrading}
                   >
                     <CreditCard className="h-3 w-3 mr-1" />
-                    Collect ₹1500 &amp; Upgrade
+                    Collect Upgradation Fee &amp; Upgrade
                   </Button>
                 )}
               </div>
@@ -901,7 +907,7 @@ export default function UpgradationPage() {
               <h2 className="font-semibold text-base">Step 2 — Target Class & Academic Year</h2>
               {feeBlockMsg && (
                 <p className="text-xs text-amber-600">
-                  Pick the target class below, then click <strong>Collect ₹1500 &amp; Upgrade</strong> to collect the fee and upgrade — or <strong>Send for Approval</strong> to queue for manual approval.
+                  Pick the target class below, then click <strong>Collect Upgradation Fee &amp; Upgrade</strong> to collect the fee and upgrade — or <strong>Send for Approval</strong> to queue for manual approval.
                 </p>
               )}
               <div className="grid grid-cols-2 gap-4">
@@ -1066,7 +1072,7 @@ export default function UpgradationPage() {
                         {(r.status || 'pending_approval') === 'pending_approval' ? (
                           r.student_dues_total > 0 ? (
                             <Badge variant="destructive" title="Student has pending dues — will carry to My Fees if approved">
-                              Dues ₹{fmt(r.student_dues_total)}
+                              Dues Rs.{fmt(r.student_dues_total)}
                             </Badge>
                           ) : (
                             <Badge className="bg-green-100 text-green-700">No dues</Badge>
@@ -1081,7 +1087,7 @@ export default function UpgradationPage() {
                           <span className="text-muted-foreground">—</span>
                         )}
                       </td>
-                      <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">{r.created_at?.slice(0, 10) || '—'}</td>
+                      <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">{isoToDisplay(r.created_at)}</td>
                       <td className="px-4 py-2.5 text-center">
                         {(() => {
                           // Only show "Approved" when the record explicitly has status="approved".
@@ -1115,7 +1121,7 @@ export default function UpgradationPage() {
                                 className="text-green-600 hover:text-green-800 hover:bg-green-50 disabled:opacity-40"
                                 onClick={() => approveUpgrade(r.upgradation_id)}
                                 disabled={approvingId === r.upgradation_id || feeUnpaid}
-                                title={feeUnpaid ? 'Collect ₹' + fmt(r.upgradation_fee) + ' fee first' : 'Approve upgrade'}
+                                title={feeUnpaid ? 'Collect Rs.' + fmt(r.upgradation_fee) + ' fee first' : 'Approve upgrade'}
                               >
                                 {approvingId === r.upgradation_id
                                   ? <Loader2 className="h-4 w-4 animate-spin" />
@@ -1201,13 +1207,14 @@ export default function UpgradationPage() {
               <button onClick={() => setShowUpgFeeDialog(false)} className="text-slate-400 hover:text-slate-700"><X className="h-5 w-5" /></button>
             </div>
             <p className="text-sm text-muted-foreground">
-              Upgradation fee: <strong>₹{fmt(upgFeeRecord.upgradation_fee)}</strong>
+              Upgradation fee: <strong>Rs.{fmt(upgFeeRecord.upgradation_fee)}</strong>
             </p>
             <div className="space-y-3">
               <div className="space-y-1">
                 <Label className="text-xs font-bold uppercase tracking-wider">Payment Date</Label>
                 <Input
                   type="date"
+                  lang="en-IN"
                   className="h-9 text-sm"
                   value={upgFeeDate}
                   onChange={e => setUpgFeeDate(e.target.value)}
@@ -1221,7 +1228,7 @@ export default function UpgradationPage() {
                   <Input
                     type="number" min="0" step="0.01" max={upgFeeRecord.upgradation_fee}
                     className="h-9 text-sm"
-                    placeholder={`Full: ₹${fmt(upgFeeRecord.upgradation_fee)}`}
+                    placeholder={`Full: Rs.${fmt(upgFeeRecord.upgradation_fee)}`}
                     value={upgFeePartial}
                     onChange={e => setUpgFeePartial(e.target.value)}
                   />
@@ -1252,7 +1259,7 @@ export default function UpgradationPage() {
                   </div>
                   <div className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200">
                     <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Amount to collect</span>
-                    <span className="text-base font-bold text-slate-900">₹{fmt((parseFloat(upgFeeSplitCash) || 0) + (parseFloat(upgFeeSplitOnline) || 0))}</span>
+                    <span className="text-base font-bold text-slate-900">Rs.{fmt((parseFloat(upgFeeSplitCash) || 0) + (parseFloat(upgFeeSplitOnline) || 0))}</span>
                   </div>
                 </>
               )}
@@ -1284,14 +1291,14 @@ export default function UpgradationPage() {
           <div className="bg-white rounded-2xl p-4 sm:p-6 w-full max-w-sm space-y-4 shadow-xl max-h-[85vh] overflow-y-auto">
             <h3 className="text-lg font-semibold">Collect Upgradation Fee</h3>
             <p className="text-sm text-muted-foreground">
-              Amount: <strong>₹{fmt(result?.upgradation_fee)}</strong>
+              Amount: <strong>Rs.{fmt(result?.upgradation_fee)}</strong>
             </p>
             <div className="space-y-3">
               <div className="space-y-1">
                 <Label>Amount to collect <span className="text-slate-400 font-normal">(leave blank to pay in full)</span></Label>
                 <Input
                   type="number" min="0" step="0.01" max={result?.upgradation_fee}
-                  placeholder={`Full: ₹${fmt(result?.upgradation_fee)}`}
+                  placeholder={`Full: Rs.${fmt(result?.upgradation_fee)}`}
                   value={payAmount}
                   onChange={e => setPayAmount(e.target.value)}
                 />
@@ -1397,16 +1404,16 @@ export default function UpgradationPage() {
                         {(e.description || e.fee_component || '').replace(' (seeded due)', '')}
                         {isMandatory && <span className="ml-1.5 text-[10px] font-semibold text-orange-600 uppercase tracking-wide">Required</span>}
                         {paid > 0 && (
-                          <span className="block text-[10px] text-amber-600">Paid ₹{fmt(paid)} of ₹{fmt(e.net_amount)}</span>
+                          <span className="block text-[10px] text-amber-600">Paid Rs.{fmt(paid)} of Rs.{fmt(e.net_amount)}</span>
                         )}
                       </span>
-                      <span className="font-medium">₹{fmt(remaining)}</span>
+                      <span className="font-medium">Rs.{fmt(remaining)}</span>
                     </label>
                     );
                   })}
                 </div>
                 <p className="text-sm font-medium text-right">
-                  Total: ₹{fmt(pendingEntries.filter(e => collectIds.includes(e.ledger_id)).reduce((s, e) => {
+                  Total: Rs.{fmt(pendingEntries.filter(e => collectIds.includes(e.ledger_id)).reduce((s, e) => {
                     const paid = Number(e.amount_paid || 0);
                     const remaining = e.remaining_balance != null && e.remaining_balance >= 0
                       ? Number(e.remaining_balance)
@@ -1431,12 +1438,12 @@ export default function UpgradationPage() {
                       <Label>Amount to collect <span className="text-slate-400 font-normal">(blank = full)</span></Label>
                       <Input
                         type="number" min="0" step="0.01" max={selectedRemaining}
-                        placeholder={`Full: ₹${fmt(selectedRemaining)}`}
+                        placeholder={`Full: Rs.${fmt(selectedRemaining)}`}
                         value={collectPartial}
                         onChange={e => setCollectPartial(e.target.value)}
                       />
                       <p className="text-[10px] text-slate-400">
-                        Leave blank to collect the full ₹{fmt(selectedRemaining)}. Enter a smaller amount to record a partial payment{collectIds.length > 1 ? ' (applied oldest fee first)' : ''}.
+                        Leave blank to collect the full Rs.{fmt(selectedRemaining)}. Enter a smaller amount to record a partial payment{collectIds.length > 1 ? ' (applied oldest fee first)' : ''}.
                       </p>
                     </div>
                   );
@@ -1467,7 +1474,7 @@ export default function UpgradationPage() {
                     </div>
                     <div className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200">
                       <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Amount to collect</span>
-                      <span className="text-base font-bold text-slate-900">₹{fmt((parseFloat(collectSplitCash) || 0) + (parseFloat(collectSplitOnline) || 0))}</span>
+                      <span className="text-base font-bold text-slate-900">Rs.{fmt((parseFloat(collectSplitCash) || 0) + (parseFloat(collectSplitOnline) || 0))}</span>
                     </div>
                   </>
                 )}
@@ -1526,7 +1533,7 @@ export default function UpgradationPage() {
               <div className="flex justify-between gap-4">
                 <dt className="text-muted-foreground">Upgradation Fee</dt>
                 <dd className="font-medium text-right">
-                  {viewRow.upgradation_fee > 0 ? `₹${fmt(viewRow.upgradation_fee)}` : '—'}
+                  {viewRow.upgradation_fee > 0 ? `Rs.${fmt(viewRow.upgradation_fee)}` : '—'}
                 </dd>
               </div>
               <div className="flex justify-between gap-4 items-center">
@@ -1547,7 +1554,7 @@ export default function UpgradationPage() {
               )}
               <div className="flex justify-between gap-4">
                 <dt className="text-muted-foreground">Performed on</dt>
-                <dd className="font-medium text-right">{viewRow.created_at?.slice(0, 10) || '—'}</dd>
+                <dd className="font-medium text-right">{isoToDisplay(viewRow.created_at)}</dd>
               </div>
             </dl>
 
@@ -1566,10 +1573,10 @@ export default function UpgradationPage() {
                       <li key={p.payment_id} className="flex items-center justify-between gap-2 text-xs px-2 py-1.5 rounded-lg bg-slate-50 border border-slate-100">
                         <div className="min-w-0">
                           <p className="font-medium text-slate-900">
-                            ₹{fmt(p.amount)} <span className="font-normal text-muted-foreground">· {(p.payment_method || 'cash').replace('_', ' ')}</span>
+                            Rs.{fmt(p.amount)} <span className="font-normal text-muted-foreground">· {fmtPaymentMethod(p.payment_method)}</span>
                           </p>
                           <p className="text-[10px] text-muted-foreground truncate">
-                            {p.payment_date || p.created_at?.slice(0, 10)}
+                            {isoToDisplay(p.payment_date || p.created_at)}
                             {p.receipt_number && <> · {p.receipt_number}</>}
                           </p>
                         </div>

@@ -15,6 +15,7 @@ export default function SessionDatePicker({ value, onChange, className = '', dis
   return (
     <input
       type="date"
+      lang="en-IN"
       disabled={disabled}
       data-testid={testid}
       min={sessionBounds.start || undefined}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../lib/api';
 import { getCached, setCached } from '../lib/pageCache';
 import { copyText } from '../lib/clipboard';
@@ -122,10 +122,6 @@ const StudentsPage = () => {
   const [pwResult, setPwResult] = useState(null);
   const [pwLoading, setPwLoading] = useState(false);
   const [pwVisible, setPwVisible] = useState(false);
-  const [currentPw, setCurrentPw] = useState(null);
-  const [currentPwVisible, setCurrentPwVisible] = useState(false);
-  const [parentPw, setParentPw] = useState(null);
-  const [parentPwVisible, setParentPwVisible] = useState(false);
   
   // Onboarding wizard state
   const [onbStep, setOnbStep] = useState(1);
@@ -184,7 +180,7 @@ const StudentsPage = () => {
       setStudents(result.students);
       setTotalStudents(result.total);
       setTotalPages(result.pages);
-    } catch { if (!cached) toast.error('Failed to fetch students'); }
+    } catch (e) { if (!cached && !e?._handled) toast.error('Failed to fetch students'); }
     finally { setLoading(false); setRefreshing(false); }
   }, [filterClass, filterSection, filterStatus, viewSession]);
 
@@ -208,20 +204,11 @@ const StudentsPage = () => {
     let cancelled = false;
     (async () => {
       try {
-        const calls = [api.get(`/students/${focusId}`)];
-        if (isAdmin) {
-          calls.push(api.get(`/students/${focusId}/password`));
-          calls.push(api.get(`/students/${focusId}/parent-password`));
-        }
-        const [r0, r1, r2] = await Promise.allSettled(calls);
+        const [r0] = await Promise.allSettled([api.get(`/students/${focusId}`)]);
         if (cancelled) return;
         if (r0.status === 'fulfilled') {
           setSelectedStudent(r0.value.data);
           setPwResult(null); setPwInput(''); setPwVisible(false);
-          setCurrentPw(null); setCurrentPwVisible(false);
-          setParentPw(null); setParentPwVisible(false);
-          if (r1?.status === 'fulfilled') setCurrentPw(r1.value.data.password);
-          if (r2?.status === 'fulfilled') setParentPw(r2.value.data.password);
           setShowViewDialog(true);
         }
       } catch { /* student deleted / not accessible — silent */ }
@@ -335,12 +322,23 @@ const StudentsPage = () => {
   };
 
   const handleOnbDocUpload = async (docType, docName, file) => {
+    if (file.size > 5 * 1024 * 1024) { toast.error('File too large. Maximum size is 5 MB.'); return; }
+    const isPhoto = docType === 'passport_photo';
+    if (isPhoto) {
+      if (!['image/jpeg','image/png'].includes(file.type) && !/(\.jpe?g|\.png)$/i.test(file.name)) {
+        toast.error('Passport photo must be a JPG or PNG image.'); return;
+      }
+    } else {
+      if (file.type !== 'application/pdf' && !/(\.pdf)$/i.test(file.name)) {
+        toast.error('Documents must be uploaded as PDF.'); return;
+      }
+    }
     setOnbDocLoading(prev => ({ ...prev, [docType]: true }));
     try {
       // Step 1: upload the file to get a stored URL
       const fd = new FormData();
       fd.append('file', file);
-      const uploadRes = await api.post('/upload', fd);
+      const uploadRes = await api.post(`/upload?doc_type=${docType}`, fd);
       const { file_url, file_name } = uploadRes.data;
 
       // Step 2: register the document against this onboarding application
@@ -364,7 +362,7 @@ const StudentsPage = () => {
     if (!docFileInputRefs.current[docType]) {
       const input = document.createElement('input');
       input.type = 'file';
-      input.accept = '.pdf,.jpg,.jpeg,.png';
+      input.accept = docType === 'passport_photo' ? '.jpg,.jpeg,.png' : '.pdf';
       input.onchange = (e) => {
         const file = e.target.files?.[0];
         if (file) {
@@ -564,8 +562,6 @@ const StudentsPage = () => {
       const body = generate ? {} : { password: pwInput };
       const res = await api.post(`/students/${selectedStudent.student_id}/reset-password`, body);
       setPwResult(res.data);
-      setCurrentPw(res.data.password);
-      setCurrentPwVisible(true);
       setPwInput('');
       setPwVisible(true);
       toast.success('Password updated successfully');
@@ -1042,7 +1038,7 @@ const StudentsPage = () => {
                       </div>
                     );
                   })()}
-                </TableHead><TableHead>Admission No.</TableHead><TableHead>Name</TableHead><TableHead>Class</TableHead><TableHead>Academic Year</TableHead><TableHead>Parent</TableHead><TableHead>Fee Status</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead>
+                </TableHead><TableHead>Admission No.</TableHead><TableHead>Name</TableHead><TableHead>Class</TableHead><TableHead className="hidden lg:table-cell">Academic Year</TableHead><TableHead className="hidden lg:table-cell">Parent</TableHead><TableHead>Fee Status</TableHead><TableHead>Status</TableHead><TableHead className="sticky right-0 bg-white text-right z-10 shadow-[-4px_0_6px_-1px_rgba(0,0,0,0.06)]">Actions</TableHead>
               </TableRow></TableHeader>
               <TableBody>
                 {filteredStudents.map((student) => (
@@ -1069,8 +1065,8 @@ const StudentsPage = () => {
                       <p className="text-sm text-muted-foreground">{student.email || ''}</p>
                     </TableCell>
                     <TableCell>Class {student.class_name} - {student.section}</TableCell>
-                    <TableCell className="text-sm text-slate-600">{student.academic_year || '—'}</TableCell>
-                    <TableCell>
+                    <TableCell className="hidden lg:table-cell text-sm text-slate-600">{student.academic_year || '—'}</TableCell>
+                    <TableCell className="hidden lg:table-cell">
                       {!student.father_name && !student.mother_name && !student.parent_name ? (
                         <span className="text-sm text-muted-foreground">—</span>
                       ) : (
@@ -1101,8 +1097,8 @@ const StudentsPage = () => {
                         : <Badge className="bg-red-50 text-red-700 border border-red-200">Inactive</Badge>
                       }
                     </TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="ghost" size="sm" onClick={async () => { setSelectedStudent(student); setPwResult(null); setPwInput(''); setPwVisible(false); setCurrentPw(null); setCurrentPwVisible(false); setParentPw(null); setParentPwVisible(false); setShowViewDialog(true); try { const calls = [api.get(`/students/${student.student_id}`)]; if (isAdmin) { calls.push(api.get(`/students/${student.student_id}/password`)); calls.push(api.get(`/students/${student.student_id}/parent-password`)); } const [r0, r1, r2] = await Promise.allSettled(calls); if (r0.status === 'fulfilled') setSelectedStudent(r0.value.data); if (r1?.status === 'fulfilled') setCurrentPw(r1.value.data.password); if (r2?.status === 'fulfilled') setParentPw(r2.value.data.password); } catch {} }} data-testid={`view-${student.student_id}`}><Eye className="h-4 w-4" /></Button>
+                    <TableCell className="sticky right-0 bg-white text-right shadow-[-4px_0_6px_-1px_rgba(0,0,0,0.06)]">
+                      <Button variant="ghost" size="sm" onClick={async () => { setSelectedStudent(student); setPwResult(null); setPwInput(''); setPwVisible(false); setShowViewDialog(true); try { const r0 = await api.get(`/students/${student.student_id}`); setSelectedStudent(r0.data); } catch {} }} data-testid={`view-${student.student_id}`}><Eye className="h-4 w-4" /></Button>
                       {isAdmin && student.is_active && <Button variant="ghost" size="sm" onClick={() => handleEditStudent(student)} data-testid={`edit-${student.student_id}`}><Edit className="h-4 w-4" /></Button>}
                       {isAdmin && student.is_active && (
                         <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-700 hover:bg-red-50" onClick={() => { setDeactivateTarget(student); setShowDeactivateDialog(true); }} data-testid={`deactivate-${student.student_id}`} title="Deactivate Student"><UserX className="h-4 w-4" /></Button>
@@ -1243,7 +1239,7 @@ const StudentsPage = () => {
                 </div>
                 <div className="space-y-1">
                   <Label>Date of Birth <span className="text-red-500">*</span></Label>
-                  <Input type="date" max={todayISO()} value={onbData.date_of_birth} onChange={(e) => { setOnbData({...onbData, date_of_birth: clampISODate(e.target.value, { max: todayISO() })}); setOnbErrors(p => ({...p, date_of_birth: ''})); }} className={onbErrors.date_of_birth ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-dob" />
+                  <Input type="date" lang="en-IN" max={todayISO()} value={onbData.date_of_birth} onChange={(e) => { setOnbData({...onbData, date_of_birth: clampISODate(e.target.value, { max: todayISO() })}); setOnbErrors(p => ({...p, date_of_birth: ''})); }} className={onbErrors.date_of_birth ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-dob" />
                   {onbData.date_of_birth && (() => {
                     const dob = new Date(onbData.date_of_birth);
                     const today = new Date();
@@ -1366,7 +1362,7 @@ const StudentsPage = () => {
                   <Label>Class *</Label>
                   <Select value={onbClassData.class_name} onValueChange={(v) => setOnbClassData({...onbClassData, class_name: v, section: '', stream: ''})}>
                     <SelectTrigger data-testid="onb-class"><SelectValue placeholder="Select class" /></SelectTrigger>
-                    <SelectContent>{classes.map(c => <SelectItem key={c.name} value={c.name}>{c.display_name || `Class ${c.name}`}</SelectItem>)}</SelectContent>
+                    <SelectContent>{classes.map(c => <SelectItem key={c.name} value={c.name}>{c.display_name || (c.name.startsWith('Class ') ? c.name : `Class ${c.name}`)}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-2">
@@ -1483,7 +1479,17 @@ const StudentsPage = () => {
                             <div className="flex items-center gap-2 mt-0.5">
                               <span className="text-xs text-green-600">✓ {uploaded.file_name}</span>
                               {uploaded.file_url && (
-                                <a href={uploaded.file_url} target="_blank" rel="noreferrer" className="text-xs text-slate-600 underline">View</a>
+                                <button
+                                  className="text-xs text-slate-600 underline bg-transparent border-none cursor-pointer p-0"
+                                  onClick={async () => {
+                                    try {
+                                      const fname = uploaded.file_url.split('/uploads/').pop();
+                                      const res = await api.get(`/file-view/${fname}`, { responseType: 'blob' });
+                                      const url = URL.createObjectURL(res.data);
+                                      window.open(url, '_blank');
+                                      setTimeout(() => URL.revokeObjectURL(url), 60000);
+                                    } catch { toast.error('Failed to open document'); }
+                                  }}>View</button>
                               )}
                             </div>
                           )}
@@ -1563,21 +1569,21 @@ const StudentsPage = () => {
                             {fee.label}
                             {fee.sibling_discount_amount > 0 && (
                               <span className="ml-1 text-[10px] text-blue-600 font-semibold">
-                                (Sibling -₹{fee.sibling_discount_amount.toLocaleString()})
+                                (Sibling -Rs.{fee.sibling_discount_amount.toLocaleString()})
                               </span>
                             )}
                           </td>
-                          <td className="px-3 py-2 text-right">₹{(fee.gross_amount||0).toLocaleString()}</td>
+                          <td className="px-3 py-2 text-right">Rs.{(fee.gross_amount||0).toLocaleString()}</td>
                           <td className="px-3 py-2 text-right text-green-600">
-                            {fee.discount_amount > 0 ? `-₹${fee.discount_amount.toLocaleString()}` : '—'}
+                            {fee.discount_amount > 0 ? `-Rs.${fee.discount_amount.toLocaleString()}` : '—'}
                           </td>
-                          <td className="px-3 py-2 text-right font-semibold">₹{(fee.net_amount||0).toLocaleString()}</td>
+                          <td className="px-3 py-2 text-right font-semibold">Rs.{(fee.net_amount||0).toLocaleString()}</td>
                         </tr>
                       ))}
                       <tr className="bg-slate-50 font-bold">
                         <td className="px-3 py-2" colSpan={3}>Total Due at Admission</td>
                         <td className="px-3 py-2 text-right text-slate-900 text-lg">
-                          ₹{(onbFeeData.admission_time_fee||0).toLocaleString()}
+                          Rs.{(onbFeeData.admission_time_fee||0).toLocaleString()}
                         </td>
                       </tr>
                     </tbody>
@@ -1591,7 +1597,7 @@ const StudentsPage = () => {
 
               {onbFeeData.total_annual_fee > 0 && (
                 <div className="text-xs text-slate-500 text-right">
-                  Total annual obligation: ₹{(onbFeeData.total_annual_fee||0).toLocaleString()}
+                  Total annual obligation: Rs.{(onbFeeData.total_annual_fee||0).toLocaleString()}
                   {' '}(one-time + yearly + 12 months tuition)
                 </div>
               )}
@@ -1601,7 +1607,7 @@ const StudentsPage = () => {
                 <div className="border border-slate-200 rounded-2xl overflow-hidden">
                   <div className="px-3 py-2 bg-slate-900 text-white text-xs font-bold uppercase tracking-wider flex items-center gap-2">
                     <CreditCard className="h-3.5 w-3.5" />
-                    Collect Admission Payment — ₹{(onbFeeData.admission_time_fee||0).toLocaleString()}
+                    Collect Admission Payment — Rs.{(onbFeeData.admission_time_fee||0).toLocaleString()}
                   </div>
                   <div className="p-4 space-y-3">
                     {/* Amount to collect — leave blank for full; enter less to record a partial payment */}
@@ -1614,14 +1620,14 @@ const StudentsPage = () => {
                         max={onbFeeData.admission_time_fee || undefined}
                         readOnly={onbPayment.method === 'split'}
                         className={`mt-1 h-9 text-sm ${onbPayment.method === 'split' ? 'bg-slate-50 text-slate-500 cursor-not-allowed' : ''}`}
-                        placeholder={`Full: ₹${(onbFeeData.admission_time_fee||0).toLocaleString()}`}
+                        placeholder={`Full: Rs.${(onbFeeData.admission_time_fee||0).toLocaleString()}`}
                         value={onbPayment.method === 'split'
                           ? (((parseFloat(onbPayment.split_cash) || 0) + (parseFloat(onbPayment.split_online) || 0)) || '')
                           : onbPayment.partial_amount}
                         onChange={e => setOnbPayment(p => ({ ...p, partial_amount: e.target.value }))}
                       />
                       <p className="text-[10px] text-slate-400 mt-1">
-                        Total due at admission: ₹{(onbFeeData.admission_time_fee||0).toLocaleString()}. Enter a smaller amount for a partial payment — the balance stays due.
+                        Total due at admission: Rs.{(onbFeeData.admission_time_fee||0).toLocaleString()}. Enter a smaller amount for a partial payment — the balance stays due.
                       </p>
                     </div>
                     <div>
@@ -1855,26 +1861,6 @@ const StudentsPage = () => {
                 <div><Label className="text-muted-foreground">Gender</Label><p className="font-medium text-foreground capitalize">{selectedStudent.gender}</p></div>
                 <div><Label className="text-muted-foreground">Date of Birth</Label><p className="font-medium text-foreground">{selectedStudent.date_of_birth || '-'}</p></div>
                 <div><Label className="text-muted-foreground">Email</Label><p className="font-medium text-foreground">{selectedStudent.email || '-'}</p></div>
-                {isAdmin && (
-                  <div>
-                    <Label className="text-muted-foreground">Password</Label>
-                    <div className="flex items-center gap-1 mt-0.5">
-                      <p className="font-medium text-foreground font-mono">
-                        {currentPw == null ? '—' : currentPwVisible ? currentPw : '••••••••••'}
-                      </p>
-                      {currentPw && (
-                        <>
-                          <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => setCurrentPwVisible(v => !v)}>
-                            {currentPwVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                          </Button>
-                          <Button variant="ghost" size="icon" className="h-5 w-5" onClick={async () => { const ok = await copyText(currentPw); toast[ok ? 'success' : 'error'](ok ? 'Copied' : 'Copy failed'); }}>
-                            <Copy className="h-3 w-3" />
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                )}
                 <div><Label className="text-muted-foreground">Phone</Label><p className="font-medium text-foreground">{selectedStudent.phone || '-'}</p></div>
                 <div className="col-span-2"><Label className="text-muted-foreground">Address</Label><p className="font-medium text-foreground">{selectedStudent.address || '-'}</p></div>
               </div>
@@ -1904,29 +1890,9 @@ const StudentsPage = () => {
                 {/* Contact & login */}
                 <div className="grid grid-cols-2 gap-4 text-sm pt-2 border-t border-slate-100">
                   <div><Label className="text-muted-foreground">Parent Email</Label><p className="font-medium text-foreground">{selectedStudent.parent_email || '-'}</p></div>
-                  {isAdmin && (
-                    <div>
-                      <Label className="text-muted-foreground">Parent Login Password</Label>
-                      <div className="flex items-center gap-1 mt-0.5">
-                        <p className="font-medium text-foreground font-mono">
-                          {parentPw == null ? '—' : parentPwVisible ? parentPw : '••••••••••'}
-                        </p>
-                        {parentPw && (
-                          <>
-                            <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => setParentPwVisible(v => !v)}>
-                              {parentPwVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                            </Button>
-                            <Button variant="ghost" size="icon" className="h-5 w-5" onClick={async () => { const ok = await copyText(parentPw); toast[ok ? 'success' : 'error'](ok ? 'Copied' : 'Copy failed'); }}>
-                              <Copy className="h-3 w-3" />
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  )}
                 </div>
               </div>
-              {isAdmin && (
+              {(isAdmin || isAccountant) && (
                 <div className="border-t pt-4">
                   <h4 className="font-medium mb-3 text-foreground flex items-center gap-2"><KeyRound className="h-4 w-4" />Password Management</h4>
                   {pwResult && (
@@ -1991,7 +1957,7 @@ const StudentsPage = () => {
                   <Label>Class</Label>
                   <Select value={editData.class_name} onValueChange={(v) => setEditData({...editData, class_name: v, section: ''})}>
                     <SelectTrigger data-testid="edit-class"><SelectValue /></SelectTrigger>
-                    <SelectContent>{classes.map(c => <SelectItem key={c.name} value={c.name}>{c.display_name || `Class ${c.name}`}</SelectItem>)}</SelectContent>
+                    <SelectContent>{classes.map(c => <SelectItem key={c.name} value={c.name}>{c.display_name || (c.name.startsWith('Class ') ? c.name : `Class ${c.name}`)}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-2">
@@ -2064,14 +2030,22 @@ const StudentsPage = () => {
                         onClick={() => {
                           const input = document.createElement('input');
                           input.type = 'file';
-                          input.accept = '.pdf,.jpg,.jpeg,.png';
+                          input.accept = doc.type === 'passport_photo' ? '.jpg,.jpeg,.png' : '.pdf';
                           input.onchange = async (e) => {
                             const file = e.target.files?.[0];
                             if (!file) return;
+                            if (file.size > 5 * 1024 * 1024) { toast.error('File too large. Maximum size is 5 MB.'); return; }
+                            const isPhoto = doc.type === 'passport_photo';
+                            if (isPhoto && !['image/jpeg','image/png'].includes(file.type) && !/(\.jpe?g|\.png)$/i.test(file.name)) {
+                              toast.error('Passport photo must be a JPG or PNG image.'); return;
+                            }
+                            if (!isPhoto && file.type !== 'application/pdf' && !/(\.pdf)$/i.test(file.name)) {
+                              toast.error('Documents must be uploaded as PDF.'); return;
+                            }
                             try {
                               const fd = new FormData();
                               fd.append('file', file);
-                              const uploadRes = await api.post('/upload', fd);
+                              const uploadRes = await api.post(`/upload?doc_type=${doc.type}`, fd);
                               const { file_url, file_name } = uploadRes.data;
                               const docFd = new FormData();
                               docFd.append('document_type', doc.type);

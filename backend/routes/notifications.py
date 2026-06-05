@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request
+﻿from fastapi import APIRouter, HTTPException, Request
 import logging
 
 from database import db
@@ -27,7 +27,7 @@ async def send_fee_reminder_email(student: dict, due_amount: float, due_months: 
             <h2 style="color: #ef4444;">Fee Payment Reminder</h2>
             <p>Dear Parent/Guardian,</p>
             <p>Fee payment pending for <strong>{student['first_name']} {student['last_name']}</strong>.</p>
-            <p>Total Due: <strong>Rs. {due_amount:,.2f}</strong></p>
+            <p>Total Due: <strong>Rs.{due_amount:,.2f}</strong></p>
             <p>Pending Months: <strong>{months_str}</strong></p>
         </div>
     </div>

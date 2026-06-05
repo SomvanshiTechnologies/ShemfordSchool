@@ -1,4 +1,4 @@
-"""
+﻿"""
 Shemford School — Payroll System
 =================================
 
@@ -31,6 +31,32 @@ from pydantic import BaseModel
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+
+# ── Unicode font for Rs. symbol ──────────────────────────────────────────────────
+import os as _os
+from reportlab.pdfbase import pdfmetrics as _pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont as _TTFont
+
+_PDF_FONT_REG  = "Helvetica"
+_PDF_FONT_BOLD = "Helvetica-Bold"
+
+for _reg, _bold in [
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+    ("/usr/share/fonts/dejavu/DejaVuSans.ttf",
+     "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"),
+    ("C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf"),
+]:
+    if _os.path.exists(_reg):
+        try:
+            _pdfmetrics.registerFont(_TTFont("_PayrollSans", _reg))
+            _pdfmetrics.registerFont(_TTFont("_PayrollSans-Bold",
+                                             _bold if _os.path.exists(_bold) else _reg))
+            _PDF_FONT_REG  = "_PayrollSans"
+            _PDF_FONT_BOLD = "_PayrollSans-Bold"
+        except Exception:
+            pass
+        break
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
@@ -66,6 +92,9 @@ class UpdatePayrollRequest(BaseModel):
     deduction_remarks: Optional[str] = None
     lwp_days: Optional[float] = None
     remarks: Optional[str] = None
+    pf_deduction: Optional[float] = None
+    esi_deduction: Optional[float] = None
+    tds_deduction: Optional[float] = None
 
 
 class MarkPaidRequest(BaseModel):
@@ -80,6 +109,9 @@ def calculate_payroll(
     year: int,
     lwp_days: float = 0.0,
     other_deductions: float = 0.0,
+    pf_deduction: Optional[float] = None,
+    esi_deduction: Optional[float] = None,
+    tds_deduction: float = 0.0,
 ) -> dict:
     """
     Pure function — no I/O.
@@ -110,7 +142,21 @@ def calculate_payroll(
     lwp_days      = min(float(lwp_days), working_days)
     lwp_deduction = round(lwp_days * per_day, 2)
     other_deductions = round(float(other_deductions), 2)
-    total_deductions = round(lwp_deduction + other_deductions, 2)
+    tds_deduction = round(float(tds_deduction), 2)
+
+    # PF: 12% of monthly salary, capped at Rs. 15,000 (standard employee share)
+    if pf_deduction is None:
+        pf_deduction = round(min(monthly_salary, 15000.0) * 0.12, 2)
+    else:
+        pf_deduction = round(float(pf_deduction), 2)
+
+    # ESI: 0.75% of gross salary (only for gross <= Rs. 21,000)
+    if esi_deduction is None:
+        esi_deduction = round(gross * 0.0075, 2) if gross <= 21000 else 0.0
+    else:
+        esi_deduction = round(float(esi_deduction), 2)
+
+    total_deductions = round(lwp_deduction + pf_deduction + esi_deduction + tds_deduction + other_deductions, 2)
     net_salary       = round(gross - total_deductions, 2)
     present_days     = working_days - lwp_days
 
@@ -123,6 +169,9 @@ def calculate_payroll(
         "monthly_salary":   round(monthly_salary, 2),
         "gross_salary":     round(gross, 2),
         "lwp_deduction":    lwp_deduction,
+        "pf_deduction":     pf_deduction,
+        "esi_deduction":    esi_deduction,
+        "tds_deduction":    tds_deduction,
         "other_deductions": other_deductions,
         "total_deductions": total_deductions,
         "net_salary":       net_salary,
@@ -393,15 +442,25 @@ async def update_payroll(payroll_id: str, body: UpdatePayrollRequest, request: R
         updates["lwp_days"] = max(0.0, float(body.lwp_days))
     if body.remarks is not None:
         updates["remarks"] = body.remarks
+    if body.pf_deduction is not None:
+        updates["pf_deduction"] = round(float(body.pf_deduction), 2)
+    if body.esi_deduction is not None:
+        updates["esi_deduction"] = round(float(body.esi_deduction), 2)
+    if body.tds_deduction is not None:
+        updates["tds_deduction"] = round(float(body.tds_deduction), 2)
 
-    # Recalculate if financial fields changed
-    if "other_deductions" in updates or "lwp_days" in updates:
+    # Recalculate if any financial field changed
+    financial_keys = {"other_deductions", "lwp_days", "pf_deduction", "esi_deduction", "tds_deduction"}
+    if updates.keys() & financial_keys:
         lwp    = updates.get("lwp_days",         record["lwp_days"])
-        other  = updates.get("other_deductions", record["other_deductions"])
+        other  = updates.get("other_deductions", record.get("other_deductions", 0))
+        pf     = updates.get("pf_deduction",     record.get("pf_deduction", 0))
+        esi    = updates.get("esi_deduction",     record.get("esi_deduction", 0))
+        tds    = updates.get("tds_deduction",     record.get("tds_deduction", 0))
         per_day = record["per_day_salary"]
 
         lwp_deduction    = round(float(lwp) * per_day, 2)
-        total_deductions = round(lwp_deduction + float(other), 2)
+        total_deductions = round(lwp_deduction + float(pf) + float(esi) + float(tds) + float(other), 2)
         net_salary       = round(record["gross_salary"] - total_deductions, 2)
         present_days     = record["working_days"] - float(lwp)
 
@@ -430,6 +489,18 @@ async def approve_payroll(payroll_id: str, request: Request):
         return {"message": "Already approved.", "payroll_id": payroll_id}
     if record["status"] == PayrollStatus.PAID:
         raise HTTPException(status_code=400, detail="Payroll is already paid.")
+
+    missing = []
+    if not record.get("bank_account_number"):
+        missing.append("Bank Account Number")
+    if not record.get("bank_ifsc"):
+        missing.append("IFSC Code")
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot approve: missing bank detail(s) — {', '.join(missing)}. "
+                   f"Update the employee's bank details and regenerate before approving."
+        )
 
     now = datetime.now(timezone.utc).isoformat()
     await db.payroll.update_one(
@@ -762,13 +833,13 @@ def _base_styles():
     styles.add(ParagraphStyle("SubHeader", parent=styles["Normal"],
                               fontSize=9, textColor=_GREY, alignment=TA_CENTER, spaceAfter=6))
     styles.add(ParagraphStyle("SectionTitle", parent=styles["Normal"],
-                              fontSize=10, textColor=_ORANGE, fontName="Helvetica-Bold", spaceAfter=4))
+                              fontSize=10, textColor=_ORANGE, fontName=_PDF_FONT_BOLD, spaceAfter=4))
     styles.add(ParagraphStyle("Small", parent=styles["Normal"],
                               fontSize=8, textColor=_GREY))
     styles.add(ParagraphStyle("Bold", parent=styles["Normal"],
-                              fontName="Helvetica-Bold", fontSize=10))
+                              fontName=_PDF_FONT_BOLD, fontSize=10))
     styles.add(ParagraphStyle("Amount", parent=styles["Normal"],
-                              fontName="Helvetica-Bold", fontSize=12, textColor=_GREEN, alignment=TA_RIGHT))
+                              fontName=_PDF_FONT_BOLD, fontSize=12, textColor=_GREEN, alignment=TA_RIGHT))
     return styles
 
 
@@ -804,10 +875,10 @@ def _generate_payslip_pdf(record: dict, emp: dict) -> bytes:
     ]
     emp_table = Table(emp_table_data, colWidths=[3*cm, 6.5*cm, 3*cm, 6*cm])
     emp_table.setStyle(TableStyle([
-        ("FONTNAME",    (0, 0), (-1, -1), "Helvetica"),
+        ("FONTNAME",    (0, 0), (-1, -1), _PDF_FONT_REG),
         ("FONTSIZE",    (0, 0), (-1, -1), 9),
-        ("FONTNAME",    (0, 0), (0, -1), "Helvetica-Bold"),
-        ("FONTNAME",    (2, 0), (2, -1), "Helvetica-Bold"),
+        ("FONTNAME",    (0, 0), (0, -1), _PDF_FONT_BOLD),
+        ("FONTNAME",    (2, 0), (2, -1), _PDF_FONT_BOLD),
         ("TEXTCOLOR",   (0, 0), (0, -1), _GREY),
         ("TEXTCOLOR",   (2, 0), (2, -1), _GREY),
         ("ROWBACKGROUNDS", (0, 0), (-1, -1), [_LIGHT, _WHITE]),
@@ -830,7 +901,7 @@ def _generate_payslip_pdf(record: dict, emp: dict) -> bytes:
     att_table.setStyle(TableStyle([
         ("BACKGROUND",  (0, 0), (-1, 0), _DARK),
         ("TEXTCOLOR",   (0, 0), (-1, 0), _WHITE),
-        ("FONTNAME",    (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME",    (0, 0), (-1, 0), _PDF_FONT_BOLD),
         ("FONTSIZE",    (0, 0), (-1, -1), 9),
         ("ALIGN",       (0, 0), (-1, -1), "CENTER"),
         ("GRID",        (0, 0), (-1, -1), 0.5, colors.HexColor("#DDDDDD")),
@@ -841,24 +912,35 @@ def _generate_payslip_pdf(record: dict, emp: dict) -> bytes:
 
     # ── Earnings / Deductions ──
     story.append(Paragraph("Earnings & Deductions", styles["SectionTitle"]))
+    pf_ded  = record.get("pf_deduction", 0) or 0
+    esi_ded = record.get("esi_deduction", 0) or 0
+    tds_ded = record.get("tds_deduction", 0) or 0
     earn_data = [
-        ["EARNINGS",            "",         "DEDUCTIONS",           ""],
-        ["Monthly Salary",      f"Rs.{record['monthly_salary']:,.2f}",
-         "LWP Deduction",       f"Rs.{record['lwp_deduction']:,.2f}"],
-        ["Gross Salary",        f"Rs.{record['gross_salary']:,.2f}",
-         "Other Deductions",    f"Rs.{record['other_deductions']:,.2f}"],
-        ["",                    "",
-         "Total Deductions",    f"Rs.{record['total_deductions']:,.2f}"],
+        ["EARNINGS",         "",                              "DEDUCTIONS",        ""],
+        ["Monthly Salary",   f"Rs.{record['monthly_salary']:,.2f}",
+         "LWP Deduction",    f"Rs.{record['lwp_deduction']:,.2f}"],
+        ["Gross Salary",     f"Rs.{record['gross_salary']:,.2f}",
+         f"PF (12%)",        f"Rs.{pf_ded:,.2f}"],
+        ["",                 "",
+         "ESI (0.75%)",      f"Rs.{esi_ded:,.2f}"],
+        ["",                 "",
+         "TDS",              f"Rs.{tds_ded:,.2f}"],
+        ["",                 "",
+         "Other Deductions", f"Rs.{record.get('other_deductions', 0):,.2f}"],
+        ["",                 "",
+         "Total Deductions", f"Rs.{record['total_deductions']:,.2f}"],
     ]
     earn_table = Table(earn_data, colWidths=[4.5*cm, 4.5*cm, 4.5*cm, 4.5*cm])
     earn_table.setStyle(TableStyle([
-        ("FONTNAME",    (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME",    (0, 0), (-1, 0), _PDF_FONT_BOLD),
         ("FONTSIZE",    (0, 0), (-1, -1), 9),
         ("BACKGROUND",  (0, 0), (1, 0), _ORANGE),
         ("BACKGROUND",  (2, 0), (3, 0), _DARK),
         ("TEXTCOLOR",   (0, 0), (-1, 0), _WHITE),
         ("GRID",        (0, 0), (-1, -1), 0.5, colors.HexColor("#DDDDDD")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [_LIGHT, _WHITE]),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [_LIGHT, _WHITE]),
+        ("BACKGROUND",  (0, -1), (-1, -1), _LIGHT),
+        ("FONTNAME",    (2, -1), (3, -1), _PDF_FONT_BOLD),
         ("ALIGN",       (1, 0), (1, -1), "RIGHT"),
         ("ALIGN",       (3, 0), (3, -1), "RIGHT"),
         ("PADDING",     (0, 0), (-1, -1), 6),
@@ -872,7 +954,7 @@ def _generate_payslip_pdf(record: dict, emp: dict) -> bytes:
     net_table.setStyle(TableStyle([
         ("BACKGROUND",  (0, 0), (-1, -1), _GREEN),
         ("TEXTCOLOR",   (0, 0), (-1, -1), _WHITE),
-        ("FONTNAME",    (0, 0), (-1, -1), "Helvetica-Bold"),
+        ("FONTNAME",    (0, 0), (-1, -1), _PDF_FONT_BOLD),
         ("FONTSIZE",    (0, 0), (-1, -1), 13),
         ("ALIGN",       (1, 0), (1, 0), "RIGHT"),
         ("PADDING",     (0, 0), (-1, -1), 10),
@@ -909,18 +991,20 @@ def _generate_yearly_statement_pdf(records: list, emp: dict, year: int) -> bytes
                             styles["SubHeader"]))
     story.append(Spacer(1, 10))
 
-    headers = ["Month", "Gross Salary", "LWP Days", "LWP Deduct.",
-               "Other Deduct.", "Total Deduct.", "Net Salary", "Status"]
+    headers = ["Month", "Gross", "LWP Days", "LWP Ded.",
+               "Statutory", "Other Ded.", "Total Ded.", "Net Salary", "Status"]
     rows = [headers]
-    total_gross = total_net = total_lwp_ded = total_other_ded = 0.0
+    total_gross = total_net = total_lwp_ded = total_stat_ded = total_other_ded = 0.0
 
     for r in records:
+        stat = round(r.get("pf_deduction", 0) + r.get("esi_deduction", 0) + r.get("tds_deduction", 0), 2)
         rows.append([
             calendar.month_abbr[r["month"]],
             f"Rs.{r['gross_salary']:,.2f}",
             str(r["lwp_days"]),
             f"Rs.{r['lwp_deduction']:,.2f}",
-            f"Rs.{r['other_deductions']:,.2f}",
+            f"Rs.{stat:,.2f}",
+            f"Rs.{r.get('other_deductions', 0):,.2f}",
             f"Rs.{r['total_deductions']:,.2f}",
             f"Rs.{r['net_salary']:,.2f}",
             r["status"].upper(),
@@ -928,27 +1012,31 @@ def _generate_yearly_statement_pdf(records: list, emp: dict, year: int) -> bytes
         total_gross    += r["gross_salary"]
         total_net      += r["net_salary"]
         total_lwp_ded  += r["lwp_deduction"]
-        total_other_ded += r["other_deductions"]
+        total_stat_ded += stat
+        total_other_ded += r.get("other_deductions", 0)
 
     rows.append([
         "TOTAL",
-        f"Rs.{total_gross:,.2f}", "", f"Rs.{total_lwp_ded:,.2f}",
-        f"Rs.{total_other_ded:,.2f}", f"Rs.{total_lwp_ded+total_other_ded:,.2f}",
+        f"Rs.{total_gross:,.2f}", "",
+        f"Rs.{total_lwp_ded:,.2f}",
+        f"Rs.{total_stat_ded:,.2f}",
+        f"Rs.{total_other_ded:,.2f}",
+        f"Rs.{total_lwp_ded+total_stat_ded+total_other_ded:,.2f}",
         f"Rs.{total_net:,.2f}", "",
     ])
 
-    col_widths = [2*cm, 3*cm, 2*cm, 2.8*cm, 2.8*cm, 2.8*cm, 3*cm, 2*cm]
+    col_widths = [1.8*cm, 2.5*cm, 1.5*cm, 2.0*cm, 2.0*cm, 2.0*cm, 2.0*cm, 2.5*cm, 1.7*cm]
     tbl = Table(rows, colWidths=col_widths, repeatRows=1)
     tbl.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, 0), _DARK),
         ("TEXTCOLOR",     (0, 0), (-1, 0), _WHITE),
-        ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME",      (0, 0), (-1, 0), _PDF_FONT_BOLD),
         ("FONTSIZE",      (0, 0), (-1, -1), 8),
         ("ALIGN",         (1, 0), (-1, -1), "RIGHT"),
         ("ROWBACKGROUNDS", (0, 1), (-1, -2), [_WHITE, _LIGHT]),
         ("BACKGROUND",    (0, -1), (-1, -1), _ORANGE),
         ("TEXTCOLOR",     (0, -1), (-1, -1), _WHITE),
-        ("FONTNAME",      (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("FONTNAME",      (0, -1), (-1, -1), _PDF_FONT_BOLD),
         ("GRID",          (0, 0), (-1, -1), 0.5, colors.HexColor("#DDDDDD")),
         ("PADDING",       (0, 0), (-1, -1), 5),
     ]))
@@ -992,7 +1080,7 @@ def _generate_form16_pdf(records: list, emp: dict, fy_start: int, fy_end: int) -
     ]
     info_tbl = Table(emp_info, colWidths=[6*cm, 12.5*cm])
     info_tbl.setStyle(TableStyle([
-        ("FONTNAME",    (0, 0), (0, -1), "Helvetica-Bold"),
+        ("FONTNAME",    (0, 0), (0, -1), _PDF_FONT_BOLD),
         ("FONTSIZE",    (0, 0), (-1, -1), 9),
         ("TEXTCOLOR",   (0, 0), (0, -1), _GREY),
         ("ROWBACKGROUNDS", (0, 0), (-1, -1), [_LIGHT, _WHITE]),
@@ -1002,19 +1090,20 @@ def _generate_form16_pdf(records: list, emp: dict, fy_start: int, fy_end: int) -
     story.append(info_tbl)
     story.append(Spacer(1, 12))
 
+    total_tds = sum(r.get("tds_deduction", 0) for r in records)
     story.append(Paragraph("Part A — Salary Details", styles["SectionTitle"]))
     salary_data = [
         ["Description",                        "Amount (Rs.)"],
         ["Gross Salary Paid",                  f"Rs.{total_gross:,.2f}"],
-        ["Total Deductions (LWP + Other)",     f"Rs.{total_deductions:,.2f}"],
+        ["Total Deductions (LWP + Statutory + Other)",  f"Rs.{total_deductions:,.2f}"],
         ["Net Salary Paid",                    f"Rs.{total_net:,.2f}"],
-        ["Tax Deducted at Source (TDS)",       "Rs.0.00  (as applicable)"],
+        ["Tax Deducted at Source (TDS)",       f"Rs.{total_tds:,.2f}"],
     ]
     sal_tbl = Table(salary_data, colWidths=[13*cm, 5.5*cm])
     sal_tbl.setStyle(TableStyle([
         ("BACKGROUND",  (0, 0), (-1, 0), _DARK),
         ("TEXTCOLOR",   (0, 0), (-1, 0), _WHITE),
-        ("FONTNAME",    (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME",    (0, 0), (-1, 0), _PDF_FONT_BOLD),
         ("FONTSIZE",    (0, 0), (-1, -1), 9),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [_WHITE, _LIGHT]),
         ("ALIGN",       (1, 0), (1, -1), "RIGHT"),
@@ -1039,7 +1128,7 @@ def _generate_form16_pdf(records: list, emp: dict, fy_start: int, fy_end: int) -
     month_tbl.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, 0), _ORANGE),
         ("TEXTCOLOR",     (0, 0), (-1, 0), _WHITE),
-        ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME",      (0, 0), (-1, 0), _PDF_FONT_BOLD),
         ("FONTSIZE",      (0, 0), (-1, -1), 8),
         ("ALIGN",         (1, 0), (-1, -1), "RIGHT"),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [_WHITE, _LIGHT]),
@@ -1102,13 +1191,13 @@ def _generate_payroll_summary_pdf(records: list, emp_map: dict, month_year: str)
     tbl.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, 0), _DARK),
         ("TEXTCOLOR",     (0, 0), (-1, 0), _WHITE),
-        ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME",      (0, 0), (-1, 0), _PDF_FONT_BOLD),
         ("FONTSIZE",      (0, 0), (-1, -1), 8),
         ("ALIGN",         (3, 0), (5, -1), "RIGHT"),
         ("ROWBACKGROUNDS", (0, 1), (-1, -2), [_WHITE, _LIGHT]),
         ("BACKGROUND",    (0, -1), (-1, -1), _ORANGE),
         ("TEXTCOLOR",     (0, -1), (-1, -1), _WHITE),
-        ("FONTNAME",      (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("FONTNAME",      (0, -1), (-1, -1), _PDF_FONT_BOLD),
         ("GRID",          (0, 0), (-1, -1), 0.5, colors.HexColor("#DDDDDD")),
         ("PADDING",       (0, 0), (-1, -1), 5),
     ]))

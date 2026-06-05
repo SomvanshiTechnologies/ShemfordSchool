@@ -1,4 +1,4 @@
-"""
+﻿"""
 Shemford School — Ezetap POS Bridge Payment Integration
 =========================================================
 
@@ -243,7 +243,7 @@ async def initiate_pos_payment(body: POSInitiateRequest, request: Request):
         raise HTTPException(status_code=400, detail=f"mode must be one of {valid_modes}")
 
     if body.amount_paise < 100:
-        raise HTTPException(status_code=400, detail="Minimum payable amount is ₹1.")
+        raise HTTPException(status_code=400, detail="Minimum payable amount is Rs.1.")
 
     # ── Verify the device is registered ──────────────────────────────────────
     await _check_device_whitelist(body.device_id)
@@ -384,7 +384,7 @@ async def initiate_pos_payment(body: POSInitiateRequest, request: Request):
     )
 
     logger.info(
-        "POS initiated: %s student=%s ₹%.2f device=%s mode=%s rid=%s",
+        "POS initiated: %s student=%s Rs.%.2f device=%s mode=%s rid=%s",
         pos_order_id, body.student_id, body.amount_paise / 100,
         body.device_id, mode, getattr(request.state, "request_id", "-"),
     )

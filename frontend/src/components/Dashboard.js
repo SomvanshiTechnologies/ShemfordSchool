@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useSession } from '../contexts/SessionContext';
 import { toast } from 'sonner';
@@ -133,7 +133,7 @@ const FeeHealthWidget = ({ financial }) => {
           <div>
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Fee Collection</p>
             <p className="text-3xl font-bold text-slate-900 mt-1 tracking-tight">
-              ₹{collected.toLocaleString()}
+              Rs.{collected.toLocaleString()}
             </p>
           </div>
           <div className="h-12 w-12 rounded-2xl bg-emerald-50 flex items-center justify-center shrink-0">
@@ -143,7 +143,7 @@ const FeeHealthWidget = ({ financial }) => {
         <div className="space-y-2">
           <div className="flex justify-between text-xs text-slate-500 mb-1.5">
             <span className="font-semibold text-emerald-600">{pct}% collected</span>
-            <span>₹{pending.toLocaleString()} outstanding</span>
+            <span>Rs.{pending.toLocaleString()} outstanding</span>
           </div>
           <Progress value={pct} className="h-2 rounded-full" />
         </div>
@@ -166,7 +166,7 @@ const FeeHealthWidget = ({ financial }) => {
                 <div className="flex-1">
                   <div className="flex justify-between text-xs mb-1.5">
                     <span className="text-slate-600 capitalize">{method.replace('_', ' ')}</span>
-                    <span className="font-semibold text-slate-900">₹{amount.toLocaleString()}</span>
+                    <span className="font-semibold text-slate-900">Rs.{amount.toLocaleString()}</span>
                   </div>
                   <Progress value={methodPct} className="h-1.5 rounded-full" />
                 </div>
@@ -277,7 +277,7 @@ const AdminDashboard = ({ stats, financial, attendanceAlerts, recentActivity }) 
     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
       <Stat label="Total Students"  value={stats.total_students  || 0} />
       <Stat label="Total Employees" value={stats.total_employees || 0} />
-      <Stat label="Fee Collection"  value={`₹${(stats.month_collection || 0).toLocaleString()}`} />
+      <Stat label="Fee Collection"  value={`Rs.${(stats.month_collection || 0).toLocaleString()}`} />
       <Stat label="Fee Overdue"     value={stats.fee_overdue_count || 0} />
     </div>
 
@@ -334,133 +334,171 @@ const TeacherDashboard = ({ stats }) => (
   </div>
 );
 
-const StudentDashboard = ({ stats }) => (
-  <div className="space-y-8 animate-fade-in">
-    {stats.app_locked && (
-      <div className="bg-orange-50 border border-orange-200 rounded-2xl p-5 flex items-center gap-4">
-        <div className="h-10 w-10 rounded-xl bg-orange-100 flex items-center justify-center shrink-0">
-          <AlertTriangle className="h-5 w-5 text-[#E88A1A]" strokeWidth={1.5} />
-        </div>
-        <div>
-          <p className="text-sm font-bold text-slate-900">Account Restricted</p>
-          <p className="text-xs text-slate-600 mt-0.5">Access limited due to pending fees. Contact the accounts office.</p>
-        </div>
-      </div>
-    )}
-
-    {/* Class info card */}
-    {stats.class_name && (
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="h-10 w-10 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
-            <School className="h-5 w-5 text-blue-600" strokeWidth={1.5} />
+const StudentDashboard = ({ stats }) => {
+  const isLinked = !!stats.class_name;
+  return (
+    <div className="space-y-8 animate-fade-in">
+      {!isLinked && (
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 flex items-center gap-4">
+          <div className="h-10 w-10 rounded-xl bg-slate-100 flex items-center justify-center shrink-0">
+            <School className="h-5 w-5 text-slate-400" strokeWidth={1.5} />
           </div>
           <div>
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">My Class</p>
-            <p className="text-lg font-bold text-slate-900">
-              Class {stats.class_name} — Section {displaySection(stats)}
-            </p>
+            <p className="text-sm font-bold text-slate-900">Account Not Linked</p>
+            <p className="text-xs text-slate-500 mt-0.5">Your login is not linked to a student record yet. Please contact the school administrator.</p>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="bg-slate-50 rounded-xl p-3">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Admission No.</p>
-            <p className="text-sm font-bold text-slate-900 mt-0.5 font-mono">{stats.admission_number || '—'}</p>
+      )}
+
+      {stats.app_locked && (
+        <div className="bg-orange-50 border border-orange-200 rounded-2xl p-5 flex items-center gap-4">
+          <div className="h-10 w-10 rounded-xl bg-orange-100 flex items-center justify-center shrink-0">
+            <AlertTriangle className="h-5 w-5 text-[#E88A1A]" strokeWidth={1.5} />
           </div>
-          <div className="bg-slate-50 rounded-xl p-3">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Roll No.</p>
-            <p className="text-sm font-bold text-slate-900 mt-0.5">{stats.roll_number || '—'}</p>
+          <div>
+            <p className="text-sm font-bold text-slate-900">Account Restricted</p>
+            <p className="text-xs text-slate-600 mt-0.5">Access limited due to pending fees. Contact the accounts office.</p>
           </div>
         </div>
-      </div>
-    )}
+      )}
 
-    <div className="grid gap-4 md:grid-cols-3">
-      <Stat label="Fee Status"  value={stats.fee_status || 'N/A'} />
-      <Stat label="Attendance"  value={`${stats.attendance_percentage || 0}%`} />
-
-      {/* Attendance progress card */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-        <div className="h-11 w-11 rounded-xl bg-emerald-50 flex items-center justify-center mb-4">
-          <TrendingUp className="h-5 w-5 text-emerald-600" strokeWidth={1.5} />
-        </div>
-        <div className="flex items-end justify-between mb-3">
-          <p className="text-2xl font-bold text-slate-900 tracking-tight">
-            {stats.attendance_percentage || 0}<span className="text-base text-slate-400 font-semibold">%</span>
-          </p>
-          <span className={`text-[11px] font-bold px-2 py-1 rounded-lg ${
-            stats.attendance_percentage >= 75
-              ? 'bg-emerald-50 text-emerald-700'
-              : 'bg-red-50 text-red-600'
-          }`}>
-            {stats.attendance_percentage >= 75 ? 'On Track' : 'Below 75%'}
-          </span>
-        </div>
-        <Progress value={stats.attendance_percentage || 0} className="h-2 rounded-full" />
-        <p className="text-xs text-slate-500 mt-2">Attendance Progress</p>
-      </div>
-    </div>
-
-    <div>
-      <SectionHeader title="Quick Actions" />
-      <div className="grid gap-3 md:grid-cols-3">
-        <Action title="View Marksheet" desc="Check your results"        icon={FileText}  to="/my-marks" />
-        <Action title="Attendance"     desc="Check attendance record"   icon={Calendar}  to="/my-attendance" />
-        <Action title="Syllabus"       desc="Access study materials"    icon={BookOpen}  to="/syllabus" />
-      </div>
-    </div>
-  </div>
-);
-
-const ParentDashboard = ({ stats }) => (
-  <div className="space-y-8 animate-fade-in">
-    <div className="grid gap-4 md:grid-cols-2">
-      <Stat label="Children" value={stats.children_count || 0} />
-      <Stat label="Messages" value={0} />
-    </div>
-
-    {stats.children?.length > 0 && (
-      <div>
-        <SectionHeader title="Your Children" />
-        <div className="grid gap-3 md:grid-cols-2">
-          {stats.children.map((child) => (
-            <div key={child.student_id} className="bg-white border border-slate-200 rounded-2xl p-5 flex items-center gap-4 shadow-sm hover:shadow-md transition-all duration-200">
-              <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-[#E88A1A] to-[#C97516] flex items-center justify-center text-white text-lg font-bold shrink-0 shadow-md shadow-orange-200/40">
-                {child.first_name?.charAt(0)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-slate-900">{child.first_name} {child.last_name}</p>
-                <p className="text-xs text-slate-500 mt-0.5">Class {child.class_name} · {child.section}</p>
-                <span className={`inline-flex items-center mt-2 text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg ${
-                  child.fee_status === 'paid'
-                    ? 'bg-emerald-50 text-emerald-700'
-                    : 'bg-orange-50 text-orange-600'
-                }`}>
-                  {child.fee_status}
-                </span>
-              </div>
+      {/* Class info card */}
+      {isLinked && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="h-10 w-10 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+              <School className="h-5 w-5 text-blue-600" strokeWidth={1.5} />
             </div>
-          ))}
+            <div>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">My Class</p>
+              <p className="text-lg font-bold text-slate-900">
+                Class {stats.class_name} — Section {displaySection(stats)}
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-slate-50 rounded-xl p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Admission No.</p>
+              <p className="text-sm font-bold text-slate-900 mt-0.5 font-mono">{stats.admission_number || '—'}</p>
+            </div>
+            <div className="bg-slate-50 rounded-xl p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Roll No.</p>
+              <p className="text-sm font-bold text-slate-900 mt-0.5">{stats.roll_number || '—'}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isLinked && (
+        <div className="grid gap-4 md:grid-cols-3">
+          <Stat label="Fee Status"  value={stats.fee_status || 'pending'} />
+          <Stat label="Attendance"  value={`${stats.attendance_percentage ?? 0}%`} />
+
+          {/* Attendance progress card */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+            <div className="h-11 w-11 rounded-xl bg-emerald-50 flex items-center justify-center mb-4">
+              <TrendingUp className="h-5 w-5 text-emerald-600" strokeWidth={1.5} />
+            </div>
+            <div className="flex items-end justify-between mb-3">
+              <p className="text-2xl font-bold text-slate-900 tracking-tight">
+                {stats.attendance_percentage ?? 0}<span className="text-base text-slate-400 font-semibold">%</span>
+              </p>
+              {stats.attendance_percentage != null && (
+                <span className={`text-[11px] font-bold px-2 py-1 rounded-lg ${
+                  stats.attendance_percentage >= 75
+                    ? 'bg-emerald-50 text-emerald-700'
+                    : 'bg-red-50 text-red-600'
+                }`}>
+                  {stats.attendance_percentage >= 75 ? 'On Track' : 'Below 75%'}
+                </span>
+              )}
+            </div>
+            <Progress value={stats.attendance_percentage ?? 0} className="h-2 rounded-full" />
+            <p className="text-xs text-slate-500 mt-2">Attendance Progress</p>
+          </div>
+        </div>
+      )}
+
+      <div>
+        <SectionHeader title="Quick Actions" />
+        <div className="grid gap-3 md:grid-cols-3">
+          <Action title="View Marksheet" desc="Check your results"        icon={FileText}  to="/my-marks" />
+          <Action title="Attendance"     desc="Check attendance record"   icon={Calendar}  to="/my-attendance" />
+          <Action title="Syllabus"       desc="Access study materials"    icon={BookOpen}  to="/syllabus" />
         </div>
       </div>
-    )}
+    </div>
+  );
+};
 
-    <div>
-      <SectionHeader title="Quick Actions" />
-      <div className="grid gap-3 md:grid-cols-3">
-        <Action title="View Fees"   desc="Check fee status"    icon={CreditCard}    to="/my-fees" />
-        <Action title="Messages"    desc="View communications" icon={Bell}          to="/messages" />
-        <Action title="Raise Issue" desc="Report a concern"    icon={AlertTriangle} to="/issues" />
+const ParentDashboard = ({ stats }) => {
+  const hasChildren = stats.children?.length > 0;
+  return (
+    <div className="space-y-8 animate-fade-in">
+      {!hasChildren && (
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 flex items-center gap-4">
+          <div className="h-10 w-10 rounded-xl bg-slate-100 flex items-center justify-center shrink-0">
+            <GraduationCap className="h-5 w-5 text-slate-400" strokeWidth={1.5} />
+          </div>
+          <div>
+            <p className="text-sm font-bold text-slate-900">No Children Linked</p>
+            <p className="text-xs text-slate-500 mt-0.5">Your account has no students linked to it. Please contact the school administrator to link your child's record to this account.</p>
+          </div>
+        </div>
+      )}
+
+      {hasChildren && (
+        <div className="grid gap-4 md:grid-cols-2">
+          <Stat label="Children" value={stats.children_count || 0} />
+          <Stat label="Messages" value={0} />
+        </div>
+      )}
+
+      {hasChildren && (
+        <div>
+          <SectionHeader title="Your Children" />
+          <div className="grid gap-3 md:grid-cols-2">
+            {stats.children.map((child) => (
+              <div key={child.student_id} className="bg-white border border-slate-200 rounded-2xl p-5 flex items-center gap-4 shadow-sm hover:shadow-md transition-all duration-200">
+                <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-[#E88A1A] to-[#C97516] flex items-center justify-center text-white text-lg font-bold shrink-0 shadow-md shadow-orange-200/40">
+                  {child.first_name?.charAt(0)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-slate-900">{child.first_name} {child.last_name}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Class {child.class_name} · {child.section}</p>
+                  <span className={`inline-flex items-center mt-2 text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg ${
+                    child.fee_status === 'paid'
+                      ? 'bg-emerald-50 text-emerald-700'
+                      : 'bg-orange-50 text-orange-600'
+                  }`}>
+                    {child.fee_status}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div>
+        <SectionHeader title="Quick Actions" />
+        <div className="grid gap-3 md:grid-cols-3">
+          <Action title="View Fees"       desc="Check fee status"       icon={CreditCard}    to="/my-fees" />
+          <Action title="Results"         desc="View child's marks"     icon={FileText}      to="/children-marks" />
+          <Action title="Attendance"      desc="Track attendance"       icon={Calendar}      to="/children-attendance" />
+          <Action title="Messages"        desc="View communications"    icon={Bell}          to="/messages" />
+          <Action title="Raise Issue"     desc="Report a concern"       icon={AlertTriangle} to="/issues" />
+        </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 const AccountantDashboard = ({ stats }) => (
   <div className="space-y-8 animate-fade-in">
     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
       <Stat label="Total Students"  value={stats.total_students      || 0} />
-      <Stat label="Month Collection" value={`₹${(stats.month_collection || 0).toLocaleString()}`} />
+      <Stat label="Month Collection" value={`Rs.${(stats.month_collection || 0).toLocaleString()}`} />
       <Stat label="Fee Overdue"     value={stats.fee_overdue_count   || 0} />
       <Stat label="Employees"       value={stats.total_employees     || 0} />
     </div>

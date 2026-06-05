@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import api from '../../lib/api';
 import { clampISODate, todayISO } from '../../lib/dateBounds';
 import { fetchPaymentMethods, PAYMENT_METHODS } from '../../lib/paymentMethods';
@@ -131,11 +131,19 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
   };
 
   const uploadDoc = async (docType, docName, file) => {
+    if (file.size > 5 * 1024 * 1024) { toast.error('File too large. Maximum size is 5 MB.'); return; }
+    const _isPhoto = docType === 'passport_photo';
+    if (_isPhoto && !['image/jpeg','image/png'].includes(file.type) && !/(\.jpe?g|\.png)$/i.test(file.name)) {
+      toast.error('Passport photo must be a JPG or PNG image.'); return;
+    }
+    if (!_isPhoto && file.type !== 'application/pdf' && !/(\.pdf)$/i.test(file.name)) {
+      toast.error('Documents must be uploaded as PDF.'); return;
+    }
     setDocLoading(p => ({ ...p, [docType]: true }));
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const up = await api.post('/upload', fd);
+      const up = await api.post(`/upload?doc_type=${docType}`, fd);
       const { file_url, file_name } = up.data;
       await api.post(`/onboarding/${onbId}/documents`, { document_type: docType, document_name: docName, file_url, file_name });
       setDocs(p => ({ ...p, [docType]: { file_name, file_url, uploaded: true } }));
@@ -148,7 +156,7 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
     if (!docInputRef.current[docType]) {
       const i = document.createElement('input');
       i.type = 'file';
-      i.accept = '.pdf,.jpg,.jpeg,.png';
+      i.accept = docType === 'passport_photo' ? '.jpg,.jpeg,.png' : '.pdf';
       i.onchange = (e) => {
         const f = e.target.files?.[0];
         if (f) {
@@ -233,7 +241,7 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
                 </select>
                 {errors.gender && <div style={sheet.err}><AlertCircle size={12} />{errors.gender}</div>}
               </div>
-              <Input label="Date of Birth" required type="date" max={todayISO()} value={data.date_of_birth} onChange={(e) => { setData({...data, date_of_birth: clampISODate(e.target.value, { max: todayISO() })}); setErrors(p => ({...p, date_of_birth:''})); }} error={errors.date_of_birth} />
+              <Input label="Date of Birth" required type="date" lang="en-IN" max={todayISO()} value={data.date_of_birth} onChange={(e) => { setData({...data, date_of_birth: clampISODate(e.target.value, { max: todayISO() })}); setErrors(p => ({...p, date_of_birth:''})); }} error={errors.date_of_birth} />
               <Input label="Email" type="email" value={data.email} onChange={(e) => { setData({...data, email: e.target.value}); setErrors(p => ({...p, email:''})); }} error={errors.email} />
               <Input label="Phone" required inputMode="numeric" maxLength={10} value={data.phone} onChange={(e) => { const v = e.target.value.replace(/\D/g, '').slice(0, 10); setData({...data, phone: v}); setErrors(p => ({...p, phone:''})); }} error={errors.phone} />
               <Input label="Address" required value={data.address} onChange={(e) => { setData({...data, address: e.target.value}); setErrors(p => ({...p, address:''})); }} error={errors.address} />
@@ -261,7 +269,7 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
                 <label style={sheet.label}>Class <span style={{color:'#dc2626'}}>*</span></label>
                 <select className="m-input" value={classData.class_name} onChange={(e) => setClassData({class_name: e.target.value, section: '', stream: ''})}>
                   <option value="">Select class</option>
-                  {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || `Class ${c.name}`}</option>)}
+                  {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || (c.name.startsWith('Class ') ? c.name : `Class ${c.name}`)}</option>)}
                 </select>
               </div>
               <div style={sheet.field}>
@@ -348,7 +356,7 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
                   );
                 })}
               </div>
-              <p style={{fontSize:10,color:'#888',marginTop:8}}>Accepted: PDF, JPG, PNG · Max 5 MB</p>
+              <p style={{fontSize:10,color:'#888',marginTop:8}}>Passport photo: JPG/PNG · All other documents: PDF · Max 5 MB</p>
             </>
           )}
 
@@ -374,19 +382,19 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
                       <div key={idx} style={{padding:10,borderBottom:'1px solid #F5F5F5'}}>
                         <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
                           <span style={{fontSize:12,color:'#1A1A1A'}}>{fee.label}</span>
-                          <span style={{fontSize:13,fontWeight:700}}>₹{(fee.net_amount||0).toLocaleString()}</span>
+                          <span style={{fontSize:13,fontWeight:700}}>Rs.{(fee.net_amount||0).toLocaleString()}</span>
                         </div>
                         {fee.discount_amount > 0 && (
                           <div style={{fontSize:10,color:'#16a34a',marginTop:2}}>
-                            Gross ₹{(fee.gross_amount||0).toLocaleString()} · Discount -₹{fee.discount_amount.toLocaleString()}
-                            {fee.sibling_discount_amount > 0 && ` (Sibling -₹${fee.sibling_discount_amount.toLocaleString()})`}
+                            Gross Rs.{(fee.gross_amount||0).toLocaleString()} · Discount -Rs.{fee.discount_amount.toLocaleString()}
+                            {fee.sibling_discount_amount > 0 && ` (Sibling -Rs.${fee.sibling_discount_amount.toLocaleString()})`}
                           </div>
                         )}
                       </div>
                     ))}
                     <div style={{padding:12,background:'#F8F8F8',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                       <span style={{fontSize:12,fontWeight:800}}>Total Due at Admission</span>
-                      <span style={{fontSize:16,fontWeight:800,color:'#1A1A1A'}}>₹{(feeData.admission_time_fee||0).toLocaleString()}</span>
+                      <span style={{fontSize:16,fontWeight:800,color:'#1A1A1A'}}>Rs.{(feeData.admission_time_fee||0).toLocaleString()}</span>
                     </div>
                   </div>
                 ) : (
@@ -395,7 +403,7 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
               </div>
 
               {feeData.total_annual_fee > 0 && (
-                <p style={{fontSize:11,color:'#888',textAlign:'right',marginBottom:12}}>Total annual: ₹{(feeData.total_annual_fee||0).toLocaleString()}</p>
+                <p style={{fontSize:11,color:'#888',textAlign:'right',marginBottom:12}}>Total annual: Rs.{(feeData.total_annual_fee||0).toLocaleString()}</p>
               )}
 
               {feeData.fee_breakdown?.length > 0 && (
@@ -403,7 +411,7 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
                   <div style={{padding:'10px 12px',background:'#1A1A1A',color:'#FFF',display:'flex',alignItems:'center',gap:6}}>
                     <CreditCard size={14} />
                     <span style={{fontSize:11,fontWeight:800,textTransform:'uppercase',letterSpacing:'0.06em'}}>
-                      Collect ₹{(feeData.admission_time_fee||0).toLocaleString()}
+                      Collect Rs.{(feeData.admission_time_fee||0).toLocaleString()}
                     </span>
                   </div>
                   <div style={{padding:12}}>
@@ -435,7 +443,7 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
                         ? String(((parseFloat(payment.split_cash) || 0) + (parseFloat(payment.split_online) || 0)) || '')
                         : payment.amount}
                       onChange={(e) => setPayment(p => ({...p, amount: e.target.value}))}
-                      placeholder={`Full: ₹${(feeData.admission_time_fee||0).toLocaleString()}`}
+                      placeholder={`Full: Rs.${(feeData.admission_time_fee||0).toLocaleString()}`}
                     />
                     <Input label="Remarks (optional)" value={payment.remarks} onChange={(e) => setPayment(p => ({...p, remarks: e.target.value}))} placeholder="e.g. Received from father" />
                     <p style={{fontSize:11,color:'#666',background:'#F8F8F8',padding:'8px 10px',borderRadius:8}}>Leave amount blank to collect the full fee, or enter a smaller amount for a partial payment. A receipt is generated after admission is confirmed.</p>

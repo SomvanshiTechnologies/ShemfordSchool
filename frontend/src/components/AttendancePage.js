@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useSession } from '../contexts/SessionContext';
 import SessionDatePicker from './SessionDatePicker';
@@ -40,7 +40,7 @@ const StudentAttendanceView = () => {
     setLoading(true);
     api.get('/attendance', { params: { entity_type: 'student', month: selectedMonth } })
       .then(res => setRecords(res.data))
-      .catch(() => toast.error('Failed to fetch attendance'))
+      .catch((e) => { if (!e?._handled) toast.error('Failed to fetch attendance'); })
       .finally(() => setLoading(false));
   }, [selectedMonth]);
 
@@ -114,7 +114,7 @@ const MarkAttendanceView = () => {
 
   const [selectedClass, setSelectedClass] = useState('');
   const [selectedSection, setSelectedSection] = useState('');
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState('');
 
   // Report
   const [reportSubTab, setReportSubTab] = useState('class');
@@ -129,7 +129,7 @@ const MarkAttendanceView = () => {
   const [alertThreshold, setAlertThreshold] = useState('75');
 
   // Employee attendance
-  const [empAttDate, setEmpAttDate] = useState(new Date().toISOString().split('T')[0]);
+  const [empAttDate, setEmpAttDate] = useState('');
   const [empAttData, setEmpAttData] = useState({});
   const [savingEmpAtt, setSavingEmpAtt] = useState(false);
 
@@ -149,13 +149,21 @@ const MarkAttendanceView = () => {
   // Holiday delete confirmation
   const [deleteHolidayTarget, setDeleteHolidayTarget] = useState(null);
 
-  // Keep the working dates inside the viewed session: when a past/future
-  // session is selected, a date defaulted to the real "today" would fall
-  // outside it, so clamp to the session-aware today.
+  // Track whether the user has manually picked a date. Until they do, the date
+  // always follows sessionToday so both the phase-1 stale value AND the phase-2
+  // corrected value are applied automatically. Refs reset when session switches.
+  const dateUserSet = useRef(false);
+  const empDateUserSet = useRef(false);
+
+  useEffect(() => {
+    dateUserSet.current = false;
+    empDateUserSet.current = false;
+  }, [viewSession]);
+
   useEffect(() => {
     const outOfRange = (d) => d && sessionBounds.start && (d < sessionBounds.start || d > sessionBounds.end);
-    setSelectedDate((d) => (outOfRange(d) ? sessionToday : d));
-    setEmpAttDate((d) => (outOfRange(d) ? sessionToday : d));
+    setSelectedDate((d) => (!dateUserSet.current || outOfRange(d)) ? sessionToday : d);
+    setEmpAttDate((d) => (!empDateUserSet.current || outOfRange(d)) ? sessionToday : d);
     setReportDate((d) => (outOfRange(d) ? '' : d));
   }, [sessionBounds, sessionToday]);
 
@@ -174,34 +182,43 @@ const MarkAttendanceView = () => {
   }, [isAdmin, viewSession]);
 
   useEffect(() => {
-    if (selectedClass && selectedSection && selectedDate) {
-      const cacheKey = `attendance:${viewSession}:${selectedClass}:${selectedSection}:${selectedDate}`;
-      const cached = getCached(cacheKey);
-      if (cached) {
-        setStudents(cached.students);
-        setSessionStatus(cached.sessionStatus);
-        setAttendanceData(cached.attMap);
-        setLoading(false);
-      } else {
-        setLoading(true);
-      }
-      Promise.all([
-        api.get('/students', { params: { class_name: selectedClass, section: selectedSection } }),
-        api.get('/attendance', { params: { entity_type: 'student', date: selectedDate, class_name: selectedClass, section: selectedSection } }),
-        api.get('/attendance/session-status', { params: { class_name: selectedClass, section: selectedSection, date: selectedDate } }),
-      ]).then(([s, a, sess]) => {
-        // Only students admitted on/before the selected date — a student isn't
-        // tracked for attendance before they joined.
-        const studentList = (s.data.students ?? s.data ?? [])
-          .filter(stu => !stu.admission_date || String(stu.admission_date).slice(0, 10) <= selectedDate);
-        const attMap = {};
-        a.data.forEach(r => { attMap[r.entity_id] = r.status; });
-        setStudents(studentList);
-        setSessionStatus(sess.data);
-        setAttendanceData(attMap);
-        setCached(cacheKey, { students: studentList, sessionStatus: sess.data, attMap });
-      }).catch(() => { if (!cached) toast.error('Failed to fetch data'); }).finally(() => setLoading(false));
+    if (!selectedClass || !selectedSection || !selectedDate) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    const cacheKey = `attendance:${viewSession}:${selectedClass}:${selectedSection}:${selectedDate}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      setStudents(cached.students);
+      setSessionStatus(cached.sessionStatus);
+      setAttendanceData(cached.attMap);
+      setLoading(false);
+    } else {
+      // Clear stale holiday banner and data immediately so old date's state
+      // never persists while the new date's request is in flight.
+      setSessionStatus(null);
+      setStudents([]);
+      setAttendanceData({});
+      setLoading(true);
     }
+    Promise.all([
+      api.get('/students', { params: { class_name: selectedClass, section: selectedSection }, signal }),
+      api.get('/attendance', { params: { entity_type: 'student', date: selectedDate, class_name: selectedClass, section: selectedSection }, signal }),
+      api.get('/attendance/session-status', { params: { class_name: selectedClass, section: selectedSection, date: selectedDate }, signal }),
+    ]).then(([s, a, sess]) => {
+      if (signal.aborted) return;
+      const studentList = (s.data.students ?? s.data ?? [])
+        .filter(stu => !stu.admission_date || String(stu.admission_date).slice(0, 10) <= selectedDate);
+      const attMap = {};
+      a.data.forEach(r => { attMap[r.entity_id] = r.status; });
+      setStudents(studentList);
+      setSessionStatus(sess.data);
+      setAttendanceData(attMap);
+      setCached(cacheKey, { students: studentList, sessionStatus: sess.data, attMap });
+    }).catch((e) => {
+      if (e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError') return;
+      if (!cached) toast.error('Failed to fetch data');
+    }).finally(() => { if (!signal.aborted) setLoading(false); });
+    return () => controller.abort();
   }, [selectedClass, selectedSection, selectedDate, viewSession]);
 
   const isLocked = sessionStatus?.is_locked && sessionStatus?.submitted;
@@ -257,7 +274,7 @@ const MarkAttendanceView = () => {
       if (reportDate) params.date = reportDate;
       const res = await api.get('/reports/attendance', { params });
       setReportData(res.data);
-    } catch (error) { toast.error('Failed to fetch report'); }
+    } catch (error) { if (!error?._handled) toast.error('Failed to fetch report'); }
     finally { setReportLoading(false); }
   };
 
@@ -266,7 +283,7 @@ const MarkAttendanceView = () => {
     try {
       const res = await api.get('/attendance/alerts', { params: { threshold: parseFloat(alertThreshold) } });
       setAlerts(res.data);
-    } catch (error) { toast.error('Failed to fetch alerts'); }
+    } catch (error) { if (!error?._handled) toast.error('Failed to fetch alerts'); }
     finally { setAlertsLoading(false); }
   };
 
@@ -405,8 +422,8 @@ const MarkAttendanceView = () => {
               <div className="space-y-1.5">
                 <label className="text-xs font-bold uppercase tracking-wider text-slate-900">Class</label>
                 <Select value={selectedClass} onValueChange={(v) => { setSelectedClass(v); setSelectedSection(''); setSessionStatus(null); }}>
-                  <SelectTrigger className="w-[150px]" data-testid="att-class"><SelectValue placeholder="Select class" /></SelectTrigger>
-                  <SelectContent>{classes.map(c => <SelectItem key={c.name} value={c.name}>Class {c.display_name || c.name}</SelectItem>)}</SelectContent>
+                  <SelectTrigger className="w-[120px]" data-testid="att-class"><SelectValue placeholder="Select class" /></SelectTrigger>
+                  <SelectContent>{classes.map(c => <SelectItem key={c.name} value={c.name}>{c.display_name || (c.name.startsWith('Class ') ? c.name : `Class ${c.name}`)}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
               <div className="space-y-1.5">
@@ -418,7 +435,7 @@ const MarkAttendanceView = () => {
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-bold uppercase tracking-wider text-slate-900">Date</label>
-                <SessionDatePicker value={selectedDate} onChange={setSelectedDate} data-testid="att-date" />
+                <SessionDatePicker value={selectedDate} onChange={(d) => { dateUserSet.current = true; setSelectedDate(d); }} data-testid="att-date" />
               </div>
               {canEdit && students.length > 0 && !isHoliday && (
                 <>
@@ -441,6 +458,15 @@ const MarkAttendanceView = () => {
             <div className="mb-4 flex items-center gap-3 bg-amber-500 text-white px-5 py-3 rounded-xl" data-testid="holiday-banner">
               <Calendar className="h-4 w-4" strokeWidth={1.5} />
               <span className="text-sm font-medium">{selectedDate} is a holiday: {sessionStatus?.holiday_name}. Attendance cannot be marked.</span>
+            </div>
+          )}
+
+          {sessionStatus?.submitted && !isHoliday && (
+            <div className="mb-4 flex items-center gap-2 flex-wrap" data-testid="session-summary">
+              <span className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold">Total <span className="text-base font-black text-slate-900">{sessionStatus.student_count || sessionStatus.success || 0}</span></span>
+              <span className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200">Present <span className="text-base font-black text-emerald-800">{sessionStatus.present_count || sessionStatus.present || 0}</span></span>
+              <span className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-red-50 text-red-700 text-xs font-bold border border-red-200">Absent <span className="text-base font-black text-red-800">{sessionStatus.absent_count || sessionStatus.absent || 0}</span></span>
+              <span className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-50 text-slate-600 text-xs font-bold border border-slate-200">Leave <span className="text-base font-black text-slate-700">{sessionStatus.leave_count || sessionStatus.leave || 0}</span></span>
             </div>
           )}
 
@@ -504,14 +530,6 @@ const MarkAttendanceView = () => {
             )}
           </div>
 
-          {sessionStatus?.submitted && !isHoliday && (
-            <div className="mt-4 grid grid-cols-4 gap-4" data-testid="session-summary">
-              <div className="bg-slate-50 p-4 rounded-2xl text-center"><p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Total</p><p className="text-xl font-bold text-slate-900">{sessionStatus.student_count || sessionStatus.success || 0}</p></div>
-              <div className="bg-slate-50 p-4 rounded-2xl text-center"><p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Present</p><p className="text-xl font-bold text-slate-900">{sessionStatus.present_count || sessionStatus.present || 0}</p></div>
-              <div className="bg-slate-50 p-4 rounded-2xl text-center"><p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Absent</p><p className="text-xl font-bold text-slate-900">{sessionStatus.absent_count || sessionStatus.absent || 0}</p></div>
-              <div className="bg-slate-50 p-4 rounded-2xl text-center"><p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Leave</p><p className="text-xl font-bold text-slate-900">{sessionStatus.leave_count || sessionStatus.leave || 0}</p></div>
-            </div>
-          )}
         </TabsContent>
 
         {/* ====== EMPLOYEE ATTENDANCE ====== */}
@@ -522,7 +540,7 @@ const MarkAttendanceView = () => {
               <div className="flex flex-col sm:flex-row gap-4 items-end flex-wrap">
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold uppercase tracking-wider text-slate-900">Date</label>
-                  <SessionDatePicker value={empAttDate} onChange={setEmpAttDate} data-testid="emp-att-date" />
+                  <SessionDatePicker value={empAttDate} onChange={(d) => { empDateUserSet.current = true; setEmpAttDate(d); }} data-testid="emp-att-date" />
                 </div>
                 <Button variant="outline" className="rounded-xl text-xs" onClick={() => {
                   const n = {};
@@ -922,7 +940,7 @@ const MarkAttendanceView = () => {
                           const updated = [...bulkUnlockSessions]; updated[i] = { ...s, class_name: v, section: '' }; setBulkUnlockSessions(updated);
                         }}>
                           <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Select class" /></SelectTrigger>
-                          <SelectContent>{classes.map(c => <SelectItem key={c.name} value={c.name}>{c.display_name || `Class ${c.name}`}</SelectItem>)}</SelectContent>
+                          <SelectContent>{classes.map(c => <SelectItem key={c.name} value={c.name}>{c.display_name || (c.name.startsWith('Class ') ? c.name : `Class ${c.name}`)}</SelectItem>)}</SelectContent>
                         </Select>
                       </div>
                       <div className="space-y-1 flex-1 min-w-[100px]">

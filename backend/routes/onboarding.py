@@ -512,14 +512,10 @@ async def complete_onboarding(onboarding_id: str, request: Request):
             p_dict["password_hash"] = hash_password(temp_password)
             p_dict["created_at"] = p_dict["created_at"].isoformat()
             await db.users.insert_one(p_dict)
-            # Persist plaintext temp password on student record so admin can view/share later.
-            # Security note: this is a deliberate UX choice for an offline-first school admin —
-            # treat the students collection as sensitive.
             await db.students.update_one(
                 {"student_id": student_obj.student_id},
                 {"$set": {
                     "parent_id": parent_obj.user_id,
-                    "parent_temp_password": temp_password,
                 }}
             )
             parent_account = {
@@ -567,7 +563,6 @@ async def complete_onboarding(onboarding_id: str, request: Request):
             {"$set": {
                 "user_id": student_user.user_id,
                 "email": student_email,
-                "temp_password": student_temp_password,
             }}
         )
         student_account = {

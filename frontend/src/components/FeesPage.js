@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+﻿import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useSession } from '../contexts/SessionContext';
 import api from '../lib/api';
 import { getCached, setCached } from '../lib/pageCache';
-import { PAYMENT_METHODS_WITH_POS, fetchPaymentMethods } from '../lib/paymentMethods';
+import { PAYMENT_METHODS_WITH_POS, fetchPaymentMethods, fmtPaymentMethod } from '../lib/paymentMethods';
 import { clampISODate } from '../lib/dateBounds';
 
 const TopProgressBar = ({ active }) =>
@@ -75,17 +75,17 @@ const ACADEMIC_YEARS = [CURRENT_YEAR,
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
 
-const fmt = (n) => n != null ? `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 0 })}` : '—';
+const fmt = (n) => n != null ? `Rs.${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 0 })}` : '—';
 
-// Date helpers: backend uses YYYY-MM-DD, UI collects/displays DD-MM-YYYY
+// Date helpers: backend uses YYYY-MM-DD, UI collects/displays DD/MM/YYYY
 const isoToDDMMYYYY = (iso) => {
   if (!iso) return '';
   const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return m ? `${m[3]}-${m[2]}-${m[1]}` : '';
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : '';
 };
 const ddmmyyyyToIso = (str) => {
   if (!str) return '';
-  const m = String(str).trim().match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  const m = String(str).trim().match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
   if (!m) return '';
   const [, dd, mm, yyyy] = m;
   const d = new Date(`${yyyy}-${mm}-${dd}T00:00:00`);
@@ -415,7 +415,7 @@ const FeesPage = () => {
     if (!payLedgerIds.length) { toast.error('Select at least one entry to pay'); return; }
     const isoPaymentDate = payForm.payment_date ? ddmmyyyyToIso(payForm.payment_date) : '';
     if (payForm.payment_date && !isoPaymentDate) {
-      toast.error('Payment date must be in DD-MM-YYYY format');
+      toast.error('Payment date must be in DD/MM/YYYY format');
       return;
     }
     if (isoPaymentDate && isoPaymentDate > new Date().toISOString().slice(0, 10)) {
@@ -1045,7 +1045,7 @@ const FeesPage = () => {
                         <p className="text-sm text-slate-600">{s.section || '—'}</p>
                         <p className="text-sm text-slate-600">{s.academic_year || viewSession || '—'}</p>
                         <div>
-                          <p className="text-sm font-bold text-red-600">₹{Number(s.total_due || 0).toLocaleString('en-IN')}</p>
+                          <p className="text-sm font-bold text-red-600">Rs.{Number(s.total_due || 0).toLocaleString('en-IN')}</p>
                           {s.entries_overdue > 0 && <p className="text-[10px] text-red-400">{s.entries_overdue} overdue</p>}
                         </div>
                       </button>
@@ -1322,6 +1322,19 @@ const FeesPage = () => {
         {/* ════════════ MY FEES / STUDENT VIEW ════════════ */}
         <TabsContent value="my-fees">
           <div className="space-y-4">
+            {(isParent || isStudent) && myChildren.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-16 text-center gap-3">
+                <div className="h-14 w-14 rounded-2xl bg-slate-100 flex items-center justify-center">
+                  <CreditCard className="h-7 w-7 text-slate-400" strokeWidth={1.5} />
+                </div>
+                <p className="text-sm font-bold text-slate-700">
+                  {isParent ? 'No children linked to your account' : 'No student record linked to your account'}
+                </p>
+                <p className="text-xs text-slate-400 max-w-xs">
+                  Please contact the school administrator to link {isParent ? "your child's record" : 'your student record'} to this account.
+                </p>
+              </div>
+            )}
             {(isParent || isStudent) && myChildren.length > 1 && (
               <div className="max-w-sm">
                 <Label className="text-xs font-bold uppercase tracking-wider">Select Child</Label>
@@ -1411,7 +1424,7 @@ const FeesPage = () => {
                         <p className="text-sm text-slate-600 font-mono">{s.admission_number || '—'}</p>
                         <p className="text-sm text-slate-600">{s.class_name}-{s.section}{s.stream ? ` (${s.stream})` : ''}</p>
                         <div className="text-right">
-                          <p className="text-sm font-bold text-red-600">₹{Number(s.total_due || 0).toLocaleString('en-IN')}</p>
+                          <p className="text-sm font-bold text-red-600">Rs.{Number(s.total_due || 0).toLocaleString('en-IN')}</p>
                           {s.entries_overdue > 0 && <p className="text-[10px] text-red-400">{s.entries_overdue} overdue</p>}
                         </div>
                       </button>
@@ -1533,7 +1546,7 @@ const FeesPage = () => {
                   <div key={comp.key}>
                     <Label className="text-xs font-semibold text-slate-900">{comp.label}</Label>
                     <div className="flex items-center mt-1 gap-1.5">
-                      <span className="text-xs text-slate-500">₹</span>
+                      <span className="text-xs text-slate-500">Rs.</span>
                       <Input
                         type="number"
                         min={0}
@@ -1561,9 +1574,9 @@ const FeesPage = () => {
                 />
               </div>
               <div>
-                <Label className="text-xs font-bold uppercase tracking-wider">Sibling — Admission Disc ₹</Label>
+                <Label className="text-xs font-bold uppercase tracking-wider">Sibling — Admission Disc Rs.</Label>
                 <div className="flex items-center mt-1 gap-1.5">
-                  <span className="text-xs text-slate-500">₹</span>
+                  <span className="text-xs text-slate-500">Rs.</span>
                   <Input
                     type="number" min={0}
                     className="mt-0 h-8 text-sm"
@@ -1573,9 +1586,9 @@ const FeesPage = () => {
                 </div>
               </div>
               <div>
-                <Label className="text-xs font-bold uppercase tracking-wider">Sibling — Tuition Disc ₹</Label>
+                <Label className="text-xs font-bold uppercase tracking-wider">Sibling — Tuition Disc Rs.</Label>
                 <div className="flex items-center mt-1 gap-1.5">
-                  <span className="text-xs text-slate-500">₹</span>
+                  <span className="text-xs text-slate-500">Rs.</span>
                   <Input
                     type="number" min={0}
                     className="mt-0 h-8 text-sm"
@@ -1666,6 +1679,7 @@ const FeesPage = () => {
               <Label className="text-xs font-bold uppercase tracking-wider">Payment Date</Label>
               <Input
                 type="date"
+                lang="en-IN"
                 className="mt-1 h-9 text-sm"
                 min={sessionBounds?.start || undefined}
                 max={sessionBounds?.end || undefined}
@@ -1695,14 +1709,14 @@ const FeesPage = () => {
                     max={remaining}
                     readOnly={payForm.method === 'split'}
                     className={`mt-1 h-9 text-sm ${payForm.method === 'split' ? 'bg-slate-50 text-slate-500 cursor-not-allowed' : ''}`}
-                    placeholder={`Full: ₹${remaining.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`}
+                    placeholder={`Full: Rs.${remaining.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`}
                     value={payForm.method === 'split'
                       ? (((parseFloat(payForm.split_cash) || 0) + (parseFloat(payForm.split_online) || 0)) || '')
                       : payForm.partial_amount}
                     onChange={e => setPayForm(f => ({ ...f, partial_amount: e.target.value }))}
                   />
                   <p className="text-[10px] text-slate-400 mt-1">
-                    Remaining on this entry: ₹{remaining.toLocaleString('en-IN', { maximumFractionDigits: 2 })}.
+                    Remaining on this entry: Rs.{remaining.toLocaleString('en-IN', { maximumFractionDigits: 2 })}.
                     Enter a smaller amount to record a partial payment.
                   </p>
                 </div>
@@ -2146,20 +2160,20 @@ const LedgerView = ({
                 {` · ${student.academic_year}`}
               </p>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-3">
               <div className="text-right">
                 <p className="text-xs text-slate-500 uppercase tracking-wider">Total Pending</p>
-                <p className="text-xl font-bold text-red-600">{fmt(summary.total_pending)}</p>
+                <p className="text-base sm:text-xl font-bold text-red-600">{fmt(summary.total_pending)}</p>
               </div>
               {summary.total_overdue > 0 && (
                 <div className="text-right">
                   <p className="text-xs text-slate-500 uppercase tracking-wider">Overdue</p>
-                  <p className="text-xl font-bold text-red-700">{fmt(summary.total_overdue)}</p>
+                  <p className="text-base sm:text-xl font-bold text-red-700">{fmt(summary.total_overdue)}</p>
                 </div>
               )}
               <div className="text-right">
                 <p className="text-xs text-slate-500 uppercase tracking-wider">Paid</p>
-                <p className="text-xl font-bold text-green-600">{fmt(summary.total_paid)}</p>
+                <p className="text-base sm:text-xl font-bold text-green-600">{fmt(summary.total_paid)}</p>
               </div>
             </div>
           </div>
@@ -2172,6 +2186,11 @@ const LedgerView = ({
             {summary.total_concession > 0 && (
               <span className="text-xs px-2 py-1 bg-green-50 text-green-700 rounded">
                 Concession: -{fmt(summary.total_concession)}
+              </span>
+            )}
+            {summary.total_late_fees > 0 && (
+              <span className="text-xs px-2 py-1 bg-orange-50 text-orange-700 rounded">
+                Late fees: +{fmt(summary.total_late_fees)}
               </span>
             )}
             <span className="text-xs px-2 py-1 bg-slate-100 rounded text-slate-600">
@@ -2297,6 +2316,7 @@ const LedgerView = ({
             </button>
 
             {expanded && (
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow className="bg-white border-b border-slate-100">
@@ -2379,6 +2399,7 @@ const LedgerView = ({
                   ))}
                 </TableBody>
               </Table>
+              </div>
             )}
           </div>
         );
@@ -2390,6 +2411,7 @@ const LedgerView = ({
           <div className="px-4 py-3 bg-slate-50 font-bold text-sm text-slate-900">
             Payment History
           </div>
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow className="bg-white border-b border-slate-100">
@@ -2404,7 +2426,7 @@ const LedgerView = ({
                   <TableCell className="text-xs font-mono font-semibold text-slate-900">{p.receipt_number}</TableCell>
                   <TableCell className="text-sm">{isoToDDMMYYYY(p.payment_date) || p.payment_date}</TableCell>
                   <TableCell className="font-bold text-green-700">{fmt(p.amount)}</TableCell>
-                  <TableCell className="text-sm capitalize">{p.payment_method}</TableCell>
+                  <TableCell className="text-sm">{fmtPaymentMethod(p.payment_method)}</TableCell>
                   <TableCell className="text-xs text-slate-500">{p.transaction_id || '—'}</TableCell>
                   <TableCell>
                     <Button
@@ -2419,6 +2441,7 @@ const LedgerView = ({
               ))}
             </TableBody>
           </Table>
+          </div>
         </div>
       )}
     </div>

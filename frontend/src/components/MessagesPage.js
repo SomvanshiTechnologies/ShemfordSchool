@@ -83,7 +83,7 @@ const MessagesPage = () => {
       else setSentMessages(response.data);
       setCached(cacheKey, response.data);
     } catch (error) {
-      if (!cached) toast.error('Failed to fetch messages');
+      if (!cached && !error?._handled) toast.error('Failed to fetch messages');
     } finally {
       setLoading(false);
     }
@@ -218,7 +218,7 @@ const MessagesPage = () => {
                     <Select value={selectedClass} onValueChange={(v) => { setSelectedClass(v); setSelectedSection(''); }}>
                       <SelectTrigger><SelectValue placeholder="Choose class" /></SelectTrigger>
                       <SelectContent>
-                        {classes.map(c => <SelectItem key={c.class_id || c.name} value={c.name}>{c.display_name || `Class ${c.name}`}</SelectItem>)}
+                        {classes.map(c => <SelectItem key={c.class_id || c.name} value={c.name}>{c.display_name || (c.name.startsWith('Class ') ? c.name : `Class ${c.name}`)}</SelectItem>)}
                       </SelectContent>
                     </Select>
                   </div>

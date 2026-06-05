@@ -45,15 +45,15 @@ const MPager = ({ page, total, onPage }) => {
 };
 
 const TabBar = ({ tabs, active, onChange }) => (
-  <div style={{display:'flex',gap:6,padding:4,background:'#F0F0F0',borderRadius:12,marginBottom:12,overflowX:'auto'}}>
+  <div style={{display:'flex',gap:6,padding:4,background:'transparent',borderRadius:12,marginBottom:12,overflowX:'auto',scrollbarWidth:'none',msOverflowStyle:'none'}}>
     {tabs.map(t => (
       <button key={t.key} onClick={() => onChange(t.key)}
         style={{
-          flex:1,minWidth:'fit-content',padding:'8px 12px',borderRadius:8,border:'none',
+          flex:1,minWidth:'fit-content',padding:'8px 12px',borderRadius:12,border:'none',
           background: active === t.key ? '#FFF' : 'transparent',
           color: active === t.key ? '#1A1A1A' : '#888',
           fontSize:12,fontWeight:700,cursor:'pointer',
-          boxShadow: active === t.key ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+          boxShadow: active === t.key ? '0 1px 4px rgba(0,0,0,0.10)' : 'none',
           whiteSpace:'nowrap',
         }}
         data-testid={`m-marks-tab-${t.key}`}
@@ -968,7 +968,7 @@ const ExamFormSheet = ({ classes, subjects, onClose, onCreated }) => {
           <label style={formLabel}>Class</label>
           <select className="m-input" value={form.class_name} onChange={(e) => setForm(p => ({ ...p, class_name: e.target.value }))}>
             <option value="">Select</option>
-            {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || `Class ${c.name}`}</option>)}
+            {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || (c.name.startsWith('Class ') ? c.name : `Class ${c.name}`)}</option>)}
           </select>
         </div>
       </div>

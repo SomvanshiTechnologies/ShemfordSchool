@@ -1,4 +1,4 @@
-"""
+﻿"""
 Shemford Futuristic School — Component-Based Fee Management System
 
 Fee structure:
@@ -36,6 +36,43 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
+
+# ── Unicode font for Rs. symbol ──────────────────────────────────────────────────
+import os as _os
+from reportlab.pdfbase import pdfmetrics as _pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont as _TTFont
+
+_PDF_FONT_REG  = "Helvetica"
+_PDF_FONT_BOLD = "Helvetica-Bold"
+
+for _reg, _bold in [
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+    ("/usr/share/fonts/dejavu/DejaVuSans.ttf",
+     "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"),
+    ("C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf"),
+]:
+    if _os.path.exists(_reg):
+        try:
+            _pdfmetrics.registerFont(_TTFont("_FeesSans", _reg))
+            _pdfmetrics.registerFont(_TTFont("_FeesSans-Bold",
+                                             _bold if _os.path.exists(_bold) else _reg))
+            _PDF_FONT_REG  = "_FeesSans"
+            _PDF_FONT_BOLD = "_FeesSans-Bold"
+        except Exception:
+            pass
+        break
+
+
+def _iso_to_dmy(s) -> str:
+    """Convert YYYY-MM-DD to DD/MM/YYYY for PDF/report display."""
+    if not s:
+        return "—"
+    s = str(s)
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+        return f"{s[8:10]}/{s[5:7]}/{s[0:4]}"
+    return s
+
 
 from database import db, client as mongo_client
 from models import (
@@ -431,7 +468,7 @@ async def create_admission_ledger(student: dict, cfg: dict, academic_year: str, 
         disc_reason = None
         if cfg_field == "admission_fee" and sibling_adm_disc > 0:
             disc = min(sibling_adm_disc, gross)  # Don't discount more than the fee
-            disc_reason = f"Sibling discount (₹{disc})" if disc > 0 else None
+            disc_reason = f"Sibling discount (Rs.{disc})" if disc > 0 else None
         net = gross - disc
         yr, mn = admission_month.split("-")
         due_date = f"{yr}-{mn}-{str(due_day).zfill(2)}"
@@ -487,7 +524,7 @@ async def create_admission_ledger(student: dict, cfg: dict, academic_year: str, 
     tuition = cfg.get("monthly_tuition", 0)
     if tuition > 0:
         disc_amt = min(sibling_tuit_disc, tuition) if sibling_tuit_disc > 0 else 0  # Don't discount more than tuition
-        disc_reason = f"Sibling discount (₹{disc_amt})" if disc_amt > 0 else None
+        disc_reason = f"Sibling discount (Rs.{disc_amt})" if disc_amt > 0 else None
         net_tuition = tuition - disc_amt
 
         for month_str in remaining_months:
@@ -894,6 +931,7 @@ async def get_student_ledger(student_id: str, request: Request):
 
     total_gross = round(sum(e["gross_amount"] for e in entries), 2)
     total_concession = round(sum(e.get("concession_amount", 0) for e in entries), 2)
+    total_late_fees = round(sum(e.get("late_fee_applied", 0) for e in entries), 2)
     total_paid_amount = round(sum(p["amount"] for p in payments), 2)
     total_pending = round(
         _sum(entries, ["pending", "overdue"]) +
@@ -924,6 +962,7 @@ async def get_student_ledger(student_id: str, request: Request):
         "summary": {
             "total_gross": total_gross,
             "total_concession": total_concession,
+            "total_late_fees": total_late_fees,
             "total_paid": total_paid_amount,
             "total_pending": total_pending,
             "total_overdue": total_overdue,
@@ -1130,10 +1169,10 @@ async def record_admission_payment(request: Request):
     pay_dict.pop("_id", None)
     balance_due = round(total_amount - collect_total, 2)
     if is_partial:
-        msg = (f"Partial admission payment of ₹{collect_total:,.2f} recorded. "
-               f"₹{balance_due:,.2f} still due. Receipt: {receipt_number}")
+        msg = (f"Partial admission payment of Rs.{collect_total:,.2f} recorded. "
+               f"Rs.{balance_due:,.2f} still due. Receipt: {receipt_number}")
     else:
-        msg = f"Admission fee of ₹{collect_total:,.2f} recorded. Receipt: {receipt_number}"
+        msg = f"Admission fee of Rs.{collect_total:,.2f} recorded. Receipt: {receipt_number}"
     return {
         "payment": pay_dict,
         "receipt_number": receipt_number,
@@ -1232,7 +1271,7 @@ async def generate_monthly_fees(request: Request):
             month=month_str,
             gross_amount=tuition,
             concession_amount=disc_amt,
-            concession_reason=f"Sibling discount (₹{disc_amt})" if disc_amt > 0 else None,
+            concession_reason=f"Sibling discount (Rs.{disc_amt})" if disc_amt > 0 else None,
             net_amount=net,
             due_date=due_date,
             status="pending",
@@ -1461,13 +1500,13 @@ async def pay_fee(request: Request):
     }, user)
 
     pay_dict.pop("_id", None)
-    msg = f"Payment of ₹{total:,.2f} recorded. Receipt: {receipt_number}"
+    msg = f"Payment of Rs.{total:,.2f} recorded. Receipt: {receipt_number}"
     if is_partial:
         # Balance still owed across the entries that were selected for this payment.
         new_remaining = round(total_due - total, 2)
         if new_remaining < 0: new_remaining = 0
-        msg = (f"Partial payment of ₹{total:,.2f} recorded. "
-               f"₹{new_remaining:,.2f} still due. Receipt: {receipt_number}")
+        msg = (f"Partial payment of Rs.{total:,.2f} recorded. "
+               f"Rs.{new_remaining:,.2f} still due. Receipt: {receipt_number}")
     return {
         "payment": pay_dict,
         "receipt_number": receipt_number,
@@ -1797,7 +1836,7 @@ async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Opt
             entries = [scoped]
             scoped_entry = scoped
             # All payments that touched this fee — so the receipt lists each
-            # part-payment (e.g. ₹500 + ₹500) with a running total + balance.
+            # part-payment (e.g. Rs.500 + Rs.500) with a running total + balance.
             entry_payments = await db.fee_payments.find(
                 {"student_id": payment["student_id"], "installment_ids": ledger_id}, {"_id": 0}
             ).to_list(200)
@@ -1833,7 +1872,7 @@ async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Opt
                                  fontSize=16, alignment=TA_CENTER, textColor=orange)
     sub_style = ParagraphStyle("Sub", parent=styles["Normal"],
                                 fontSize=9, alignment=TA_CENTER, textColor=colors.grey)
-    normal_bold = ParagraphStyle("NB", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=9)
+    normal_bold = ParagraphStyle("NB", parent=styles["Normal"], fontName=_PDF_FONT_BOLD, fontSize=9)
 
     elements.append(Paragraph("SHEMFORD FUTURISTIC SCHOOL", title_style))
     elements.append(Paragraph("Katwa, West Bengal | CBSE Affiliated | Empowering Futures", sub_style))
@@ -1844,7 +1883,7 @@ async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Opt
     div_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), orange),
         ("TEXTCOLOR", (0, 0), (-1, -1), colors.white),
-        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+        ("FONTNAME", (0, 0), (-1, -1), _PDF_FONT_BOLD),
         ("FONTSIZE", (0, 0), (-1, -1), 11),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
         ("PADDING", (0, 0), (-1, -1), 6),
@@ -1866,21 +1905,12 @@ async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Opt
         class_label = f"{_cls} – {_section}" if _section else _cls
         stream_label = _stream.title() if _stream else "—"
 
-    # Show the split breakdown inline on the method line when present. The
-    # breakdown can be long, so render it as a wrapping Paragraph instead of a
-    # plain string — otherwise it overflows the cell and overlaps the Txn ID
-    # column.
-    _method_label = (payment.get("payment_method", "") or "").upper()
-    _split = payment.get("split_payments")
-    if _split and isinstance(_split, dict):
-        _parts = " + ".join(f"{k.title()} Rs.{float(v):,.2f}" for k, v in _split.items() if float(v) > 0)
-        if _parts:
-            _method_label = f"SPLIT ({_parts})"
+    _method_label = (payment.get("payment_method", "") or "").replace("_", " ").upper()
     _info_val_style = ParagraphStyle("InfoVal", parent=styles["Normal"], fontSize=9, leading=11)
     _method_cell = Paragraph(_method_label, _info_val_style)
 
     info_data = [
-        ["Receipt No.", payment.get("receipt_number", ""), "Date", payment.get("payment_date", "")],
+        ["Receipt No.", payment.get("receipt_number", ""), "Date", _iso_to_dmy(payment.get("payment_date", ""))],
         ["Student Name", f"{student['first_name']} {student['last_name']}",
          "Admission No.", student.get("admission_number", "")],
         ["Class", class_label, "Stream", stream_label],
@@ -1891,9 +1921,9 @@ async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Opt
     info_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f5f5f5")),
         ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#f5f5f5")),
-        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"), ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-        ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
+        ("FONTNAME", (0, 0), (-1, -1), _PDF_FONT_REG), ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("FONTNAME", (0, 0), (0, -1), _PDF_FONT_BOLD),
+        ("FONTNAME", (2, 0), (2, -1), _PDF_FONT_BOLD),
         ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey), ("PADDING", (0, 0), (-1, -1), 6),
     ]))
     elements.append(info_table)
@@ -1922,44 +1952,43 @@ async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Opt
 
         hist_method_style = ParagraphStyle("HistMethod2", parent=styles["Normal"], fontSize=8, leading=9)
         hist = [["#", "Date", "Method", "Amount (Rs.)"]]
-        listed_total = 0.0
         idx = 0
+        remaining = paid_total   # budget = what was actually paid on THIS fee
         for p in entry_payments:   # every payment toward this fee, oldest-first
-            amt = round(float(p.get("amount", 0)), 2)
-            if amt <= 0:
+            if remaining <= 0:
+                break
+            full_amt = round(float(p.get("amount", 0)), 2)
+            if full_amt <= 0:
                 continue
-            method_label = (p.get("payment_method", "") or "").upper()
-            sp = p.get("split_payments")
-            if sp and isinstance(sp, dict):
-                parts = " + ".join(f"{k.title()} Rs.{float(v):,.2f}" for k, v in sp.items() if float(v) > 0)
-                if parts:
-                    method_label = f"SPLIT<br/><font size=7 color='#64748b'>{parts}</font>"
+            # A payment may cover several fees; take only the portion that
+            # applies to this fee (never exceed what's left of paid_total).
+            row_amt = round(min(full_amt, remaining), 2)
+            remaining = round(remaining - row_amt, 2)
+            method_label = (p.get("payment_method", "") or "").replace("_", " ").upper()
             idx += 1
             hist.append([
                 str(idx),
-                str(p.get("payment_date") or p.get("created_at", ""))[:10],
+                _iso_to_dmy(p.get("payment_date") or p.get("created_at", "")),
                 Paragraph(method_label, hist_method_style),
-                f"{amt:,.2f}",
+                f"{row_amt:,.2f}",
             ])
-            listed_total = round(listed_total + amt, 2)
         if idx == 0:   # no linked payment rows — fall back to the entry's paid total
-            hist.append(["1", str(payment.get("payment_date") or "")[:10], "—", f"{paid_total:,.2f}"])
-            listed_total = paid_total
-        hist.append(["", "", "TOTAL PAID", f"{listed_total:,.2f}"])
+            hist.append(["1", _iso_to_dmy(payment.get("payment_date") or ""), "—", f"{paid_total:,.2f}"])
+        hist.append(["", "", "TOTAL PAID", f"{paid_total:,.2f}"])
 
         htbl = Table(hist, colWidths=[0.4 * inch, 1.5 * inch, 3.0 * inch, 1.6 * inch])
         htbl.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), orange),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+            ("FONTNAME", (0, 0), (-1, 0), _PDF_FONT_BOLD),
+            ("FONTNAME", (0, 1), (-1, -1), _PDF_FONT_REG),
             ("FONTSIZE", (0, 0), (-1, -1), 8),
             ("ALIGN", (3, 0), (3, -1), "RIGHT"),
             ("ALIGN", (2, -1), (2, -1), "RIGHT"),
             ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
             ("PADDING", (0, 0), (-1, -1), 5),
             ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f5f5f5")),
-            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+            ("FONTNAME", (0, -1), (-1, -1), _PDF_FONT_BOLD),
             ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#fafafa")]),
         ]))
         elements.append(htbl)
@@ -1988,15 +2017,15 @@ async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Opt
         fee_table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), orange),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+            ("FONTNAME", (0, 0), (-1, 0), _PDF_FONT_BOLD),
+            ("FONTNAME", (0, 1), (-1, -1), _PDF_FONT_REG),
             ("FONTSIZE", (0, 0), (-1, -1), 8),
             ("ALIGN", (2, 0), (2, -1), "RIGHT"),
             ("ALIGN", (1, -1), (1, -1), "RIGHT"),
             ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
             ("PADDING", (0, 0), (-1, -1), 5),
             ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f5f5f5")),
-            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+            ("FONTNAME", (0, -1), (-1, -1), _PDF_FONT_BOLD),
             ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#fafafa")]),
         ]))
         elements.append(fee_table)
@@ -2504,10 +2533,8 @@ def _fmt_fee_types(v) -> str:
 
 
 def _fmt_inr(v) -> str:
-    # Reportlab's default Helvetica has no ₹ glyph → PDF viewers show a tofu box.
-    # `Rs.` is the universally-rendered fallback used across Indian admin software.
     try:
-        return f"Rs. {float(v):,.2f}"
+        return f"Rs.{float(v):,.2f}"
     except Exception:
         return str(v) if v not in (None, "") else "—"
 
@@ -2522,7 +2549,7 @@ def _fmt_date(v) -> str:
         return "—"
     s = str(v)
     if len(s) >= 10 and s[4] == "-" and s[7] == "-":
-        return f"{s[8:10]}-{s[5:7]}-{s[0:4]}"
+        return f"{s[8:10]}/{s[5:7]}/{s[0:4]}"
     return s
 
 
@@ -2546,9 +2573,9 @@ DUE_EXPORT_COLUMNS = [
     ("Class (Section)",  "class_section",     _fmt_str,        "L"),
     ("Fees Type",        "fee_types",         _fmt_fee_types,  "L"),
     ("Oldest Due",       "oldest_due",        _fmt_date,       "C"),
-    ("Amount (Rs.)",     "amount",            _fmt_inr,        "R"),
-    ("Paid (Rs.)",       "paid",              _fmt_inr,        "R"),
-    ("Balance (Rs.)",    "balance",           _fmt_inr,        "R"),
+    ("Amount (Rs.)",   "amount",            _fmt_inr,        "R"),
+    ("Paid (Rs.)",     "paid",              _fmt_inr,        "R"),
+    ("Balance (Rs.)",  "balance",           _fmt_inr,        "R"),
 ]
 
 
@@ -2699,7 +2726,7 @@ def _build_pdf(title: str, columns: list, rows: list) -> io.BytesIO:
     style_cmds = [
         ("BACKGROUND",   (0, 0), (-1, 0), colors.HexColor(HEADER_BG)),
         ("TEXTCOLOR",    (0, 0), (-1, 0), colors.HexColor(HEADER_FG)),
-        ("FONTNAME",     (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME",     (0, 0), (-1, 0), _PDF_FONT_BOLD),
         ("FONTSIZE",     (0, 0), (-1, 0), 8.5),
         ("FONTSIZE",     (0, 1), (-1, -1), 7.5),
         ("GRID",         (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),

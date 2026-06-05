@@ -67,7 +67,7 @@ const IssuesPage = () => {
       setIssues(response.data);
       setCached(cacheKey, response.data);
     } catch (error) {
-      if (!cached) toast.error('Failed to fetch issues');
+      if (!cached && !error?._handled) toast.error('Failed to fetch issues');
     } finally {
       setLoading(false);
     }

@@ -30,6 +30,7 @@ const ALL_MENU_ITEMS = [
   { name: "Children's Attendance",  icon: Calendar,         path: '/children-attendance', roles: ['parent'] },
   { name: 'Marks',                  icon: FileText,         path: '/marks',               roles: ['admin', 'teacher'] },
   { name: 'My Marks',               icon: FileText,         path: '/my-marks',            roles: ['student'] },
+  { name: "Children's Results",     icon: FileText,         path: '/children-marks',      roles: ['parent'] },
   { name: 'Syllabus',               icon: BookOpen,         path: '/syllabus',            roles: ['teacher', 'student', 'parent'] },
   { name: 'Fees',                   icon: CreditCard,       path: '/fees',                roles: ['admin', 'accountant'] },
   { name: 'My Fees',                icon: CreditCard,       path: '/my-fees',             roles: ['student', 'parent'] },
@@ -48,7 +49,7 @@ const ALL_MENU_ITEMS = [
 
 const SIDEBAR_SECTIONS = [
   { label: null,             names: ['Dashboard'] },
-  { label: 'Academic',      names: ['Students', 'Classes', 'Attendance', 'My Attendance', "Children's Attendance", 'Marks', 'My Marks', 'Syllabus'] },
+  { label: 'Academic',      names: ['Students', 'Classes', 'Attendance', 'My Attendance', "Children's Attendance", 'Marks', 'My Marks', "Children's Results", 'Syllabus'] },
   { label: 'Finance',       names: ['Fees', 'My Fees', 'Payroll'] },
   { label: 'Administration',names: ['Employees', 'Users', 'Announcements', 'Reports', 'Upgradation', 'Audit Trails'] },
   { label: 'Community',     names: ['Issues', 'Messages', 'Deletion Requests'] },

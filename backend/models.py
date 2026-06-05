@@ -641,9 +641,12 @@ class PayrollRecord(BaseModel):
     # Calculation
     gross_salary: float         # (working_days / total_days) * monthly_salary
     lwp_deduction: float        # lwp_days * per_day_salary
+    pf_deduction: float = 0.0   # Provident Fund — 12% of salary capped at Rs.15,000
+    esi_deduction: float = 0.0  # ESI — 0.75% of gross (only if gross <= Rs.21,000)
+    tds_deduction: float = 0.0  # TDS — admin-entered per month
     other_deductions: float = 0.0
     deduction_remarks: Optional[str] = None
-    total_deductions: float     # lwp_deduction + other_deductions
+    total_deductions: float     # sum of all deductions
     net_salary: float           # gross_salary - total_deductions
 
     # Flags

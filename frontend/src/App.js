@@ -312,6 +312,17 @@ function AppRouter() {
           </ProtectedRoute>
         }
       />
+
+      <Route
+        path="/children-marks"
+        element={
+          <ProtectedRoute allowedRoles={['parent']}>
+            <Layout>
+              <MarksPage />
+            </Layout>
+          </ProtectedRoute>
+        }
+      />
       
       <Route
         path="/my-fees"

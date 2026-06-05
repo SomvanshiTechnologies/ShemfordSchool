@@ -115,8 +115,8 @@ const MobileMessages = () => {
       const arr = Array.isArray(r.data) ? r.data : [];
       if (which === 'inbox') setInbox(arr); else setSent(arr);
       setCached(cacheKey, arr);
-    } catch {
-      if (!cached) toast.error('Failed to fetch messages');
+    } catch (e) {
+      if (!cached && !e?._handled) toast.error('Failed to fetch messages');
     } finally { setLoading(false); }
   }, []);
 
@@ -488,7 +488,7 @@ const ComposeSheet = ({ canBroadcast, onClose, onSent }) => {
           <select className="m-input" value={selectedClass}
             onChange={(e) => { setSelectedClass(e.target.value); setSelectedSection(''); }}>
             <option value="">Select class</option>
-            {classes.map(c => <option key={c.class_id || c.name} value={c.name}>{c.display_name || `Class ${c.name}`}</option>)}
+            {classes.map(c => <option key={c.class_id || c.name} value={c.name}>{c.display_name || (c.name.startsWith('Class ') ? c.name : `Class ${c.name}`)}</option>)}
           </select>
         </div>
       )}

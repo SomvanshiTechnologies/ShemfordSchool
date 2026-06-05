@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../lib/api';
 import { getCached, setCached, invalidatePrefix } from '../../lib/pageCache';
@@ -39,17 +39,17 @@ const StatusBadge = ({ status }) => {
 };
 
 const TabBar = ({ tabs, active, onChange }) => (
-  <div style={{display:'flex',gap:6,padding:4,background:'#F0F0F0',borderRadius:12,marginBottom:12,overflowX:'auto'}}>
+  <div style={{display:'flex',gap:6,padding:4,background:'transparent',borderRadius:12,marginBottom:12,overflowX:'auto',scrollbarWidth:'none',msOverflowStyle:'none'}}>
     {tabs.map(t => (
       <button
         key={t.key}
         onClick={() => onChange(t.key)}
         style={{
-          flex:1, minWidth:'fit-content', padding:'8px 12px', borderRadius:8, border:'none',
+          flex:1, minWidth:'fit-content', padding:'8px 12px', borderRadius:12, border:'none',
           background: active === t.key ? '#FFF' : 'transparent',
           color: active === t.key ? '#1A1A1A' : '#888',
           fontSize:12, fontWeight:700, cursor:'pointer',
-          boxShadow: active === t.key ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+          boxShadow: active === t.key ? '0 1px 4px rgba(0,0,0,0.10)' : 'none',
           whiteSpace:'nowrap',
         }}
         data-testid={`m-att-tab-${t.key}`}
@@ -100,7 +100,7 @@ const StudentAttendance = () => {
       const arr = Array.isArray(r.data) ? r.data : [];
       setRecords(arr);
       setCached(key, arr);
-    } catch { toast.error('Failed to fetch attendance'); }
+    } catch (e) { if (!e?._handled) toast.error('Failed to fetch attendance'); }
     finally { setLoading(false); }
   }, [month]);
 
@@ -200,7 +200,7 @@ const AdminAttendance = ({ isAdmin }) => {
 const StudentsTab = ({ classes, isAdmin }) => {
   const [selClass, setSelClass] = useState('');
   const [selSection, setSelSection] = useState('');
-  const [selDate, setSelDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [selDate, setSelDate] = useState(() => new Date().toLocaleDateString('en-CA'));
 
   const [students, setStudents] = useState([]);
   const [attMap, setAttMap] = useState({});
@@ -214,8 +214,14 @@ const StudentsTab = ({ classes, isAdmin }) => {
     return cls?.sections || [];
   }, [classes, selClass]);
 
+  const abortRef = useRef(null);
+
   const load = useCallback(async () => {
     if (!selClass || !selSection || !selDate) return;
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const { signal } = controller;
     const cacheKey = `m-att:admin:${selClass}:${selSection}:${selDate}`;
     const cached = getCached(cacheKey);
     if (cached) {
@@ -224,16 +230,19 @@ const StudentsTab = ({ classes, isAdmin }) => {
       setAttMap(cached.attMap);
       setLoading(false);
     } else {
+      // Clear stale holiday banner before new date's data arrives.
+      setSession(null);
+      setStudents([]);
+      setAttMap({});
       setLoading(true);
     }
     try {
       const [s, a, sess] = await Promise.all([
-        api.get('/students', { params: { class_name: selClass, section: selSection } }),
-        api.get('/attendance', { params: { entity_type: 'student', date: selDate, class_name: selClass, section: selSection } }),
-        api.get('/attendance/session-status', { params: { class_name: selClass, section: selSection, date: selDate } }),
+        api.get('/students', { params: { class_name: selClass, section: selSection }, signal }),
+        api.get('/attendance', { params: { entity_type: 'student', date: selDate, class_name: selClass, section: selSection }, signal }),
+        api.get('/attendance/session-status', { params: { class_name: selClass, section: selSection, date: selDate }, signal }),
       ]);
-      // Only students admitted on/before the selected date — a student isn't
-      // tracked for attendance before they joined.
+      if (signal.aborted) return;
       const studentList = (s.data?.students ?? (Array.isArray(s.data) ? s.data : []))
         .filter(stu => !stu.admission_date || String(stu.admission_date).slice(0, 10) <= selDate);
       const m = {};
@@ -242,12 +251,18 @@ const StudentsTab = ({ classes, isAdmin }) => {
       setSession(sess.data);
       setAttMap(m);
       setCached(cacheKey, { students: studentList, session: sess.data, attMap: m });
-    } catch {
-      if (!cached) toast.error('Failed to fetch attendance');
-    } finally { setLoading(false); }
+    } catch (e) {
+      if (e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError') return;
+      if (!cached && !e?._handled) toast.error('Failed to fetch attendance');
+    } finally {
+      if (!signal.aborted) setLoading(false);
+    }
   }, [selClass, selSection, selDate]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    return () => { if (abortRef.current) abortRef.current.abort(); };
+  }, [load]);
 
   const isLocked = session?.is_locked && session?.submitted;
   const isHoliday = session?.is_holiday;
@@ -304,7 +319,7 @@ const StudentsTab = ({ classes, isAdmin }) => {
           <select className="m-input" value={selClass}
             onChange={(e) => { setSelClass(e.target.value); setSelSection(''); setSession(null); setStudents([]); setAttMap({}); }}>
             <option value="">Select class</option>
-            {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || `Class ${c.name}`}</option>)}
+            {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || (c.name.startsWith('Class ') ? c.name : `Class ${c.name}`)}</option>)}
           </select>
         </div>
         <div>
@@ -322,7 +337,7 @@ const StudentsTab = ({ classes, isAdmin }) => {
       <div style={{marginBottom:12}}>
         <label style={formLabel}>Date</label>
         <input
-          type="date" className="m-input"
+          type="date" lang="en-IN" className="m-input"
           value={selDate}
           onChange={(e) => setSelDate(e.target.value)}
           onClick={(e) => { if (e.currentTarget.showPicker) e.currentTarget.showPicker(); }}
@@ -461,7 +476,7 @@ const EmployeesTab = () => {
       <div style={{marginBottom:12}}>
         <label style={formLabel}>Date</label>
         <input
-          type="date" className="m-input" value={date}
+          type="date" lang="en-IN" className="m-input" value={date}
           onChange={(e) => setDate(e.target.value)}
           onClick={(e) => { if (e.currentTarget.showPicker) e.currentTarget.showPicker(); }}
           style={{cursor:'pointer'}}
@@ -558,7 +573,7 @@ const ReportTab = ({ classes, isAdmin }) => {
       if (!r.data?.total_records) {
         toast.info('No attendance records for the selected filter');
       }
-    } catch { toast.error('Failed to fetch report'); }
+    } catch (e) { if (!e?._handled) toast.error('Failed to fetch report'); }
     finally { setReportLoading(false); }
   };
 
@@ -577,7 +592,7 @@ const ReportTab = ({ classes, isAdmin }) => {
       if (records.length === 0) {
         toast.info('No employee attendance records for this month');
       }
-    } catch { toast.error('Failed to fetch employee report'); }
+    } catch (e) { if (!e?._handled) toast.error('Failed to fetch employee report'); }
     finally { setEmpReportLoading(false); }
   };
 
@@ -646,14 +661,14 @@ const ReportTab = ({ classes, isAdmin }) => {
         <label style={formLabel}>Class</label>
         <select className="m-input" value={reportClass} onChange={(e) => setReportClass(e.target.value)}>
           <option value="">All Classes</option>
-          {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || `Class ${c.name}`}</option>)}
+          {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || (c.name.startsWith('Class ') ? c.name : `Class ${c.name}`)}</option>)}
         </select>
       </div>
 
       <div style={{marginBottom:10}}>
         <label style={formLabel}>Date (leave blank for all dates)</label>
         <input
-          type="date" className="m-input" value={reportDate}
+          type="date" lang="en-IN" className="m-input" value={reportDate}
           onChange={(e) => setReportDate(e.target.value)}
           onClick={(e) => { if (e.currentTarget.showPicker) e.currentTarget.showPicker(); }}
           style={{cursor:'pointer'}}
@@ -899,7 +914,7 @@ const AddHolidaySheet = ({ onClose, onAdded }) => {
           <div style={{marginBottom:10}}>
             <label style={formLabel}>Date</label>
             <input
-              type="date" className="m-input" value={date}
+              type="date" lang="en-IN" className="m-input" value={date}
               onChange={(e) => setDate(e.target.value)}
               onClick={(e) => { if (e.currentTarget.showPicker) e.currentTarget.showPicker(); }}
               style={{cursor:'pointer'}}

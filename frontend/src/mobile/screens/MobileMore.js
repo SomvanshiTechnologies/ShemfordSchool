@@ -35,24 +35,24 @@ const MobileMore = () => {
       { icon: Users, label: 'Students', path: '/m/students', color: '#E88A1A' },
     ] : []),
     ...(isAdmin || isTeacher ? [
-      { icon: Building, label: 'Classes', path: '/class-structure', color: '#1A1A1A' },
+      { icon: Building, label: 'Classes', path: '/class-structure', color: '#E88A1A' },
     ] : []),
     ...(isAdmin ? [
-      { icon: User, label: 'Employees', path: '/employees', color: '#1A1A1A' },
-      { icon: ShieldCheck, label: 'Users', path: '/users', color: '#1A1A1A' },
+      { icon: User, label: 'Employees', path: '/employees', color: '#E88A1A' },
+      { icon: ShieldCheck, label: 'Users', path: '/users', color: '#E88A1A' },
     ] : []),
 
     // ── Academic ──
     ...(isAdmin || isTeacher ? [
-      { icon: Calendar, label: 'Attendance', path: '/m/attendance', color: '#1A1A1A' },
+      { icon: Calendar, label: 'Attendance', path: '/m/attendance', color: '#E88A1A' },
       { icon: GraduationCap, label: 'Marks', path: '/m/marks', color: '#E88A1A' },
     ] : []),
     ...(isStudent ? [
-      { icon: Calendar, label: 'My Attendance', path: '/m/attendance', color: '#1A1A1A' },
+      { icon: Calendar, label: 'My Attendance', path: '/m/attendance', color: '#E88A1A' },
       { icon: GraduationCap, label: 'My Marks', path: '/m/marks', color: '#E88A1A' },
     ] : []),
     ...(isParent ? [
-      { icon: Calendar, label: "Children's Attendance", path: '/m/attendance', color: '#1A1A1A' },
+      { icon: Calendar, label: "Children's Attendance", path: '/m/attendance', color: '#E88A1A' },
     ] : []),
     ...(isAdmin || isAccountant ? [
       { icon: CreditCard, label: 'Fees', path: '/m/fees', color: '#E88A1A' },
@@ -61,7 +61,7 @@ const MobileMore = () => {
       { icon: CreditCard, label: 'My Fees', path: '/m/fees', color: '#E88A1A' },
     ] : []),
     ...(isTeacher || isStudent || isParent ? [
-      { icon: BookOpen, label: 'Syllabus', path: '/syllabus', color: '#1A1A1A' },
+      { icon: BookOpen, label: 'Syllabus', path: '/syllabus', color: '#E88A1A' },
     ] : []),
 
     // ── Operations ──
@@ -69,14 +69,14 @@ const MobileMore = () => {
       { icon: ArrowUpCircle, label: 'Upgradation', path: '/m/upgradation', color: '#E88A1A' },
     ] : []),
     ...(isAdmin || isAccountant || isTeacher ? [
-      { icon: Wallet, label: 'Payroll', path: '/m/payroll', color: '#1A1A1A' },
+      { icon: Wallet, label: 'Payroll', path: '/m/payroll', color: '#E88A1A' },
     ] : []),
 
     // ── Communication ──
     ...(isAdmin || isTeacher || isStudent || isParent ? [
       { icon: Bell, label: 'Announcements', path: '/m/notices', color: '#E88A1A' },
     ] : []),
-    { icon: MessageSquare, label: 'Messages', path: '/m/messages', color: '#1A1A1A' },
+    { icon: MessageSquare, label: 'Messages', path: '/m/messages', color: '#E88A1A' },
     ...(isAdmin ? [
       { icon: Trash2, label: 'Deletion Requests', path: '/m/account-deletions', color: '#dc2626' },
     ] : []),
@@ -90,8 +90,8 @@ const MobileMore = () => {
     ] : []),
 
     // ── Misc ──
-    { icon: ClipboardList, label: 'Issues', path: '/m/issues', color: '#888' },
-    { icon: Settings, label: 'Settings', path: '/m/settings', color: '#1A1A1A' },
+    { icon: ClipboardList, label: 'Issues', path: '/m/issues', color: '#E88A1A' },
+    { icon: Settings, label: 'Settings', path: '/m/settings', color: '#E88A1A' },
   ];
 
   const primary = PRIMARY_PATHS_BY_ROLE[role] || PRIMARY_PATHS_BY_ROLE.admin;

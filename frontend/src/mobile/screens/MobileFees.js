@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+﻿import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../lib/api';
 import { getCached, setCached, invalidatePrefix } from '../../lib/pageCache';
 import { previewReportInTab } from '../../lib/preview';
-import { fetchPaymentMethods, PAYMENT_METHODS } from '../../lib/paymentMethods';
+import { fetchPaymentMethods, PAYMENT_METHODS, fmtPaymentMethod } from '../../lib/paymentMethods';
 import { toast } from 'sonner';
 import {
   CreditCard, Search, X, Loader2, AlertTriangle, CheckCircle2, Clock,
@@ -115,14 +115,14 @@ const MobileRazorpayButton = ({ studentId, ledgerIds, amount, onSuccess, style }
         ...style,
       }}>
       {busy ? <Loader2 size={18} className="animate-spin" /> : <CreditCard size={18} />}
-      {busy ? 'Processing…' : `Pay Now — ₹${Number(amount || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
+      {busy ? 'Processing…' : `Pay Now — Rs.${Number(amount || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
     </button>
   );
 };
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-const fmt = (n) => n != null ? `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 0 })}` : '—';
+const fmt = (n) => n != null ? `Rs.${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 0 })}` : '—';
 
 const CURRENT_YEAR = (() => {
   const now = new Date();
@@ -154,11 +154,11 @@ const ReportPager = ({ page, total, onPage }) => {
 const isoToDDMMYYYY = (iso) => {
   if (!iso) return '';
   const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return m ? `${m[3]}-${m[2]}-${m[1]}` : '';
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : '';
 };
 const ddmmyyyyToIso = (str) => {
   if (!str) return '';
-  const m = String(str).trim().match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  const m = String(str).trim().match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
   if (!m) return '';
   const [, dd, mm, yyyy] = m;
   const d = new Date(`${yyyy}-${mm}-${dd}T00:00:00`);
@@ -171,11 +171,17 @@ const downloadReceipt = async (paymentId) => {
   if (!paymentId) return;
   try {
     const r = await api.get(`/fees/receipt/${paymentId}/pdf`, { responseType: 'blob' });
-    const url = URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }));
-    window.open(url, '_blank');
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    const blob = r.data instanceof Blob ? r.data : new Blob([r.data], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `receipt-${paymentId}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch {
-    toast.error('Failed to load receipt');
+    toast.error('Failed to download receipt');
   }
 };
 
@@ -234,17 +240,17 @@ const AdminFees = ({ isAdmin }) => {
 };
 
 const TabBar = ({ tabs, active, onChange }) => (
-  <div style={{display:'flex',gap:6,padding:'4px',background:'#F0F0F0',borderRadius:12,flexShrink:0}}>
+  <div style={{display:'flex',gap:6,padding:'4px',background:'transparent',borderRadius:12,flexShrink:0,overflowX:'auto',scrollbarWidth:'none',msOverflowStyle:'none'}}>
     {tabs.map(t => (
       <button
         key={t.key}
         onClick={() => onChange(t.key)}
         style={{
-          flex:1, padding:'8px 12px', borderRadius:8, border:'none',
+          flex:1, padding:'8px 12px', borderRadius:12, border:'none',
           background: active === t.key ? '#FFF' : 'transparent',
           color: active === t.key ? '#1A1A1A' : '#888',
           fontSize:12, fontWeight:700, cursor:'pointer',
-          boxShadow: active === t.key ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+          boxShadow: active === t.key ? '0 1px 4px rgba(0,0,0,0.10)' : 'none',
           whiteSpace:'nowrap',
         }}
         data-testid={`m-fees-tab-${t.key}`}
@@ -272,16 +278,27 @@ const CollectTab = () => {
   const [showPay, setShowPay] = useState(false);
 
   const fetchDue = useCallback(async () => {
-    if (!initialDue) setLoadingDue(true);
     try {
       const r = await api.get('/fees/due-chart');
       const arr = Array.isArray(r.data) ? r.data : [];
       setDueChart(arr);
       setCached('m-fees:due-chart', arr);
-    } catch {} finally { setLoadingDue(false); }
+    } catch {}
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { fetchDue(); }, [fetchDue]);
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!initialDue) setLoadingDue(true);
+    api.get('/fees/due-chart', { signal: controller.signal })
+      .then(r => {
+        const arr = Array.isArray(r.data) ? r.data : [];
+        setDueChart(arr);
+        setCached('m-fees:due-chart', arr);
+      })
+      .catch(() => {})
+      .finally(() => { if (!controller.signal.aborted) setLoadingDue(false); });
+    return () => controller.abort();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [duePage, setDuePage] = useState(1);
   useEffect(() => { setDuePage(1); }, [dueChart]);
 
@@ -473,6 +490,20 @@ const Ledger = ({ ledger, payIds, setPayIds, onPay, renderPayButton }) => {
           <Stat label="Overdue" value={summary.total_overdue} color="#fca5a5" />
           <Stat label="Paid" value={summary.total_paid} color="#86efac" />
         </div>
+        {(summary.total_concession > 0 || summary.total_late_fees > 0) && (
+          <div style={{display:'flex',gap:8,marginTop:8,flexWrap:'wrap'}}>
+            {summary.total_concession > 0 && (
+              <span style={{fontSize:10,fontWeight:700,padding:'3px 8px',borderRadius:6,background:'rgba(134,239,172,0.2)',color:'#86efac'}}>
+                Concession -{fmt(summary.total_concession)}
+              </span>
+            )}
+            {summary.total_late_fees > 0 && (
+              <span style={{fontSize:10,fontWeight:700,padding:'3px 8px',borderRadius:6,background:'rgba(252,165,165,0.2)',color:'#fca5a5'}}>
+                Late fees +{fmt(summary.total_late_fees)}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Quick select chips */}
@@ -521,29 +552,38 @@ const Ledger = ({ ledger, payIds, setPayIds, onPay, renderPayButton }) => {
             <span style={{fontSize:13,fontWeight:700,color:'#1A1A1A'}}>Payment History</span>
             <span style={{fontSize:10,color:'#888'}}>({ledger.payments.length})</span>
           </div>
-          {ledger.payments.map(p => (
-            <div key={p.payment_id} style={{padding:'10px 14px',borderTop:'1px solid #F5F5F5',display:'flex',alignItems:'center',gap:10}}>
-              <div style={{minWidth:0,flex:1}}>
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
-                  <p style={{fontSize:12,fontWeight:700,color:'#1A1A1A',fontFamily:'ui-monospace, SFMono-Regular, Menlo, monospace',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{p.receipt_number}</p>
-                  <p style={{fontSize:13,fontWeight:800,color:'#15803d',flexShrink:0}}>{fmt(p.amount)}</p>
-                </div>
-                <div style={{display:'flex',alignItems:'center',gap:6,marginTop:2,flexWrap:'wrap'}}>
-                  <span style={{fontSize:10,color:'#888'}}>{isoToDDMMYYYY(p.payment_date) || p.payment_date}</span>
-                  <span style={{fontSize:10,color:'#888',textTransform:'capitalize'}}>· {p.payment_method}</span>
-                  {p.transaction_id && <span style={{fontSize:10,color:'#888',fontFamily:'ui-monospace, SFMono-Regular, Menlo, monospace'}}>· {p.transaction_id}</span>}
-                </div>
-              </div>
-              <button
-                onClick={() => downloadReceipt(p.payment_id)}
-                aria-label="Download receipt"
-                style={{display:'flex',alignItems:'center',gap:4,padding:'6px 10px',borderRadius:8,background:'#FFF',border:'1px solid #E5E5E5',cursor:'pointer',fontSize:11,fontWeight:700,color:'#1A1A1A',flexShrink:0}}
-                data-testid={`m-receipt-${p.payment_id}`}
-              >
-                <Download size={12} /> PDF
-              </button>
-            </div>
-          ))}
+          <div style={{overflowX:'auto'}}>
+            <table style={{width:'100%',borderCollapse:'collapse',fontSize:11}}>
+              <thead>
+                <tr style={{background:'#F8F8F8',borderBottom:'1px solid #F0F0F0'}}>
+                  {['Receipt No.','Date','Amount','Method','Txn ID','Receipt'].map(h => (
+                    <th key={h} style={{padding:'7px 10px',textAlign:'left',fontSize:9,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:'#888',whiteSpace:'nowrap'}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {ledger.payments.map(p => (
+                  <tr key={p.payment_id} style={{borderTop:'1px solid #F5F5F5'}}>
+                    <td style={{padding:'9px 10px',fontFamily:'ui-monospace, SFMono-Regular, Menlo, monospace',fontSize:11,fontWeight:700,color:'#1A1A1A',whiteSpace:'nowrap'}}>{p.receipt_number}</td>
+                    <td style={{padding:'9px 10px',color:'#444',whiteSpace:'nowrap'}}>{isoToDDMMYYYY(p.payment_date) || p.payment_date}</td>
+                    <td style={{padding:'9px 10px',fontWeight:800,color:'#15803d',whiteSpace:'nowrap'}}>{fmt(p.amount)}</td>
+                    <td style={{padding:'9px 10px',color:'#444',whiteSpace:'nowrap'}}>{fmtPaymentMethod(p.payment_method)}</td>
+                    <td style={{padding:'9px 10px',color:'#888',fontFamily:'ui-monospace, SFMono-Regular, Menlo, monospace',fontSize:10,whiteSpace:'nowrap'}}>{p.transaction_id || '—'}</td>
+                    <td style={{padding:'9px 10px'}}>
+                      <button
+                        onClick={() => downloadReceipt(p.payment_id)}
+                        aria-label="Download receipt"
+                        style={{display:'flex',alignItems:'center',gap:4,padding:'5px 8px',borderRadius:7,background:'#FFF',border:'1px solid #E5E5E5',cursor:'pointer',fontSize:10,fontWeight:700,color:'#1A1A1A',whiteSpace:'nowrap'}}
+                        data-testid={`m-receipt-${p.payment_id}`}
+                      >
+                        <Download size={11} /> PDF
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -649,7 +689,7 @@ const PaymentSheet = ({ studentId, ledger, payIds, onClose, onSuccess }) => {
 
   const submit = async () => {
     const iso = paymentDate ? ddmmyyyyToIso(paymentDate) : '';
-    if (paymentDate && !iso) { toast.error('Payment date must be DD-MM-YYYY'); return; }
+    if (paymentDate && !iso) { toast.error('Payment date must be DD/MM/YYYY'); return; }
     if (iso && iso > new Date().toISOString().slice(0, 10)) { toast.error('Payment date cannot be in the future'); return; }
     setProcessing(true);
     try {
@@ -704,7 +744,7 @@ const PaymentSheet = ({ studentId, ledger, payIds, onClose, onSuccess }) => {
               </div>
             </>
           )}
-          <FormInput label="Payment Date (DD-MM-YYYY)" value={paymentDate} onChange={setPaymentDate} placeholder="DD-MM-YYYY" />
+          <FormInput label="Payment Date (DD/MM/YYYY)" value={paymentDate} onChange={setPaymentDate} placeholder="DD/MM/YYYY" />
           <FormInput label="Remarks (optional)" value={remarks} onChange={setRemarks} placeholder="e.g. Cash receipt #..." />
 
           <div style={{padding:10,background:'#F8F8F8',borderRadius:10,fontSize:11,color:'#666'}}>
@@ -741,7 +781,7 @@ const DURATIONS = [
 const fmtDate = (s) => {
   if (!s) return '—';
   const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return m ? `${m[3]}-${m[2]}-${m[1]}` : String(s);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(s);
 };
 
 const openReportPdf = async (apiPath, params) => {
@@ -786,7 +826,6 @@ const SummaryReport = () => {
   const [refreshingOverdue, setRefreshingOverdue] = useState(false);
 
   const load = useCallback(async () => {
-    if (!initial) setLoading(true);
     try {
       const r = await api.get('/fees/due-chart');
       const arr = Array.isArray(r.data) ? r.data : [];
@@ -796,10 +835,26 @@ const SummaryReport = () => {
       const result = { totalDue, totalOverdue, overdueStudents, students: arr.length };
       setData(result);
       setCached('m-fees:reports', result);
-    } catch {} finally { setLoading(false); }
+    } catch {}
   }, []); // eslint-disable-line
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!initial) setLoading(true);
+    api.get('/fees/due-chart', { signal: controller.signal })
+      .then(r => {
+        const arr = Array.isArray(r.data) ? r.data : [];
+        const totalDue = arr.reduce((s, x) => s + (x.total_due || 0), 0);
+        const totalOverdue = arr.reduce((s, x) => s + (x.entries_overdue || 0), 0);
+        const overdueStudents = arr.filter(x => (x.entries_overdue || 0) > 0).length;
+        const result = { totalDue, totalOverdue, overdueStudents, students: arr.length };
+        setData(result);
+        setCached('m-fees:reports', result);
+      })
+      .catch(() => {})
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, []); // eslint-disable-line
 
   const sendReminders = async () => {
     setSendingReminders(true);
@@ -906,6 +961,7 @@ const CollectionReport = () => {
             <input
               className="m-input"
               type="date"
+              lang="en-IN"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
               onClick={(e) => { if (e.currentTarget.showPicker) e.currentTarget.showPicker(); }}
@@ -917,6 +973,7 @@ const CollectionReport = () => {
             <input
               className="m-input"
               type="date"
+              lang="en-IN"
               value={endDate}
               onChange={(e) => setEndDate(e.target.value)}
               onClick={(e) => { if (e.currentTarget.showPicker) e.currentTarget.showPicker(); }}
@@ -1058,6 +1115,7 @@ const DueReport = () => {
               <input
                 className="m-input"
                 type="date"
+              lang="en-IN"
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
                 onClick={(e) => { if (e.currentTarget.showPicker) e.currentTarget.showPicker(); }}
@@ -1069,6 +1127,7 @@ const DueReport = () => {
               <input
                 className="m-input"
                 type="date"
+              lang="en-IN"
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
                 onClick={(e) => { if (e.currentTarget.showPicker) e.currentTarget.showPicker(); }}
@@ -1324,7 +1383,7 @@ const ConfigEditSheet = ({ config, year, classes, onClose, onSaved }) => {
               <label style={formLabel}>Class</label>
               <select className="m-input" value={form.class_name} onChange={(e) => set('class_name', e.target.value)}>
                 <option value="">Select class</option>
-                {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || `Class ${c.name}`}</option>)}
+                {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || (c.name.startsWith('Class ') ? c.name : `Class ${c.name}`)}</option>)}
               </select>
             </div>
             <div>
@@ -1350,8 +1409,8 @@ const ConfigEditSheet = ({ config, year, classes, onClose, onSaved }) => {
           <NumberField label="Due Day (of month)" value={form.due_day} onChange={(v) => set('due_day', v)} />
 
           <p className="m-section">Sibling Discounts</p>
-          <NumberField label="Sibling Admission Discount (₹)" value={form.sibling_admission_discount_amount} onChange={(v) => set('sibling_admission_discount_amount', v)} />
-          <NumberField label="Sibling Tuition Discount (₹/mo)" value={form.sibling_tuition_discount_amount} onChange={(v) => set('sibling_tuition_discount_amount', v)} />
+          <NumberField label="Sibling Admission Discount (Rs.)" value={form.sibling_admission_discount_amount} onChange={(v) => set('sibling_admission_discount_amount', v)} />
+          <NumberField label="Sibling Tuition Discount (Rs./mo)" value={form.sibling_tuition_discount_amount} onChange={(v) => set('sibling_tuition_discount_amount', v)} />
 
           <FormInput label="Notes" value={form.notes} onChange={(v) => set('notes', v)} placeholder="Any notes about this config" />
         </div>

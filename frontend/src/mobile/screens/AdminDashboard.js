@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../../lib/api';
 import { Users, CreditCard, Calendar, GraduationCap, BarChart3, Bell, FileText, ClipboardList, Settings } from 'lucide-react';
@@ -46,15 +46,15 @@ const AdminDashboard = () => {
       {/* Revenue card */}
       <div className="m-card-dark" style={{marginBottom:16}}>
         <p style={{fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.08em',color:'#888',marginBottom:4}}>Total Collection</p>
-        <p style={{fontSize:28,fontWeight:800,color:'#FFF',letterSpacing:'-0.02em'}}>₹{(stats.totalCollection || 0).toLocaleString()}</p>
-        <p style={{fontSize:12,color:'#888',marginTop:4}}>₹{(stats.pending || 0).toLocaleString()} pending</p>
+        <p style={{fontSize:28,fontWeight:800,color:'#FFF',letterSpacing:'-0.02em'}}>Rs.{(stats.totalCollection || 0).toLocaleString()}</p>
+        <p style={{fontSize:12,color:'#888',marginTop:4}}>Rs.{(stats.pending || 0).toLocaleString()} pending</p>
       </div>
 
       <div className="m-stat-grid">
         <div className="m-stat"><p className="m-stat-label">Students</p><p className="m-stat-value">{stats.students}</p></div>
         <div className="m-stat"><p className="m-stat-label">Staff</p><p className="m-stat-value">{stats.employees}</p></div>
         <div className="m-stat m-stat-accent"><p className="m-stat-label">Overdue</p><p className="m-stat-value">{stats.overdueStudents}</p></div>
-        <div className="m-stat"><p className="m-stat-label">Pending Dues</p><p className="m-stat-value">₹{Math.round(stats.totalDue/1000)}k</p></div>
+        <div className="m-stat"><p className="m-stat-label">Pending Dues</p><p className="m-stat-value">Rs.{Math.round(stats.totalDue/1000)}k</p></div>
       </div>
 
       <p className="m-section">Quick Actions</p>

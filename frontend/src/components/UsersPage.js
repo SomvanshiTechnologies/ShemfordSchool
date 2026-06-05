@@ -130,7 +130,10 @@ const UsersPage = () => {
       setTotalUsers(total);
       setTotalPages(pages);
     } catch (error) {
-      if (!cached && !append) toast.error('Failed to fetch users');
+      if (!cached && !append) {
+        const status = error?.response?.status;
+        toast.error(status === 403 || status === 401 ? 'Access Denied' : 'Failed to fetch users');
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);

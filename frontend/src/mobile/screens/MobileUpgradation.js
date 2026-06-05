@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+﻿import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSession } from '../../contexts/SessionContext';
 import api from '../../lib/api';
 import { getCached, setCached, invalidatePrefix } from '../../lib/pageCache';
-import { fetchPaymentMethods, PAYMENT_METHODS_WITH_POS } from '../../lib/paymentMethods';
+import { fetchPaymentMethods, PAYMENT_METHODS_WITH_POS, fmtPaymentMethod } from '../../lib/paymentMethods';
 import { toast } from 'sonner';
 import {
   ArrowUpCircle, Search, CheckCircle2, AlertCircle, Loader2,
@@ -16,6 +16,12 @@ const STREAM_SECTIONS = STREAMS.map(s => ({ section_name: s, capacity: 999 }));
 const isStreamClass = (cn) => CLASSES_WITH_STREAMS.includes(cn) || /^(11|12)(th)?$/i.test((cn || '').replace(/^Class\s*/i, ''));
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+
+const isoToDisplay = (s) => {
+  if (!s) return '—';
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(s);
+};
 
 // Remaining balance for a ledger entry: prefer the server's remaining_balance,
 // else net_amount − amount_paid. Mirrors desktop UpgradationPage.
@@ -34,15 +40,15 @@ const formLabel = {
 };
 
 const TabBar = ({ tabs, active, onChange }) => (
-  <div style={{display:'flex',gap:6,padding:4,background:'#F0F0F0',borderRadius:12,marginBottom:12,overflowX:'auto'}}>
+  <div style={{display:'flex',gap:6,padding:4,background:'transparent',borderRadius:12,marginBottom:12,overflowX:'auto',scrollbarWidth:'none',msOverflowStyle:'none'}}>
     {tabs.map(t => (
       <button key={t.key} onClick={() => onChange(t.key)}
         style={{
-          flex:1,minWidth:'fit-content',padding:'8px 12px',borderRadius:8,border:'none',
+          flex:1,minWidth:'fit-content',padding:'8px 12px',borderRadius:12,border:'none',
           background: active === t.key ? '#FFF' : 'transparent',
           color: active === t.key ? '#1A1A1A' : '#888',
           fontSize:12,fontWeight:700,cursor:'pointer',
-          boxShadow: active === t.key ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+          boxShadow: active === t.key ? '0 1px 4px rgba(0,0,0,0.10)' : 'none',
           whiteSpace:'nowrap',
         }}
       >
@@ -731,11 +737,11 @@ const UpgradeTab = ({ classes, payMethods }) => {
                         <span style={{marginLeft:4,padding:'1px 6px',borderRadius:5,fontWeight:700,background:badge.bg,color:badge.color}}>{badge.label}</span>
                       </p>
                       {isPartial && (
-                        <p style={{fontSize:10,color:'#64748b',marginTop:2}}>Paid ₹{fmt(paid)} · Bal ₹{fmt(remainingOf(e))}</p>
+                        <p style={{fontSize:10,color:'#64748b',marginTop:2}}>Paid Rs.{fmt(paid)} · Bal Rs.{fmt(remainingOf(e))}</p>
                       )}
                     </div>
                     <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0}}>
-                      <p style={{fontSize:13,fontWeight:800,color:'#dc2626'}}>₹{fmt(e.net_amount)}</p>
+                      <p style={{fontSize:13,fontWeight:800,color:'#dc2626'}}>Rs.{fmt(e.net_amount)}</p>
                       {e.payment_id && (
                         <button onClick={() => openPreview(e.payment_id, e.receipt_number, e.ledger_id)}
                           title="View / download receipt"
@@ -749,7 +755,7 @@ const UpgradeTab = ({ classes, payMethods }) => {
               })}
               <div style={{padding:10,background:'#fef2f2',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                 <span style={{fontSize:12,fontWeight:700,color:'#991b1b'}}>Total Pending</span>
-                <span style={{fontSize:14,fontWeight:800,color:'#dc2626'}}>₹{fmt(totalPending)}</span>
+                <span style={{fontSize:14,fontWeight:800,color:'#dc2626'}}>Rs.{fmt(totalPending)}</span>
               </div>
             </div>
           ) : null}
@@ -779,17 +785,17 @@ const UpgradeTab = ({ classes, payMethods }) => {
             </div>
             <div style={{padding:16,overflowY:'auto',flex:1}}>
               <p style={{fontSize:13,color:'#666',marginBottom:14}}>
-                Upgradation fee: <strong>₹{fmt(upgFeeRecord.upgradation_fee)}</strong>
+                Upgradation fee: <strong>Rs.{fmt(upgFeeRecord.upgradation_fee)}</strong>
               </p>
               <div style={{marginBottom:12}}>
                 <label style={formLabel}>Payment Date</label>
-                <input className="m-input" type="date" value={upgFeeDate} onChange={(e) => setUpgFeeDate(e.target.value)} />
+                <input className="m-input" type="date" lang="en-IN" value={upgFeeDate} onChange={(e) => setUpgFeeDate(e.target.value)} />
               </div>
               {upgFeeMethod !== 'split' && (
                 <div style={{marginBottom:12}}>
                   <label style={formLabel}>Amount to collect <span style={{fontWeight:400,textTransform:'none'}}>(blank = full)</span></label>
                   <input className="m-input" type="number" min="0" step="0.01"
-                    placeholder={`Full: ₹${fmt(upgFeeRecord.upgradation_fee)}`}
+                    placeholder={`Full: Rs.${fmt(upgFeeRecord.upgradation_fee)}`}
                     value={upgFeePartial} onChange={(e) => setUpgFeePartial(e.target.value)} />
                   <p style={{fontSize:10,color:'#aaa',marginTop:4}}>Enter a smaller amount to record a partial payment.</p>
                 </div>
@@ -817,7 +823,7 @@ const UpgradeTab = ({ classes, payMethods }) => {
                   </div>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 12px',background:'#F8F8F8',borderRadius:10,marginBottom:12}}>
                     <span style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:'#666'}}>Amount to collect</span>
-                    <span style={{fontSize:15,fontWeight:800,color:'#1A1A1A'}}>₹{fmt((parseFloat(upgFeeSplitCash) || 0) + (parseFloat(upgFeeSplitOnline) || 0))}</span>
+                    <span style={{fontSize:15,fontWeight:800,color:'#1A1A1A'}}>Rs.{fmt((parseFloat(upgFeeSplitCash) || 0) + (parseFloat(upgFeeSplitOnline) || 0))}</span>
                   </div>
                 </>
               )}
@@ -1059,14 +1065,14 @@ const HistoryTab = ({ isAdmin, payMethods }) => {
                   {isPending ? (
                     r.student_dues_total > 0 ? (
                       <span style={{padding:'2px 8px',borderRadius:6,fontSize:10,fontWeight:700,background:'#fee2e2',color:'#dc2626'}}>
-                        Dues ₹{fmt(r.student_dues_total)}
+                        Dues Rs.{fmt(r.student_dues_total)}
                       </span>
                     ) : (
                       <span style={{padding:'2px 8px',borderRadius:6,fontSize:10,fontWeight:700,background:'#dcfce7',color:'#15803d'}}>No dues</span>
                     )
                   ) : r.upgradation_fee > 0 ? (
                     <>
-                      <span style={{fontSize:11,color:'#666'}}>Fee ₹{fmt(r.upgradation_fee)}</span>
+                      <span style={{fontSize:11,color:'#666'}}>Fee Rs.{fmt(r.upgradation_fee)}</span>
                       <span style={{
                         padding:'2px 8px',borderRadius:6,fontSize:10,fontWeight:700,
                         background: feePaid ? '#dcfce7' : '#fef3c7',
@@ -1092,7 +1098,7 @@ const HistoryTab = ({ isAdmin, payMethods }) => {
                         return (
                           <button onClick={() => approve(r.upgradation_id)}
                             disabled={busyId === r.upgradation_id || feeUnpaid}
-                            title={feeUnpaid ? `Collect ₹${fmt(r.upgradation_fee)} upgradation fee first` : 'Approve upgrade'}
+                            title={feeUnpaid ? `Collect Rs.${fmt(r.upgradation_fee)} upgradation fee first` : 'Approve upgrade'}
                             style={{
                               padding:'6px 10px',borderRadius:8,fontSize:11,fontWeight:700,
                               display:'flex',alignItems:'center',gap:4,cursor: feeUnpaid ? 'not-allowed' : 'pointer',
@@ -1285,12 +1291,12 @@ const CollectFeeSheet = ({ flow, payMethods }) => {
                       {mandatory && <span style={{marginLeft:6,fontSize:10,fontWeight:700,color:'#E88A1A',textTransform:'uppercase',letterSpacing:'0.05em'}}>Required</span>}
                     </p>
                     {paid > 0 ? (
-                      <p style={{fontSize:10,color:'#a16207'}}>Paid ₹{fmt(paid)} of ₹{fmt(e.net_amount)}</p>
+                      <p style={{fontSize:10,color:'#a16207'}}>Paid Rs.{fmt(paid)} of Rs.{fmt(e.net_amount)}</p>
                     ) : (
                       <p style={{fontSize:10,color:'#888'}}>Due {e.due_date || '—'} · <span style={{textTransform:'capitalize'}}>{e.status}</span></p>
                     )}
                   </div>
-                  <p style={{fontSize:13,fontWeight:800,color:'#1A1A1A',flexShrink:0}}>₹{fmt(remainingOf(e))}</p>
+                  <p style={{fontSize:13,fontWeight:800,color:'#1A1A1A',flexShrink:0}}>Rs.{fmt(remainingOf(e))}</p>
                 </div>
               );
             })}
@@ -1298,7 +1304,7 @@ const CollectFeeSheet = ({ flow, payMethods }) => {
 
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 12px',background:'#F8F8F8',borderRadius:10,marginBottom:12}}>
             <span style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:'#666'}}>Total to collect</span>
-            <span style={{fontSize:16,fontWeight:800,color:'#1A1A1A'}}>₹{fmt(selectedRemaining)}</span>
+            <span style={{fontSize:16,fontWeight:800,color:'#1A1A1A'}}>Rs.{fmt(selectedRemaining)}</span>
           </div>
 
           {ids.length >= 1 && method !== 'split' && (
@@ -1306,12 +1312,12 @@ const CollectFeeSheet = ({ flow, payMethods }) => {
               <label style={formLabel}>Amount to collect <span style={{color:'#aaa',fontWeight:400,textTransform:'none'}}>(blank = full)</span></label>
               <input
                 className="m-input" type="number" min="0" step="0.01" max={selectedRemaining}
-                placeholder={`Full: ₹${fmt(selectedRemaining)}`}
+                placeholder={`Full: Rs.${fmt(selectedRemaining)}`}
                 value={partial}
                 onChange={(e) => setPartial(e.target.value)}
               />
               <p style={{fontSize:10,color:'#aaa',marginTop:4}}>
-                Leave blank to collect the full ₹{fmt(selectedRemaining)}. Enter a smaller amount to record a partial payment{ids.length > 1 ? ' (applied oldest fee first)' : ''}.
+                Leave blank to collect the full Rs.{fmt(selectedRemaining)}. Enter a smaller amount to record a partial payment{ids.length > 1 ? ' (applied oldest fee first)' : ''}.
               </p>
             </div>
           )}
@@ -1338,7 +1344,7 @@ const CollectFeeSheet = ({ flow, payMethods }) => {
               </div>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 12px',background:'#F8F8F8',borderRadius:10,marginBottom:10}}>
                 <span style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:'#666'}}>Amount to collect</span>
-                <span style={{fontSize:15,fontWeight:800,color:'#1A1A1A'}}>₹{fmt((parseFloat(splitCash) || 0) + (parseFloat(splitOnline) || 0))}</span>
+                <span style={{fontSize:15,fontWeight:800,color:'#1A1A1A'}}>Rs.{fmt((parseFloat(splitCash) || 0) + (parseFloat(splitOnline) || 0))}</span>
               </div>
             </>
           )}
@@ -1361,8 +1367,8 @@ const CollectFeeSheet = ({ flow, payMethods }) => {
             data-testid="m-upg-collect-confirm">
             {paying ? <Loader2 size={14} className="animate-spin" /> : <CreditCard size={14} />}
             Collect {method === 'split'
-              ? `₹${fmt((parseFloat(splitCash) || 0) + (parseFloat(splitOnline) || 0))}`
-              : `₹${fmt(partial && parseFloat(partial) > 0 ? parseFloat(partial) : selectedRemaining)}`}
+              ? `Rs.${fmt((parseFloat(splitCash) || 0) + (parseFloat(splitOnline) || 0))}`
+              : `Rs.${fmt(partial && parseFloat(partial) > 0 ? parseFloat(partial) : selectedRemaining)}`}
           </button>
         )}
       </div>
@@ -1420,8 +1426,8 @@ const ViewSheet = ({ row, onClose, openPreview }) => {
       <DetailRow label="Academic Year" value={row.academic_year} />
       <DetailRow label="From" value={`${row.from_class}-${row.from_section}${row.from_stream ? ` (${row.from_stream})` : ''}`} />
       <DetailRow label="To" value={`${row.to_class}-${row.to_section}${row.to_stream ? ` (${row.to_stream})` : ''}`} />
-      {row.upgradation_fee > 0 && <DetailRow label="Upgradation Fee" value={`₹${fmt(row.upgradation_fee)}`} />}
-      <DetailRow label="Submitted" value={row.created_at?.slice(0, 10) || '—'} />
+      {row.upgradation_fee > 0 && <DetailRow label="Upgradation Fee" value={`Rs.${fmt(row.upgradation_fee)}`} />}
+      <DetailRow label="Submitted" value={isoToDisplay(row.created_at)} />
       <DetailRow label="Status" value={(row.status || 'pending_approval').replace('_', ' ')} />
       {row.notes && <DetailRow label="Notes" value={row.notes} />}
       {row.reject_reason && <DetailRow label="Reject Reason" value={row.reject_reason} accent="#dc2626" />}
@@ -1439,10 +1445,10 @@ const ViewSheet = ({ row, onClose, openPreview }) => {
                 <div key={p.payment_id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,padding:'8px 10px',background:'#F8F8F8',border:'1px solid #F0F0F0',borderRadius:8}}>
                   <div style={{minWidth:0}}>
                     <p style={{fontSize:12,fontWeight:700,color:'#1A1A1A'}}>
-                      ₹{fmt(p.amount)} <span style={{fontWeight:400,color:'#888',textTransform:'capitalize'}}>· {(p.payment_method || 'cash').replace('_', ' ')}</span>
+                      Rs.{fmt(p.amount)} <span style={{fontWeight:400,color:'#888'}}>· {fmtPaymentMethod(p.payment_method)}</span>
                     </p>
                     <p style={{fontSize:10,color:'#888',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
-                      {p.payment_date || p.created_at?.slice(0, 10)}{p.receipt_number ? ` · ${p.receipt_number}` : ''}
+                      {isoToDisplay(p.payment_date || p.created_at)}{p.receipt_number ? ` · ${p.receipt_number}` : ''}
                     </p>
                   </div>
                   <button onClick={() => openPreview(p.payment_id, p.receipt_number)}

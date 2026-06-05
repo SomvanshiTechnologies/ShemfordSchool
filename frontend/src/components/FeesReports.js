@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+﻿import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import api from '../lib/api';
 import { useSession } from '../contexts/SessionContext';
 import SessionDatePicker from './SessionDatePicker';
@@ -19,15 +19,15 @@ import { toast } from 'sonner';
 
 // ─── Small helpers ───────────────────────────────────────────────────────────
 
-// Use "Rs." rather than the ₹ glyph — Excel's HTML-as-xls reader falls back
-// to Windows-1252 and renders the 3-byte UTF-8 ₹ as tofu in downloaded files.
+// Use "Rs." rather than the Rs. glyph — Excel's HTML-as-xls reader falls back
+// to Windows-1252 and renders the 3-byte UTF-8 Rs. as tofu in downloaded files.
 const inr = (n) => (n == null || isNaN(n) ? '—' : `Rs. ${Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`);
 
-// Display dates as DD-MM-YYYY. Backend stores YYYY-MM-DD strings.
+// Display dates as DD/MM/YYYY. Backend stores YYYY-MM-DD strings.
 const fmtDate = (s) => {
   if (!s) return '—';
   const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return m ? `${m[3]}-${m[2]}-${m[1]}` : String(s);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(s);
 };
 
 // Match the labels used in the Fees Type filter dropdown so column ↔ filter stay aligned

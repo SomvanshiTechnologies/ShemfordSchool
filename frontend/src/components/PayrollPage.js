@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+﻿import React, { useState, useEffect, useCallback } from 'react';
 import api from '../lib/api';
-import { previewInTab, previewExcelHtml } from '../lib/preview';
+import { previewInTab, previewExcelHtml, downloadPdf } from '../lib/preview';
 import { useAuth } from '../contexts/AuthContext';
 import { useSession } from '../contexts/SessionContext';
 import { clampISODate } from '../lib/dateBounds';
@@ -35,8 +35,8 @@ const STATUS_COLORS = {
   paid:     'bg-green-100 text-green-800 border-green-200',
 };
 
-// "Rs." prefix (not ₹) — Helvetica in reportlab PDFs and Excel HTML downloads
-// render ₹ as tofu boxes. Using a plain ASCII prefix keeps it consistent
+// "Rs." prefix (not Rs.) — Helvetica in reportlab PDFs and Excel HTML downloads
+// render Rs. as tofu boxes. Using a plain ASCII prefix keeps it consistent
 // across the UI, PDF payslips, and Excel exports.
 const fmt = (n) => `Rs. ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -66,6 +66,9 @@ export const AdminPayrollView = ({ canManage = true }) => {
   const [payDate,      setPayDate]      = useState('');
   const [payRef,       setPayRef]       = useState('');
   const [actionLoading,setActionLoading]= useState('');
+  const [editRecord,   setEditRecord]   = useState(null);
+  const [editForm,     setEditForm]     = useState({});
+  const [savingEdit,   setSavingEdit]   = useState(false);
 
   const monthYear = `${year}-${String(month).padStart(2, '0')}`;
 
@@ -141,10 +144,17 @@ export const AdminPayrollView = ({ canManage = true }) => {
     }
   };
 
-  const approve = async (id) => {
-    setActionLoading(id + '_approve');
+  const approve = async (rec) => {
+    const missing = [];
+    if (!rec.bank_account_number) missing.push('Bank Account Number');
+    if (!rec.bank_ifsc) missing.push('IFSC Code');
+    if (missing.length) {
+      toast.error(`Cannot approve: missing ${missing.join(', ')}. Update employee bank details and regenerate.`);
+      return;
+    }
+    setActionLoading(rec.payroll_id + '_approve');
     try {
-      await api.post(`/payroll/${id}/approve`);
+      await api.post(`/payroll/${rec.payroll_id}/approve`);
       toast.success('Payroll approved');
       load();
     } catch (e) {
@@ -178,9 +188,44 @@ export const AdminPayrollView = ({ canManage = true }) => {
     }
   };
 
-  const downloadPayslip = (id, _empName) => previewInTab(
+  const openEdit = (rec) => {
+    setEditRecord(rec);
+    setEditForm({
+      lwp_days: String(rec.lwp_days ?? 0),
+      pf_deduction: String(rec.pf_deduction ?? 0),
+      esi_deduction: String(rec.esi_deduction ?? 0),
+      tds_deduction: String(rec.tds_deduction ?? 0),
+      other_deductions: String(rec.other_deductions ?? 0),
+      deduction_remarks: rec.deduction_remarks ?? '',
+    });
+  };
+
+  const saveEdit = async () => {
+    if (!editRecord) return;
+    setSavingEdit(true);
+    try {
+      await api.put(`/payroll/${editRecord.payroll_id}`, {
+        lwp_days: parseFloat(editForm.lwp_days) || 0,
+        pf_deduction: parseFloat(editForm.pf_deduction) || 0,
+        esi_deduction: parseFloat(editForm.esi_deduction) || 0,
+        tds_deduction: parseFloat(editForm.tds_deduction) || 0,
+        other_deductions: parseFloat(editForm.other_deductions) || 0,
+        deduction_remarks: editForm.deduction_remarks || undefined,
+      });
+      toast.success('Deductions updated');
+      setEditRecord(null);
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Failed to update');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const downloadPayslip = (id, empName) => downloadPdf(
     () => api.get(`/payroll/${id}/payslip`, { responseType: 'blob' }),
-    { kind: 'pdf', errorMessage: 'Failed to load payslip' },
+    `payslip-${empName || id}.pdf`,
+    'Failed to download payslip',
   );
 
   // Excel: render an HTML preview in a new tab (matches Fees Reports UX).
@@ -335,13 +380,20 @@ export const AdminPayrollView = ({ canManage = true }) => {
                           <Download className="h-3 w-3" />
                         </Button>
                         {canManage && r.status === 'draft' && (
-                          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs rounded-lg text-blue-600"
-                            onClick={() => approve(r.payroll_id)}
-                            disabled={actionLoading === r.payroll_id + '_approve'}>
-                            {actionLoading === r.payroll_id + '_approve'
-                              ? <Loader2 className="h-3 w-3 animate-spin" />
-                              : <CheckCircle className="h-3 w-3" />}
-                          </Button>
+                          <>
+                            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs rounded-lg text-slate-600"
+                              title="Edit deductions"
+                              onClick={() => openEdit(r)}>
+                              <FileText className="h-3 w-3" />
+                            </Button>
+                            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs rounded-lg text-blue-600"
+                              onClick={() => approve(r)}
+                              disabled={actionLoading === r.payroll_id + '_approve'}>
+                              {actionLoading === r.payroll_id + '_approve'
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : <CheckCircle className="h-3 w-3" />}
+                            </Button>
+                          </>
                         )}
                         {canManage && r.status === 'approved' && (
                           <Button variant="ghost" size="sm" className="h-7 px-2 text-xs rounded-lg text-green-600"
@@ -409,7 +461,7 @@ export const AdminPayrollView = ({ canManage = true }) => {
             </div>
             <div className="space-y-1.5">
               <Label>Payment Date</Label>
-              <Input type="date" min={sessionBounds.start || undefined} max={sessionToday || undefined} value={payDate} onChange={e => setPayDate(clampISODate(e.target.value, { min: sessionBounds.start, max: sessionToday }))} className="rounded-xl" />
+              <Input type="date" lang="en-IN" min={sessionBounds.start || undefined} max={sessionToday || undefined} value={payDate} onChange={e => setPayDate(clampISODate(e.target.value, { min: sessionBounds.start, max: sessionToday }))} className="rounded-xl" />
             </div>
             <div className="space-y-1.5">
               <Label>Payment Reference / UTR (optional)</Label>
@@ -423,6 +475,46 @@ export const AdminPayrollView = ({ canManage = true }) => {
               className="bg-green-600 hover:bg-green-700 text-white rounded-xl">
               {actionLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CreditCard className="h-4 w-4 mr-2" />}
               Confirm Payment
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Edit deductions dialog ── */}
+      <Dialog open={!!editRecord} onOpenChange={(o) => { if (!o) setEditRecord(null); }}>
+        <DialogContent className="sm:max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit Deductions — {editRecord?.employee_name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-xs text-slate-500">Gross: {fmt(editRecord?.gross_salary)}</p>
+            {[
+              { key: 'lwp_days', label: 'LWP Days', hint: 'Leave Without Pay days' },
+              { key: 'pf_deduction', label: 'PF (Rs.)', hint: 'Provident Fund (auto: 12% of salary ≤ 15,000)' },
+              { key: 'esi_deduction', label: 'ESI (Rs.)', hint: 'Employee State Insurance (auto: 0.75% if ≤ 21,000)' },
+              { key: 'tds_deduction', label: 'TDS (Rs.)', hint: 'Tax Deducted at Source — enter manually' },
+              { key: 'other_deductions', label: 'Other Deductions (Rs.)', hint: '' },
+            ].map(({ key, label, hint }) => (
+              <div key={key} className="space-y-1">
+                <Label className="text-xs font-semibold">{label}</Label>
+                {hint && <p className="text-[10px] text-slate-400">{hint}</p>}
+                <Input type="number" min={0} step="0.01" className="rounded-xl h-9 text-sm"
+                  value={editForm[key] ?? ''}
+                  onChange={e => setEditForm(f => ({ ...f, [key]: e.target.value }))} />
+              </div>
+            ))}
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold">Deduction Remarks (optional)</Label>
+              <Input className="rounded-xl h-9 text-sm" value={editForm.deduction_remarks ?? ''}
+                onChange={e => setEditForm(f => ({ ...f, deduction_remarks: e.target.value }))} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditRecord(null)} className="rounded-xl">Cancel</Button>
+            <Button onClick={saveEdit} disabled={savingEdit}
+              className="bg-[#E88A1A] hover:bg-[#C97516] text-white rounded-xl">
+              {savingEdit ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+              Save
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -463,9 +555,10 @@ const EmployeePayrollView = () => {
     load();
   }, [year]);
 
-  const downloadPayslip = (id, _month) => previewInTab(
+  const downloadPayslip = (id, month) => downloadPdf(
     () => api.get(`/payroll/${id}/payslip`, { responseType: 'blob' }),
-    { kind: 'pdf', errorMessage: 'Failed to load payslip' },
+    `payslip-${MONTHS[month - 1] || month}.pdf`,
+    'Failed to download payslip',
   );
 
   const downloadYearly = () => {

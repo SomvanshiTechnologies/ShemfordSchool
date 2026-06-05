@@ -47,15 +47,15 @@ const formLabel = {
 };
 
 const TabBar = ({ tabs, active, onChange }) => (
-  <div style={{display:'flex',gap:6,padding:4,background:'#F0F0F0',borderRadius:12,marginBottom:12,overflowX:'auto'}}>
+  <div style={{display:'flex',gap:6,padding:4,background:'transparent',borderRadius:12,marginBottom:12,overflowX:'auto',scrollbarWidth:'none',msOverflowStyle:'none'}}>
     {tabs.map(t => (
       <button key={t.key} onClick={() => onChange(t.key)}
         style={{
-          flex:1,minWidth:'fit-content',padding:'8px 12px',borderRadius:8,border:'none',
+          flex:1,minWidth:'fit-content',padding:'8px 12px',borderRadius:12,border:'none',
           background: active === t.key ? '#FFF' : 'transparent',
           color: active === t.key ? '#1A1A1A' : '#888',
           fontSize:12,fontWeight:700,cursor:'pointer',
-          boxShadow: active === t.key ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+          boxShadow: active === t.key ? '0 1px 4px rgba(0,0,0,0.10)' : 'none',
           whiteSpace:'nowrap',display:'flex',alignItems:'center',justifyContent:'center',gap:4,
         }}
         data-testid={`m-notices-tab-${t.key}`}
@@ -585,7 +585,7 @@ const ComposeSheet = ({ mode, announcement, activeCategory, isAdmin, onClose, on
           {targetMode === 'specific_class' && (
             <select className="m-input" style={{marginTop:8}} value={targetValue} onChange={(e) => setTargetValue(e.target.value)}>
               <option value="">Select class</option>
-              {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || `Class ${c.name}`}</option>)}
+              {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || (c.name.startsWith('Class ') ? c.name : `Class ${c.name}`)}</option>)}
             </select>
           )}
           {targetMode === 'specific_user' && (
@@ -641,7 +641,7 @@ const ComposeSheet = ({ mode, announcement, activeCategory, isAdmin, onClose, on
             {useClassFilter && (
               <select className="m-input" style={{marginTop:8}} value={targetValue} onChange={(e) => setTargetValue(e.target.value)}>
                 <option value="">Select class</option>
-                {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || `Class ${c.name}`}</option>)}
+                {classes.map(c => <option key={c.name} value={c.name}>{c.display_name || (c.name.startsWith('Class ') ? c.name : `Class ${c.name}`)}</option>)}
               </select>
             )}
           </div>

@@ -6,7 +6,7 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
-import { Mail, Lock, User, Phone, ArrowLeft, KeyRound, CheckCircle, GraduationCap, Shield, Zap, Loader2 } from 'lucide-react';
+import { Mail, Lock, User, Phone, ArrowLeft, KeyRound, CheckCircle, GraduationCap, Shield, Zap, Loader2, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import api from '../lib/api';
 import { clampISODate, todayISO } from '../lib/dateBounds';
@@ -48,12 +48,14 @@ const LoginPage = () => {
   const [appOnlyAlert, setAppOnlyAlert]       = useState(false);
   const [deletionPending, setDeletionPending] = useState(null); // {request_id, request_status, expires_at}
   const [revoking, setRevoking]               = useState(false);
+  const [loginError, setLoginError]           = useState('');
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setIsLoading(true);
     setAppOnlyAlert(false);
     setDeletionPending(null);
+    setLoginError('');
     try {
       await login(loginData.email, loginData.password);
       toast.success('Welcome back!');
@@ -68,11 +70,11 @@ const LoginPage = () => {
           if (parsed.code === 'DELETION_PENDING') {
             setDeletionPending(parsed);
           } else {
-            toast.error(parsed.detail || d || 'Login failed');
+            setLoginError(parsed.detail || d || 'Login failed. Please try again.');
           }
-        } catch { toast.error(d || 'Login failed'); }
+        } catch { setLoginError(d || 'Login failed. Please try again.'); }
       } else {
-        toast.error(typeof d === 'string' ? d : 'Login failed');
+        setLoginError(typeof d === 'string' ? d : 'Login failed. Please try again.');
       }
     } finally { setIsLoading(false); }
   };
@@ -264,8 +266,15 @@ const LoginPage = () => {
                     )}
                   </div>
                 )}
-                <Field label="Email / ID" icon={Mail}  type="text"    placeholder="Email or ID"    value={loginData.email}    onChange={e => setLoginData({ ...loginData, email: e.target.value })}    required data-testid="login-email-input" />
-                <Field label="Password"      icon={Lock}  type="password" placeholder="Enter your password" value={loginData.password}  onChange={e => setLoginData({ ...loginData, password: e.target.value })} required data-testid="login-password-input" />
+                <Field label="Email / ID" icon={Mail}  type="text"    placeholder="Email or ID"    value={loginData.email}    onChange={e => { setLoginData({ ...loginData, email: e.target.value }); setLoginError(''); }}    required data-testid="login-email-input" />
+                <Field label="Password"      icon={Lock}  type="password" placeholder="Enter your password" value={loginData.password}  onChange={e => { setLoginData({ ...loginData, password: e.target.value }); setLoginError(''); }} required data-testid="login-password-input" />
+
+                {loginError && (
+                  <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert" data-testid="login-error-banner">
+                    <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-red-500" strokeWidth={2} />
+                    <span className="font-medium">{loginError}</span>
+                  </div>
+                )}
 
                 <Button
                   type="submit"
@@ -437,7 +446,7 @@ const LoginPage = () => {
                     <p className="text-xs text-slate-600">Verify with your admission number and date of birth, then set a new password.</p>
                   </div>
                   <Field label="Admission Number" icon={User} placeholder="e.g. SHM/2025/42817" value={studentAdm} onChange={e => setStudentAdm(e.target.value)} required data-testid="student-adm-input" />
-                  <Field label="Date of Birth" type="date" max={todayISO()} value={studentDob} onChange={e => setStudentDob(clampISODate(e.target.value, { max: todayISO() }))} required data-testid="student-dob-input" />
+                  <Field label="Date of Birth" type="date" lang="en-IN" max={todayISO()} value={studentDob} onChange={e => setStudentDob(clampISODate(e.target.value, { max: todayISO() }))} required data-testid="student-dob-input" />
                   <Field label="New Password"  icon={Lock} type="password" placeholder="Enter new password"   value={newPassword}        onChange={e => setNewPassword(e.target.value)} required data-testid="student-new-password-input" />
                   <Field label="Confirm"       icon={Lock} type="password" placeholder="Confirm new password" value={confirmNewPassword} onChange={e => setConfirmNew(e.target.value)}  required data-testid="student-confirm-password-input" />
                   <Button

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Shemford Futuristic School — Class Upgradation / Promotion
 
 Upgradation flow:
@@ -125,11 +125,11 @@ async def request_upgrade(student_id: str, request: Request):
             has_pending_dues = True
             total_amount = sum(r["total"] for r in pending_agg)
             year_parts = [
-                f"{r['_id']} (₹{r['total']:,.0f})" if r.get("_id") else f"₹{r['total']:,.0f}"
+                f"{r['_id']} (Rs.{r['total']:,.0f})" if r.get("_id") else f"Rs.{r['total']:,.0f}"
                 for r in pending_agg
             ]
             pending_dues_msg = (
-                f"Fees pending for {', '.join(year_parts)} (₹{total_amount:,.0f} total). "
+                f"Fees pending for {', '.join(year_parts)} (Rs.{total_amount:,.0f} total). "
                 f"Collect the dues, then approve this request to complete the upgrade."
             )
 
@@ -183,7 +183,7 @@ async def request_upgrade(student_id: str, request: Request):
             "status": "approved",
             "auto_approved": True,
             "message": f"Upgrade auto-approved (no pending dues). Student moved to {to_class}." +
-                       (f" Upgrade fee ₹{approval['upgradation_fee']:,.2f} added to pending fees."
+                       (f" Upgrade fee Rs.{approval['upgradation_fee']:,.2f} added to pending fees."
                         if approval['upgradation_fee'] > 0 else ""),
             "upgradation_fee": approval["upgradation_fee"],
             "upgradation_fee_paid": False,
@@ -250,7 +250,7 @@ async def request_upgrade(student_id: str, request: Request):
             "status": "approved",
             "auto_approved": True,
             "message": f"Student upgraded to {to_class}." +
-                       (f" Upgrade fee ₹{approval['upgradation_fee']:,.2f} added to pending fees."
+                       (f" Upgrade fee Rs.{approval['upgradation_fee']:,.2f} added to pending fees."
                         if approval['upgradation_fee'] > 0 else ""),
             "upgradation_fee": approval["upgradation_fee"],
             "upgradation_fee_paid": False,
@@ -472,7 +472,7 @@ async def approve_upgrade(upgradation_id: str, request: Request):
     result = await _perform_upgrade_approval(upg, user, auto=False)
     result["message"] = (
         f"Upgrade approved. Student moved to {upg['to_class']}." +
-        (f" Upgrade fee ₹{result['upgradation_fee']:,.2f} added to pending fees."
+        (f" Upgrade fee Rs.{result['upgradation_fee']:,.2f} added to pending fees."
          if result['upgradation_fee'] > 0 else "")
     )
     return result
@@ -635,7 +635,7 @@ async def pay_upgradation_fee(student_id: str, request: Request):
             raise HTTPException(status_code=400, detail="Amount must be greater than 0")
         if requested_amount > remaining + 0.001:
             raise HTTPException(status_code=400,
-                detail=f"Amount ₹{requested_amount:,.2f} exceeds remaining ₹{remaining:,.2f} on this entry.")
+                detail=f"Amount Rs.{requested_amount:,.2f} exceeds remaining Rs.{remaining:,.2f} on this entry.")
         pay_amount = requested_amount
     else:
         pay_amount = remaining
@@ -715,9 +715,9 @@ async def pay_upgradation_fee(student_id: str, request: Request):
     await refresh_overdue_for_student(student_id)
 
     pay_dict.pop("_id", None)
-    msg = (f"Partial payment of ₹{pay_amount:,.2f} recorded. "
-           f"₹{new_remaining:,.2f} still due. Receipt: {receipt_number}") if is_partial else (
-          f"Upgradation fee of ₹{pay_amount:,.2f} paid. Receipt: {receipt_number}")
+    msg = (f"Partial payment of Rs.{pay_amount:,.2f} recorded. "
+           f"Rs.{new_remaining:,.2f} still due. Receipt: {receipt_number}") if is_partial else (
+          f"Upgradation fee of Rs.{pay_amount:,.2f} paid. Receipt: {receipt_number}")
     return {
         "payment": pay_dict,
         "receipt_number": receipt_number,

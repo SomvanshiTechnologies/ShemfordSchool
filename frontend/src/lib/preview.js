@@ -199,6 +199,33 @@ export function previewReportInTab(title, sections) {
   }, 0);
 }
 
+/**
+ * Download a PDF directly via blob→anchor without opening a popup window.
+ * Bypasses popup blockers entirely — works on first click every time.
+ *
+ * @param {() => Promise} fetcher  - async function returning axios response with blob data
+ * @param {string} filename        - suggested filename (e.g. "payslip-jan-2026.pdf")
+ * @param {string} [errorMessage]  - toast text on failure
+ */
+export async function downloadPdf(fetcher, filename, errorMessage) {
+  try {
+    const result = await fetcher();
+    const raw = result?.data ?? result;
+    const blob = raw instanceof Blob ? raw : new Blob([raw], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || 'document.pdf';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    const { toast } = await import('sonner');
+    toast.error(errorMessage || err?.response?.data?.detail || 'Failed to download PDF');
+  }
+}
+
 export async function previewInTab(fetcher, opts = {}) {
   const kind = (opts.kind || 'pdf').toLowerCase();
   const mime = MIME[kind] || MIME.pdf;

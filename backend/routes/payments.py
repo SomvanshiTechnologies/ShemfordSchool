@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request
+﻿from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
@@ -60,7 +60,7 @@ async def send_payment_confirmation_email(student: dict, amount: float, month: s
             <p>Dear Parent/Guardian,</p>
             <p>We have received your fee payment for <strong>{student['first_name']} {student['last_name']}</strong>.</p>
             <div style="background: white; padding: 20px; border-radius: 8px; margin: 20px 0;">
-                <p>Amount Paid: <strong>Rs. {amount:,.2f}</strong></p>
+                <p>Amount Paid: <strong>Rs.{amount:,.2f}</strong></p>
                 <p>Month: <strong>{month}</strong></p>
             </div>
         </div>

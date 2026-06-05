@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import api from '../lib/api';
 import { useSession } from '../contexts/SessionContext';
 import SessionDatePicker from './SessionDatePicker';
 import { previewReportInTab } from '../lib/preview';
+import { fmtPaymentMethod } from '../lib/paymentMethods';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -87,7 +88,7 @@ const ReportsPage = () => {
                                     ? `${((fr.total_collection / (fr.total_collection + fr.total_pending)) * 100).toFixed(1)}%`
                                     : '—' },
     ];
-    const pmRows = Object.entries(fr.by_payment_method || {}).map(([k, v]) => ({ k, v: inr(v) }));
+    const pmRows = Object.entries(fr.by_payment_method || {}).map(([k, v]) => ({ k: fmtPaymentMethod(k), v: inr(v) }));
     const mRows  = Object.entries(fr.by_month || {}).map(([k, v]) => ({ k, v: inr(v) }));
     previewReportInTab('Financial Report', [
       { title: 'Summary',          columns: [{ label: 'Metric', get: r => r.k }, { label: 'Value', get: r => r.v }], rows: summaryRows },
@@ -178,7 +179,7 @@ const ReportsPage = () => {
       const response = await api.get('/reports/financial', { params });
       setFinancialReport(response.data);
     } catch (error) {
-      toast.error('Failed to fetch financial report');
+      if (!error?._handled) toast.error('Failed to fetch financial report');
     } finally {
       setLoading(false);
     }
@@ -198,7 +199,7 @@ const ReportsPage = () => {
       const response = await api.get('/reports/academic', { params });
       setAcademicReport(response.data);
     } catch (error) {
-      toast.error('Failed to fetch academic report');
+      if (!error?._handled) toast.error('Failed to fetch academic report');
     } finally {
       setLoading(false);
     }
@@ -218,7 +219,7 @@ const ReportsPage = () => {
       const response = await api.get('/reports/attendance', { params });
       setAttendanceReport(response.data);
     } catch (error) {
-      toast.error('Failed to fetch attendance report');
+      if (!error?._handled) toast.error('Failed to fetch attendance report');
     } finally {
       setLoading(false);
     }
@@ -229,8 +230,8 @@ const ReportsPage = () => {
   const selectedClassSections = classes.find(c => c.name === selectedClass)?.sections || [];
 
   // Prepare chart data
-  const paymentMethodData = financialReport?.by_payment_method 
-    ? Object.entries(financialReport.by_payment_method).map(([name, value]) => ({ name, value }))
+  const paymentMethodData = financialReport?.by_payment_method
+    ? Object.entries(financialReport.by_payment_method).map(([key, value]) => ({ name: fmtPaymentMethod(key), value }))
     : [];
 
   const monthlyData = financialReport?.by_month
@@ -315,11 +316,11 @@ const ReportsPage = () => {
               <div className="grid gap-4 md:grid-cols-4">
                 <div className="bg-slate-900 p-6 rounded-2xl">
                   <p className="stat-label">Total Collection</p>
-                  <p className="text-3xl font-bold text-white tracking-tight">₹{financialReport.total_collection?.toLocaleString()}</p>
+                  <p className="text-3xl font-bold text-white tracking-tight">Rs.{financialReport.total_collection?.toLocaleString()}</p>
                 </div>
                 <div className="bg-white border border-slate-200 border-l-4 border-l-[#E88A1A] p-6 rounded-2xl">
                   <p className="stat-label">Total Pending</p>
-                  <p className="text-3xl font-bold text-slate-900 tracking-tight">₹{financialReport.total_pending?.toLocaleString()}</p>
+                  <p className="text-3xl font-bold text-slate-900 tracking-tight">Rs.{financialReport.total_pending?.toLocaleString()}</p>
                 </div>
                 <div className="bg-white border border-slate-200 p-6 rounded-2xl">
                   <p className="stat-label">Transactions</p>
@@ -355,7 +356,7 @@ const ReportsPage = () => {
                               <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                             ))}
                           </Pie>
-                          <Tooltip formatter={(value) => `₹${value.toLocaleString()}`} contentStyle={{ background: '#1A1A1A', border: 'none', borderRadius: '2px', color: '#fff', fontSize: '12px' }} />
+                          <Tooltip formatter={(value) => `Rs.${value.toLocaleString()}`} contentStyle={{ background: '#1A1A1A', border: 'none', borderRadius: '2px', color: '#fff', fontSize: '12px' }} />
                         </PieChart>
                       </ResponsiveContainer>
                     </div>
@@ -369,7 +370,7 @@ const ReportsPage = () => {
                           <CartesianGrid strokeDasharray="3 3" stroke="#F5F5F5" />
                           <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#888' }} />
                           <YAxis tick={{ fontSize: 11, fill: '#888' }} />
-                          <Tooltip formatter={(value) => `₹${value.toLocaleString()}`} contentStyle={{ background: '#1A1A1A', border: 'none', borderRadius: '2px', color: '#fff', fontSize: '12px' }} />
+                          <Tooltip formatter={(value) => `Rs.${value.toLocaleString()}`} contentStyle={{ background: '#1A1A1A', border: 'none', borderRadius: '2px', color: '#fff', fontSize: '12px' }} />
                           <Bar dataKey="amount" fill="#E88A1A" />
                         </BarChart>
                       </ResponsiveContainer>
