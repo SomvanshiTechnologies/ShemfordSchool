@@ -1900,10 +1900,12 @@ async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Opt
     if _cls in _STREAM_CLASSES:
         class_label = _cls
         stream_src = _stream or _section
-        stream_label = stream_src.title() if stream_src else "—"
+        class_extra_label = "Stream"
+        class_extra_value = stream_src.title() if stream_src else "—"
     else:
         class_label = f"{_cls} – {_section}" if _section else _cls
-        stream_label = _stream.title() if _stream else "—"
+        class_extra_label = "Academic Year"
+        class_extra_value = student.get("academic_year", "—") or "—"
 
     _method_label = (payment.get("payment_method", "") or "").replace("_", " ").upper()
     _info_val_style = ParagraphStyle("InfoVal", parent=styles["Normal"], fontSize=9, leading=11)
@@ -1913,7 +1915,7 @@ async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Opt
         ["Receipt No.", payment.get("receipt_number", ""), "Date", _iso_to_dmy(payment.get("payment_date", ""))],
         ["Student Name", f"{student['first_name']} {student['last_name']}",
          "Admission No.", student.get("admission_number", "")],
-        ["Class", class_label, "Stream", stream_label],
+        ["Class", class_label, class_extra_label, class_extra_value],
         ["Payment Method", _method_cell,
          "Txn ID", payment.get("transaction_id", "—") or "—"],
     ]
