@@ -384,16 +384,35 @@ async def update_student(student_id: str, request: Request):
         cls = await db.class_structures.find_one({"name": new_class, "is_active": True}, {"_id": 0})
         if not cls:
             raise HTTPException(status_code=400, detail=f"Class '{new_class}' does not exist")
-        section_valid = any(s["section_name"] == new_section for s in cls.get("sections", []))
+        section_valid = any(s["section_name"].lower() == new_section.lower() for s in cls.get("sections", []))
         if not section_valid:
             raise HTTPException(status_code=400, detail=f"Section '{new_section}' not in {new_class}")
-        if new_class != old_student["class_name"] or new_section != old_student["section"]:
-            current_count = await db.students.count_documents({
-                "class_name": new_class, "section": new_section,
-                "is_active": True, "student_id": {"$ne": student_id}
-            })
+        # For stream classes (11th/12th), section IS the stream. A form that sends
+        # section="Science" when the student's section="Blue" but stream="science"
+        # is just normalizing legacy data — not a real section change.
+        old_section_norm = (old_student.get("section") or "").lower()
+        old_stream_norm = (old_student.get("stream") or "").lower()
+        new_section_norm = new_section.lower()
+        section_actually_changed = (
+            new_section_norm != old_section_norm
+            and new_section_norm != old_stream_norm
+        )
+        if new_class != old_student["class_name"] or section_actually_changed:
+            # For stream classes (11th/12th) students may carry legacy colour sections;
+            # count by stream so the number matches what the Classes page shows.
+            if cls.get("has_streams"):
+                current_count = await db.students.count_documents({
+                    "class_name": new_class,
+                    "stream": {"$regex": f"^{re.escape(new_section)}$", "$options": "i"},
+                    "is_active": True, "student_id": {"$ne": student_id}
+                })
+            else:
+                current_count = await db.students.count_documents({
+                    "class_name": new_class, "section": new_section,
+                    "is_active": True, "student_id": {"$ne": student_id}
+                })
             for s in cls.get("sections", []):
-                if s["section_name"] == new_section and current_count >= s.get("capacity", 40):
+                if s["section_name"].lower() == new_section_norm and current_count >= s.get("capacity", 40):
                     raise HTTPException(
                         status_code=400,
                         detail=f"Section {new_section} is full ({current_count}/{s['capacity']}). "

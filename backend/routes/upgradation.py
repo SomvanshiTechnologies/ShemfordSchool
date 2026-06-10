@@ -405,11 +405,41 @@ async def _perform_upgrade_approval(upg: dict, user: dict, *, auto: bool = False
     if not student:
         raise HTTPException(status_code=404, detail="Student no longer exists / inactive")
 
-    # For 11th/12th the section is the stream — normalize any legacy/colour
-    # section so validation and the move use a valid section.
-    eff_section = _stream_section(upg["to_class"], upg["to_section"], upg.get("to_stream"))
+    # Resolve effective section and stream for 11th/12th.
+    # Legacy records may have to_stream = null and to_section = a colour name (e.g. "Blue")
+    # because the student was assigned a colour section when first enrolled in 11th.
+    # Recovery order: to_stream → (to_section if it is a valid stream) → student.stream.
+    # A student moving from 11th to 12th always stays in the same stream.
+    eff_section = _stream_section(upg["to_class"], upg.get("to_section", ""), upg.get("to_stream"))
+    resolved_stream = upg.get("to_stream")  # may be None for legacy records
+
+    is_stream_cls = bool(_re.match(r"^(class\s*)?(11|12)(th)?$", (upg.get("to_class") or "").strip(), _re.I))
+    if is_stream_cls and not resolved_stream:
+        # _stream_section returned to_section unchanged because to_stream was null.
+        # If to_section doesn't look like a stream (e.g. it's a colour), fall back
+        # to the student's current stream field.
+        fallback = (student.get("stream") or "").strip()
+        if fallback:
+            resolved_stream = fallback.lower()
+            eff_section = fallback.title()
+            # Heal the stored record so history display is correct going forward
+            await db.upgradation_records.update_one(
+                {"upgradation_id": upgradation_id},
+                {"$set": {"to_stream": resolved_stream, "to_section": eff_section,
+                          "from_stream": (student.get("stream") or fallback).lower()}}
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Cannot approve: stream not set for student in {upg.get('from_class', '11th')}. "
+                    "Please open the student's profile in the Students module, set their Stream "
+                    "(Science or Humanities), save, then retry approval."
+                )
+            )
+
     cfg = await _validate_upgrade_target(
-        student, upg["to_class"], eff_section, upg.get("to_stream"),
+        student, upg["to_class"], eff_section, resolved_stream,
         upg["academic_year"], allow_capacity_override=False,
     )
     upgradation_fee = cfg.get("upgradation_fee", upg.get("upgradation_fee", 0))
@@ -450,35 +480,46 @@ async def _perform_upgrade_approval(upg: dict, user: dict, *, auto: bool = False
         await db.student_ledger.insert_one(d)
         upg_ledger_id = entry.ledger_id
 
+    # Detect partial-completion: a previous approval attempt moved the student
+    # but crashed before marking the upgradation_record as 'approved'.
+    # In this state the from-session history snapshot was already written (or
+    # would be wrong if re-written now), so skip it.
+    already_moved = (
+        student.get("class_name") == upg["to_class"]
+        and student.get("academic_year") == upg["academic_year"]
+    )
+
     # Phase 3 — snapshot the OUTGOING (from-session) enrollment into
     # student_session_history before moving the student, preserving the
     # previous academic year's class/section/roll. Idempotent on
-    # (student_id, academic_year).
+    # (student_id, academic_year). Skipped when the student was already moved
+    # by a prior partial run (snapshot data would be stale/wrong).
     now_hist = datetime.now(timezone.utc).isoformat()
-    await db.student_session_history.update_one(
-        {"student_id": upg["student_id"], "academic_year": student.get("academic_year")},
-        {"$set": {
-            "student_id": upg["student_id"],
-            "admission_number": student.get("admission_number"),
-            "academic_year": student.get("academic_year"),
-            "class_name": student.get("class_name"),
-            "section": student.get("section"),
-            "stream": student.get("stream"),
-            "roll_number": student.get("roll_number"),
-            "promoted_from": student.get("class_name"),
-            "promoted_to": upg["to_class"],
-            "status": "promoted",
-            "recorded_at": now_hist,
-        }},
-        upsert=True,
-    )
+    if not already_moved:
+        await db.student_session_history.update_one(
+            {"student_id": upg["student_id"], "academic_year": student.get("academic_year")},
+            {"$set": {
+                "student_id": upg["student_id"],
+                "admission_number": student.get("admission_number"),
+                "academic_year": student.get("academic_year"),
+                "class_name": student.get("class_name"),
+                "section": student.get("section"),
+                "stream": student.get("stream"),
+                "roll_number": student.get("roll_number"),
+                "promoted_from": student.get("class_name"),
+                "promoted_to": upg["to_class"],
+                "status": "promoted",
+                "recorded_at": now_hist,
+            }},
+            upsert=True,
+        )
 
     # Assign the next available roll number in the destination class for the new
     # year. Roll numbers are per-year-per-class — carrying the old class's roll
     # over can collide with a student already holding it in the new class.
     dest = await db.students.find(
         {"class_name": upg["to_class"], "section": eff_section,
-         "stream": upg.get("to_stream"), "academic_year": upg["academic_year"],
+         "stream": resolved_stream, "academic_year": upg["academic_year"],
          "is_active": True, "student_id": {"$ne": upg["student_id"]}},
         {"_id": 0, "roll_number": 1},
     ).to_list(5000)
@@ -495,7 +536,7 @@ async def _perform_upgrade_approval(upg: dict, user: dict, *, auto: bool = False
         {"$set": {
             "class_name": upg["to_class"],
             "section": eff_section,
-            "stream": upg.get("to_stream"),
+            "stream": resolved_stream,
             "academic_year": upg["academic_year"],
             "roll_number": new_roll,
             "fee_status": "pending",
@@ -513,7 +554,7 @@ async def _perform_upgrade_approval(upg: dict, user: dict, *, auto: bool = False
             "academic_year": upg["academic_year"],
             "class_name": upg["to_class"],
             "section": eff_section,
-            "stream": upg.get("to_stream"),
+            "stream": resolved_stream,
             "roll_number": new_roll,
             "promoted_from": student.get("class_name"),
             "promoted_to": upg["to_class"],
@@ -628,6 +669,78 @@ async def reject_upgrade(upgradation_id: str, request: Request):
         "upgradation_id": upgradation_id,
         "status": "rejected",
         "message": "Upgrade request rejected.",
+    }
+
+
+@router.post("/upgradation/{upgradation_id}/rollback")
+async def rollback_upgrade(upgradation_id: str, request: Request):
+    """
+    Rollback a pending upgrade that was partially applied — restores the student
+    to their original class/section/stream/academic_year from the upgradation
+    record's from_* fields, removes any incomplete session history, and marks
+    the record as rejected.
+    """
+    user = await require_roles(UserRole.ADMIN)(request)
+
+    upg = await db.upgradation_records.find_one({"upgradation_id": upgradation_id}, {"_id": 0})
+    if not upg:
+        raise HTTPException(status_code=404, detail="Upgrade request not found")
+    if upg.get("status") not in ("pending_approval", None):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot rollback — request is already '{upg.get('status')}'."
+        )
+
+    student = await db.students.find_one({"student_id": upg["student_id"]}, {"_id": 0})
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    from_class = upg.get("from_class") or student.get("class_name")
+    from_section = upg.get("from_section") or student.get("section")
+    from_stream = upg.get("from_stream") or student.get("stream")
+    from_ay = upg.get("from_academic_year") or student.get("academic_year")
+
+    if not from_ay:
+        raise HTTPException(status_code=400, detail="Cannot rollback: from_academic_year is not recorded in the upgrade request.")
+
+    # Restore student to pre-upgrade state
+    await db.students.update_one(
+        {"student_id": upg["student_id"]},
+        {"$set": {
+            "class_name": from_class,
+            "section": from_section,
+            "stream": from_stream,
+            "academic_year": from_ay,
+            "fee_status": student.get("fee_status", "pending"),
+        }}
+    )
+
+    # Remove the partially-written to-session history record (if any)
+    await db.student_session_history.delete_one({
+        "student_id": upg["student_id"],
+        "academic_year": upg["academic_year"],
+    })
+
+    # Mark upgradation record as rolled back
+    await db.upgradation_records.update_one(
+        {"upgradation_id": upgradation_id},
+        {"$set": {
+            "status": "rejected",
+            "rejection_reason": "Rolled back by admin — partial upgrade reversed",
+            "approved_by": user["user_id"],
+            "approved_at": datetime.now(timezone.utc).isoformat(),
+        }}
+    )
+
+    await create_audit_log("upgradation", upgradation_id, "rollback", {
+        "student_id": upg["student_id"],
+        "restored_to": f"{from_class}/{from_section}/{from_ay}",
+    }, user)
+
+    return {
+        "upgradation_id": upgradation_id,
+        "status": "rolled_back",
+        "message": f"Student restored to {from_class} / {from_ay}.",
     }
 
 

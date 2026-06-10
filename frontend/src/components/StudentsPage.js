@@ -169,8 +169,12 @@ const StudentsPage = () => {
       if (filterClass) params.class_name = filterClass;
       if (filterSection) params.section = filterSection;
       if (filterStatus) params.status = filterStatus;
-      if (search.trim()) params.search = search.trim();
-      if (viewSession) params.academic_year = viewSession;
+      if (search.trim()) {
+        params.search = search.trim();
+        params.all_sessions = true; // name search is cross-session so students in old years are findable
+      } else if (viewSession) {
+        params.academic_year = viewSession;
+      }
       const res = await api.get('/students', { params });
       const arr = Array.isArray(res.data) ? res.data : (Array.isArray(res.data?.students) ? res.data.students : []);
       const total = parseInt(res.headers?.['x-total-count'] ?? res.data?.total ?? arr.length);
@@ -527,7 +531,11 @@ const StudentsPage = () => {
       mother_phone: student.mother_phone || '',
       mother_occupation: student.mother_occupation || '',
       class_name: student.class_name || '',
-      section: student.section || '',
+      // For stream classes, normalize section to title-cased stream so the
+      // dropdown shows the correct value even for legacy colour-section students.
+      section: (STREAMS_FOR_CLASS.includes(student.class_name) && student.stream)
+        ? student.stream.charAt(0).toUpperCase() + student.stream.slice(1).toLowerCase()
+        : (student.section || ''),
       stream: student.stream || '',
       roll_number: student.roll_number || '',
       blood_group: student.blood_group || '',

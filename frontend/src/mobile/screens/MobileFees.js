@@ -406,7 +406,7 @@ const CollectTab = () => {
             >
               <div style={{minWidth:0,flex:1}}>
                 <p style={{fontSize:13,fontWeight:700,color:'#1A1A1A',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.name}</p>
-                <p style={{fontSize:11,color:'#888',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.class_name}-{s.section}{s.stream ? ` (${s.stream})` : ''} · Adm {s.admission_number || '—'}</p>
+                <p style={{fontSize:11,color:'#888',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.class_name}-{s.section}{s.stream ? ` (${s.stream})` : ''} · Admission no: {s.admission_number || '—'}</p>
               </div>
               <ChevronRight size={14} color="#888" />
             </button>
@@ -494,7 +494,7 @@ const Ledger = ({ ledger, payIds, setPayIds, onPay, renderPayButton }) => {
       <div style={{background:'#1A1A1A',color:'#FFF',padding:14,borderRadius:14,marginBottom:12}}>
         <p style={{fontSize:14,fontWeight:800,lineHeight:1.2,wordBreak:'break-word'}}>{student.name}</p>
         <p style={{fontSize:11,color:'rgba(255,255,255,0.6)',marginTop:2,wordBreak:'break-word'}}>
-          {student.class_name}-{student.section}{student.stream ? ` · ${student.stream}` : ''} · Adm {student.admission_number || '—'}
+          {student.class_name}-{student.section}{student.stream ? ` · ${student.stream}` : ''} · Admission no: {student.admission_number || '—'}
         </p>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginTop:12}}>
           <Stat label="Pending" value={summary.total_pending} color="#fca5a5" />

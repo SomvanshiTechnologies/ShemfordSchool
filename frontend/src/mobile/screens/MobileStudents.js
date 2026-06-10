@@ -71,7 +71,10 @@ const MobileStudents = () => {
 
     try {
       const params = { page: pg, limit: PAGE_SIZE };
-      if (q.trim()) params.search = q.trim();
+      if (q.trim()) {
+        params.search = q.trim();
+        params.all_sessions = true;
+      }
       const r = await api.get('/students', { params });
       const arr = Array.isArray(r.data) ? r.data : (r.data?.students ?? []);
       const pages = parseInt(r.headers?.['x-total-pages'] ?? r.data?.pages ?? 1, 10) || 1;
@@ -590,7 +593,9 @@ const buildEditForm = (s) => ({
   mother_phone: s.mother_phone || '',
   mother_occupation: s.mother_occupation || '',
   class_name: s.class_name || '',
-  section: s.section || '',
+  section: (STREAMS_FOR_CLASS.includes(s.class_name) && s.stream)
+    ? s.stream.charAt(0).toUpperCase() + s.stream.slice(1).toLowerCase()
+    : (s.section || ''),
   stream: s.stream || '',
   roll_number: s.roll_number || '',
   blood_group: s.blood_group || '',

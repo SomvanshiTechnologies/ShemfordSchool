@@ -490,6 +490,22 @@ async def approve_payroll(payroll_id: str, request: Request):
     if record["status"] == PayrollStatus.PAID:
         raise HTTPException(status_code=400, detail="Payroll is already paid.")
 
+    # If bank details are missing from the payroll snapshot, pull the latest
+    # values from the employee record (admin may have added them after generation).
+    bank_patch = {}
+    if not record.get("bank_account_number") or not record.get("bank_ifsc"):
+        emp_live = await db.employees.find_one({"employee_id": record.get("employee_id")}, {"_id": 0})
+        if emp_live:
+            if not record.get("bank_account_number") and emp_live.get("bank_account_number"):
+                bank_patch["bank_account_number"] = emp_live["bank_account_number"]
+            if not record.get("bank_ifsc") and emp_live.get("bank_ifsc"):
+                bank_patch["bank_ifsc"] = emp_live["bank_ifsc"]
+            if not record.get("bank_account_holder") and emp_live.get("bank_account_holder"):
+                bank_patch["bank_account_holder"] = emp_live["bank_account_holder"]
+        if bank_patch:
+            await db.payroll.update_one({"payroll_id": payroll_id}, {"$set": bank_patch})
+            record.update(bank_patch)
+
     missing = []
     if not record.get("bank_account_number"):
         missing.append("Bank Account Number")
@@ -499,7 +515,7 @@ async def approve_payroll(payroll_id: str, request: Request):
         raise HTTPException(
             status_code=400,
             detail=f"Cannot approve: missing bank detail(s) — {', '.join(missing)}. "
-                   f"Update the employee's bank details and regenerate before approving."
+                   f"Update employee bank details and try again."
         )
 
     now = datetime.now(timezone.utc).isoformat()

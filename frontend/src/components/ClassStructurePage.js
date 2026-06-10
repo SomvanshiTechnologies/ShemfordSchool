@@ -311,7 +311,12 @@ const ClassStructurePage = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {(cls.sections || []).map(sec => {
+                  {(cls.has_streams
+                    ? (cls.sections || []).filter(sec =>
+                        (cls.streams || []).some(st => st.toLowerCase() === sec.section_name.toLowerCase())
+                      )
+                    : (cls.sections || [])
+                  ).map(sec => {
                     const pct = sec.capacity > 0 ? ((sec.student_count || 0) / sec.capacity) * 100 : 0;
                     const colorClass = SECTION_COLORS[sec.section_name] || 'bg-gray-100 text-gray-800';
                     return (

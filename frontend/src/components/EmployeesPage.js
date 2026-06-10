@@ -195,6 +195,10 @@ const EmployeesPage = () => {
       toast.error('Phone number must be exactly 10 digits.');
       return;
     }
+    if (formData.bank_ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(formData.bank_ifsc.trim())) {
+      toast.error('Invalid IFSC code. Must be 11 characters: 4 letters + 0 + 6 alphanumeric (e.g. SBIN0001234).');
+      return;
+    }
     setSaving(true);
     try {
       const data = {
@@ -306,7 +310,13 @@ const EmployeesPage = () => {
           setSaving(false);
           return;
         }
-        data.bank_ifsc = (editData.bank_ifsc || '').trim().toUpperCase();
+        const ifsc = (editData.bank_ifsc || '').trim().toUpperCase();
+        if (ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) {
+          toast.error('Invalid IFSC code. Must be 11 characters: 4 letters + 0 + 6 alphanumeric (e.g. SBIN0001234).');
+          setSaving(false);
+          return;
+        }
+        data.bank_ifsc = ifsc;
       }
       await api.put(`/employees/${selectedEmployee.employee_id}`, data);
       toast.success('Employee updated successfully');
@@ -554,6 +564,7 @@ const EmployeesPage = () => {
                       value={formData.bank_ifsc}
                       onChange={(e) => setFormData({...formData, bank_ifsc: e.target.value.toUpperCase()})}
                       placeholder="e.g. SBIN0001234"
+                      maxLength={11}
                       data-testid="emp-bank-ifsc"
                     />
                   </div>

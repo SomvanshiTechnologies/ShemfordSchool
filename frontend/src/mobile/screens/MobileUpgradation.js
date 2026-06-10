@@ -15,6 +15,17 @@ const CLASSES_WITH_STREAMS = ['Class 11', 'Class 12', '11th', '12th'];
 const STREAM_SECTIONS = STREAMS.map(s => ({ section_name: s, capacity: 999 }));
 const isStreamClass = (cn) => CLASSES_WITH_STREAMS.includes(cn) || /^(11|12)(th)?$/i.test((cn || '').replace(/^Class\s*/i, ''));
 
+const fmtClassSec = (cls, section, stream) => {
+  if (!cls) return '—';
+  if (isStreamClass(cls)) {
+    const raw = String(stream || '').trim() ||
+      (STREAMS.map(s => s.toLowerCase()).includes(String(section || '').toLowerCase()) ? section : '');
+    const pretty = raw ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase() : '';
+    return pretty ? `${cls} (${pretty})` : cls;
+  }
+  return `${cls}${section ? ` – ${section}` : ''}`;
+};
+
 const fmt = (n) => Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
 const isoToDisplay = (s) => {
@@ -657,7 +668,7 @@ const UpgradeTab = ({ classes, payMethods }) => {
             </div>
             <p style={{fontSize:11,color:'#666',marginTop:4}}>
               {selected.class_name} – {selected.section}{selected.stream ? ` (${selected.stream})` : ''}
-              {' · Adm '}{selected.admission_number || '—'}
+              {' · Admission no: '}{selected.admission_number || '—'}
               {selected.academic_year && ` · Year ${selected.academic_year}`}
             </p>
             <button onClick={resetSelection}
@@ -1053,9 +1064,9 @@ const HistoryTab = ({ isAdmin, payMethods }) => {
                 <StatusBadge status={status} />
               </div>
               <div style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'#1A1A1A',marginBottom:8,flexWrap:'wrap'}}>
-                <span style={{color:'#666'}}>{r.from_class}-{r.from_section}{r.from_stream ? ` (${r.from_stream})` : ''}</span>
+                <span style={{color:'#666'}}>{fmtClassSec(r.from_class, r.from_section, r.from_stream)}</span>
                 <ArrowUpCircle size={12} color="#E88A1A" />
-                <span style={{fontWeight:700}}>{r.to_class}-{r.to_section}{r.to_stream ? ` (${r.to_stream})` : ''}</span>
+                <span style={{fontWeight:700}}>{fmtClassSec(r.to_class, r.to_section, r.to_stream)}</span>
               </div>
 
               {/* Fee status line: dues badge while pending approval, else
@@ -1424,8 +1435,8 @@ const ViewSheet = ({ row, onClose, openPreview }) => {
       <DetailRow label="Student" value={row.student_name || row.student_id} />
       <DetailRow label="Admission" value={row.admission_number} mono />
       <DetailRow label="Academic Year" value={row.academic_year} />
-      <DetailRow label="From" value={`${row.from_class}-${row.from_section}${row.from_stream ? ` (${row.from_stream})` : ''}`} />
-      <DetailRow label="To" value={`${row.to_class}-${row.to_section}${row.to_stream ? ` (${row.to_stream})` : ''}`} />
+      <DetailRow label="From" value={fmtClassSec(row.from_class, row.from_section, row.from_stream)} />
+      <DetailRow label="To" value={fmtClassSec(row.to_class, row.to_section, row.to_stream)} />
       {row.upgradation_fee > 0 && <DetailRow label="Upgradation Fee" value={`Rs.${fmt(row.upgradation_fee)}`} />}
       <DetailRow label="Submitted" value={isoToDisplay(row.created_at)} />
       <DetailRow label="Status" value={(row.status || 'pending_approval').replace('_', ' ')} />

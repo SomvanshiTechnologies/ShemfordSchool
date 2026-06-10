@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useCallback } from 'react';
 import api from '../lib/api';
-import { previewInTab, previewExcelHtml, downloadPdf } from '../lib/preview';
+import { previewInTab, previewExcelHtml } from '../lib/preview';
 import { useAuth } from '../contexts/AuthContext';
 import { useSession } from '../contexts/SessionContext';
 import { clampISODate } from '../lib/dateBounds';
@@ -145,13 +145,6 @@ export const AdminPayrollView = ({ canManage = true }) => {
   };
 
   const approve = async (rec) => {
-    const missing = [];
-    if (!rec.bank_account_number) missing.push('Bank Account Number');
-    if (!rec.bank_ifsc) missing.push('IFSC Code');
-    if (missing.length) {
-      toast.error(`Cannot approve: missing ${missing.join(', ')}. Update employee bank details and regenerate.`);
-      return;
-    }
     setActionLoading(rec.payroll_id + '_approve');
     try {
       await api.post(`/payroll/${rec.payroll_id}/approve`);
@@ -222,10 +215,9 @@ export const AdminPayrollView = ({ canManage = true }) => {
     }
   };
 
-  const downloadPayslip = (id, empName) => downloadPdf(
+  const downloadPayslip = (id, empName) => previewInTab(
     () => api.get(`/payroll/${id}/payslip`, { responseType: 'blob' }),
-    `payslip-${empName || id}.pdf`,
-    'Failed to download payslip',
+    { kind: 'pdf', errorMessage: 'Failed to load payslip' },
   );
 
   // Excel: render an HTML preview in a new tab (matches Fees Reports UX).
@@ -555,10 +547,9 @@ const EmployeePayrollView = () => {
     load();
   }, [year]);
 
-  const downloadPayslip = (id, month) => downloadPdf(
+  const downloadPayslip = (id, month) => previewInTab(
     () => api.get(`/payroll/${id}/payslip`, { responseType: 'blob' }),
-    `payslip-${MONTHS[month - 1] || month}.pdf`,
-    'Failed to download payslip',
+    { kind: 'pdf', errorMessage: 'Failed to load payslip' },
   );
 
   const downloadYearly = () => {
