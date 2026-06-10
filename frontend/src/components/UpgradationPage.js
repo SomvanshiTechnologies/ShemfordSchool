@@ -16,16 +16,18 @@ const CLASSES_WITH_STREAMS = ['Class 11', 'Class 12', '11th', '12th'];
 const STREAM_SECTIONS = STREAMS.map(s => ({ section_name: s, capacity: 999 }));
 const isStreamClass = (cn) => CLASSES_WITH_STREAMS.includes(cn) || /^(11|12)(th)?$/i.test((cn || '').replace(/^Class\s*/i, ''));
 
-// Display "11th (Science)" for stream classes (the section is the stream);
+// Display "11th (Science)" for stream classes;
 // "5th – Blue" for colour-section classes.
 const fmtClassSec = (cls, section, stream) => {
   if (!cls) return '—';
   if (isStreamClass(cls)) {
-    const s = String(stream || section || '').trim();
-    const pretty = s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '';
+    // Use stream field; fall back to section only when it is a valid stream name
+    const raw = String(stream || '').trim() ||
+      (STREAMS.map(s => s.toLowerCase()).includes(String(section || '').toLowerCase()) ? section : '');
+    const pretty = raw ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase() : '';
     return pretty ? `${cls} (${pretty})` : cls;
   }
-  return `${cls}${section ? ` – ${section}` : ''}${stream ? ` (${stream})` : ''}`;
+  return `${cls}${section ? ` – ${section}` : ''}`;
 };
 
 function fmt(n) {
@@ -38,9 +40,20 @@ const isoToDisplay = (s) => {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : String(s);
 };
 
+// Returns the nearest configured session after `currentYear` from the DB list.
+// Falls back to year+1 arithmetic only when no next session exists yet.
+function nextSessionAfter(currentYear, sessions) {
+  const later = (sessions || []).filter(s => s > currentYear).sort();
+  if (later.length > 0) return later[0];
+  const m = /^(\d{4})-\d{4}$/.exec(currentYear || '');
+  if (!m) return '';
+  const y = parseInt(m[1], 10);
+  return `${y + 1}-${y + 2}`;
+}
+
 export default function UpgradationPage() {
   const { isAdmin } = useAuth();
-  const { viewSession } = useSession();
+  const { viewSession, availableSessions } = useSession();
   const [tab, setTab] = useState('upgrade');
   const [approvingId, setApprovingId] = useState(null);
   const [rejectId, setRejectId] = useState(null);
@@ -130,22 +143,25 @@ export default function UpgradationPage() {
   const HISTORY_PAGE_SIZE = 10;
   const [historyPage, setHistoryPage] = useState(1);
 
+  const [recentUpgrades, setRecentUpgrades] = useState([]);
+  const [recentLoading, setRecentLoading] = useState(false);
+  const RECENT_PAGE_SIZE = 10;
+  const [recentPage, setRecentPage] = useState(1);
+
   useEffect(() => { loadClasses(); }, []);
 
   // Default the destination ("promote to") year to the year *after* the viewed
   // session — not the live clock — so promotions target the correct year for
   // whichever session is selected. (Overridden per-student on selection.)
   useEffect(() => {
+    // Clear the year filter so switching sessions shows all history fresh.
+    setHistoryYear('');
     // Only seed the default before a student is picked — once a student is
-    // selected, the target year is derived from THAT student's year (+1), so we
-    // must not override it when the session finishes loading.
+    // selected, the target year is derived from THAT student's session.
     if (selected) return;
-    const m = /^(\d{4})-(\d{4})$/.exec(viewSession || '');
-    if (m) {
-      const start = parseInt(m[1], 10);
-      setToAcademicYear(`${start + 1}-${start + 2}`);
-    }
-  }, [viewSession, selected]);
+    const next = nextSessionAfter(viewSession, availableSessions);
+    if (next) setToAcademicYear(next);
+  }, [viewSession, selected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadClasses() {
     try {
@@ -210,11 +226,9 @@ export default function UpgradationPage() {
       setLedgerEntries([]);
     }
 
-    // Auto-advance to the next academic year based on student's current year
-    if (s.academic_year && /^\d{4}-\d{4}$/.test(s.academic_year)) {
-      const startYear = parseInt(s.academic_year.split('-')[0], 10);
-      setToAcademicYear(`${startYear + 1}-${startYear + 2}`);
-    }
+    // Advance to the nearest configured session after the student's current year
+    const nextYear = nextSessionAfter(s.academic_year, availableSessions);
+    if (nextYear) setToAcademicYear(nextYear);
 
     // Auto-pick the next class — use the active class list (sorted by sort_order)
     const active = (classes || []).filter(c => c.is_active);
@@ -269,8 +283,8 @@ export default function UpgradationPage() {
       setNotes('');
       setFeeBlockMsg(null);
       setRequiresApproval(false);
-      // Refresh history so the new record appears
       loadHistory();
+      loadRecentUpgrades();
     } catch (e) {
       if (!e._handled) {
         const detail = e.response?.data?.detail || '';
@@ -301,7 +315,7 @@ export default function UpgradationPage() {
     }
   }
 
-  async function openCollectDialog(studentArg = null, rowId = null) {
+  async function openCollectDialog(studentArg = null, rowId = null, targetYear = null) {
     // studentArg comes from a History-tab row; default to the upgrade-tab student.
     const stu = (studentArg && studentArg.student_id) ? studentArg : selected;
     if (!stu) return;
@@ -316,7 +330,13 @@ export default function UpgradationPage() {
       const res = await api.get(`/fees/ledger/${stu.student_id}`);
       const ledger = res.data?.ledger || {};
       const all = [...(ledger.one_time || []), ...(ledger.yearly || []), ...(ledger.monthly || [])];
-      const entries = all.filter(e => e.status === 'pending' || e.status === 'overdue');
+      const entries = all.filter(e => {
+        if (e.status !== 'pending' && e.status !== 'overdue') return false;
+        // When opened from history, show ONLY the upgradation fee.
+        // Regular dues are settled through the Fees module, not here.
+        if (rowId && e.fee_component !== 'upgradation') return false;
+        return true;
+      });
       setPendingEntries(entries);
       // When opened from history, pre-check and lock the upgradation fee (mandatory).
       // Admin can additionally tick other dues but cannot uncheck the upgrade fee.
@@ -477,6 +497,7 @@ export default function UpgradationPage() {
       }));
       openReceiptPreview(res.data.payment?.payment_id, res.data.receipt_number);
       loadHistory();
+      loadRecentUpgrades();
     } catch (e) {
       if (!e._handled) toast.error('Payment failed: ' + (e.response?.data?.detail || e.message));
     } finally {
@@ -534,6 +555,7 @@ export default function UpgradationPage() {
     openCollectDialog(
       { student_id: row.student_id, first_name: row.student_name, last_name: '' },
       row.upgradation_id,
+      row.academic_year,
     );
   }
 
@@ -604,6 +626,7 @@ export default function UpgradationPage() {
       const res = await api.post(`/upgradation/${upgradationId}/approve`);
       toast.success(res.data.message || 'Upgrade approved.');
       loadHistory();
+      loadRecentUpgrades();
     } catch (e) {
       if (!e._handled) toast.error(e.response?.data?.detail || 'Failed to approve');
     } finally {
@@ -652,6 +675,23 @@ export default function UpgradationPage() {
     if (tab === 'history') loadHistory();
   }, [tab, viewSession]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  async function loadRecentUpgrades() {
+    setRecentLoading(true);
+    try {
+      const res = await api.get('/upgradation/history', { params: { status: 'approved', limit: 500 } });
+      setRecentUpgrades(res.data || []);
+      setRecentPage(1);
+    } catch {
+      // non-fatal — section stays empty
+    } finally {
+      setRecentLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (tab === 'recent') loadRecentUpgrades();
+  }, [tab, viewSession]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Fetch all fee payments touching this upgradation's ledger entry so the
   // View Details dialog can show a per-payment timeline (partial payments
   // generate multiple receipts on the same upgradation_fee_ledger_id).
@@ -693,6 +733,7 @@ export default function UpgradationPage() {
         {[
           { id: 'upgrade', label: 'Upgrade Student', icon: ArrowUpCircle },
           { id: 'history', label: 'Upgradation History', icon: History },
+          { id: 'recent', label: 'Recently Upgraded', icon: CheckCircle2 },
         ].map(t => (
           <button
             key={t.id}
@@ -758,7 +799,7 @@ export default function UpgradationPage() {
                 <div className="text-muted-foreground mt-0.5">
                   Current: {selected.class_name} – {selected.section}
                   {selected.stream ? ` (${selected.stream})` : ''}
-                  &nbsp;|&nbsp;Adm# {selected.admission_number || '—'}
+                  &nbsp;|&nbsp;Admission no: {selected.admission_number || '—'}
                   {selected.academic_year ? <>&nbsp;|&nbsp;Year: <span className="font-medium text-slate-700">{selected.academic_year}</span></> : ''}
                 </div>
               </div>
@@ -1006,8 +1047,6 @@ export default function UpgradationPage() {
               <p className="text-sm text-emerald-700 mt-2">{result.message}</p>
             </div>
           )}
-          {/* Upgrade Successful box removed — toast notification is sufficient */}
-
         </div>
       )}
 
@@ -1069,15 +1108,18 @@ export default function UpgradationPage() {
                       <td className="px-4 py-2.5 whitespace-nowrap">{fmtClassSec(r.to_class, r.to_section, r.to_stream)}</td>
                       <td className="px-4 py-2.5 whitespace-nowrap">{r.academic_year}</td>
                       <td className="px-4 py-2.5 text-center">
-                        {(r.status || 'pending_approval') === 'pending_approval' ? (
-                          r.student_dues_total > 0 ? (
-                            <Badge variant="destructive" title="Student has pending dues — will carry to My Fees if approved">
-                              Dues Rs.{fmt(r.student_dues_total)}
-                            </Badge>
-                          ) : (
-                            <Badge className="bg-green-100 text-green-700">No dues</Badge>
-                          )
-                        ) : r.upgradation_fee > 0 ? (
+                        {(r.status || 'pending_approval') === 'pending_approval' ? (() => {
+                          const upgFeeOwed = r.upgradation_fee > 0 && r.upgradation_fee_status !== 'paid' && r.upgradation_fee_status !== 'no_fee';
+                          // Show upgradation fee first — it gates the Approve button.
+                          // Pre-existing student dues are informational (don't block approval).
+                          if (upgFeeOwed && r.student_dues_total > 0)
+                            return <Badge className="bg-amber-100 text-amber-700" title={`Upgradation fee pending. Student also has Rs.${fmt(r.student_dues_total)} in other dues.`}>Upg fee Rs.{fmt(r.upgradation_fee)}</Badge>;
+                          if (upgFeeOwed)
+                            return <Badge className="bg-amber-100 text-amber-700" title="Upgradation fee must be collected before approving">Upg fee Rs.{fmt(r.upgradation_fee)}</Badge>;
+                          if (r.student_dues_total > 0)
+                            return <Badge variant="destructive" title="Student has pending dues — collect from Fees module">Dues Rs.{fmt(r.student_dues_total)}</Badge>;
+                          return <Badge className="bg-green-100 text-green-700">No dues</Badge>;
+                        })() : r.upgradation_fee > 0 ? (
                           r.upgradation_fee_status === 'paid' || r.upgradation_fee_paid
                             ? <Badge className="bg-green-100 text-green-700">Paid</Badge>
                             : r.upgradation_fee_status === 'overdue'
@@ -1101,7 +1143,8 @@ export default function UpgradationPage() {
                       </td>
                       <td className="px-4 py-2.5 text-center">
                         <div className="flex items-center justify-center gap-1">
-                          {isAdmin && (r.status || 'pending_approval') === 'pending_approval' && (
+                          {isAdmin && (r.status || 'pending_approval') === 'pending_approval' &&
+                            (r.student_dues_total > 0 || (r.upgradation_fee > 0 && r.upgradation_fee_status !== 'paid' && r.upgradation_fee_status !== 'no_fee')) && (
                             <Button
                               size="sm"
                               className="text-xs h-7 px-2 bg-slate-900 hover:bg-slate-800 text-white"
@@ -1193,6 +1236,78 @@ export default function UpgradationPage() {
                 </div>
               </div>
             )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── Recently Upgraded Tab ────────────────────────────────────────────── */}
+      {tab === 'recent' && (
+        <div className="space-y-4">
+          <div className="flex justify-end">
+            <Button variant="outline" size="sm" onClick={loadRecentUpgrades} disabled={recentLoading}>
+              {recentLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Refresh'}
+            </Button>
+          </div>
+
+          {recentLoading && (
+            <div className="flex justify-center py-12 text-muted-foreground">
+              <Loader2 className="h-6 w-6 animate-spin" />
+            </div>
+          )}
+
+          {!recentLoading && recentUpgrades.length === 0 && (
+            <div className="text-center py-12 text-muted-foreground flex flex-col items-center gap-2">
+              <AlertCircle className="h-6 w-6" />
+              No approved upgrades yet.
+            </div>
+          )}
+
+          {!recentLoading && recentUpgrades.length > 0 && (
+            <>
+              <div className="border border-slate-200 rounded-2xl overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted text-muted-foreground">
+                    <tr>
+                      <th className="text-left px-4 py-2.5 whitespace-nowrap">Student</th>
+                      <th className="text-left px-4 py-2.5 whitespace-nowrap">From</th>
+                      <th className="text-left px-4 py-2.5 whitespace-nowrap">To</th>
+                      <th className="text-left px-4 py-2.5 whitespace-nowrap">Academic Year</th>
+                      <th className="text-left px-4 py-2.5 whitespace-nowrap">Upgraded On</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {recentUpgrades.slice((recentPage - 1) * RECENT_PAGE_SIZE, recentPage * RECENT_PAGE_SIZE).map(r => (
+                      <tr key={r.upgradation_id} className="hover:bg-muted/30">
+                        <td className="px-4 py-2.5">
+                          <div className="font-medium">{r.student_name || r.student_id}</div>
+                          <div className="text-xs text-muted-foreground">{r.admission_number}</div>
+                        </td>
+                        <td className="px-4 py-2.5 whitespace-nowrap">{fmtClassSec(r.from_class, r.from_section, r.from_stream)}</td>
+                        <td className="px-4 py-2.5 whitespace-nowrap">{fmtClassSec(r.to_class, r.to_section, r.to_stream)}</td>
+                        <td className="px-4 py-2.5 whitespace-nowrap">{r.academic_year}</td>
+                        <td className="px-4 py-2.5 whitespace-nowrap text-muted-foreground">{isoToDisplay(r.approved_at || r.created_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {recentUpgrades.length > RECENT_PAGE_SIZE && (
+                <div className="flex items-center justify-between gap-3 pt-1">
+                  <p className="text-xs text-slate-500">
+                    Showing {(recentPage - 1) * RECENT_PAGE_SIZE + 1}–{Math.min(recentPage * RECENT_PAGE_SIZE, recentUpgrades.length)} of {recentUpgrades.length}
+                  </p>
+                  <div className="flex items-center gap-1">
+                    <Button variant="outline" size="sm" className="h-8 px-3"
+                      disabled={recentPage <= 1}
+                      onClick={() => setRecentPage(p => Math.max(1, p - 1))}>Prev</Button>
+                    <span className="text-xs px-2">Page {recentPage} of {Math.ceil(recentUpgrades.length / RECENT_PAGE_SIZE)}</span>
+                    <Button variant="outline" size="sm" className="h-8 px-3"
+                      disabled={recentPage >= Math.ceil(recentUpgrades.length / RECENT_PAGE_SIZE)}
+                      onClick={() => setRecentPage(p => Math.min(Math.ceil(recentUpgrades.length / RECENT_PAGE_SIZE), p + 1))}>Next</Button>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>

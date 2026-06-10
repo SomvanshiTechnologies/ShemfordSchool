@@ -186,6 +186,15 @@ const EmployeesPage = () => {
 
   const handleAddEmployee = async (e) => {
     e.preventDefault();
+    const isValidEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v || '').trim());
+    if (formData.email?.trim() && !isValidEmail(formData.email)) {
+      toast.error('Please enter a valid email address.');
+      return;
+    }
+    if (formData.phone && !/^\d{10}$/.test(formData.phone.trim())) {
+      toast.error('Phone number must be exactly 10 digits.');
+      return;
+    }
     setSaving(true);
     try {
       const data = {
@@ -250,6 +259,10 @@ const EmployeesPage = () => {
       designation: employee.designation || '',
       department: employee.department || '',
       salary: employee.salary || '',
+      bank_account_number: employee.bank_account_number || '',
+      bank_ifsc: employee.bank_ifsc || '',
+      bank_name: employee.bank_name || '',
+      bank_account_holder: employee.bank_account_holder || '',
     });
     setPwInput('');
     setPwResult(null);
@@ -281,6 +294,20 @@ const EmployeesPage = () => {
         ...editData,
         salary: editData.salary ? parseFloat(editData.salary) : undefined,
       };
+      const accNum = (editData.bank_account_number || '').trim();
+      if (!accNum) {
+        delete data.bank_account_number;
+        delete data.bank_ifsc;
+        delete data.bank_name;
+        delete data.bank_account_holder;
+      } else {
+        if (accNum.length < 9 || accNum.length > 16) {
+          toast.error('Account number must be 9–16 digits.');
+          setSaving(false);
+          return;
+        }
+        data.bank_ifsc = (editData.bank_ifsc || '').trim().toUpperCase();
+      }
       await api.put(`/employees/${selectedEmployee.employee_id}`, data);
       toast.success('Employee updated successfully');
       setShowEditDialog(false);
@@ -385,7 +412,6 @@ const EmployeesPage = () => {
                       <RefreshCw className="h-4 w-4" />
                     </Button>
                   </div>
-                  <p className="text-xs text-muted-foreground">Auto-generated — edit it or hit the refresh icon for a new one. Must be unique.</p>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -426,8 +452,11 @@ const EmployeesPage = () => {
                     <Input
                       id="phone"
                       value={formData.phone}
-                      onChange={(e) => setFormData({...formData, phone: e.target.value})}
+                      onChange={(e) => setFormData({...formData, phone: e.target.value.replace(/\D/g, '').slice(0, 10)})}
                       data-testid="emp-phone"
+                      inputMode="numeric"
+                      maxLength={10}
+                      placeholder="10-digit mobile number"
                     />
                   </div>
                 </div>
@@ -855,6 +884,53 @@ const EmployeesPage = () => {
                 />
               </div>
 
+              {/* ── Bank Account Details ────────────────── */}
+              <div className="border-t pt-4">
+                <h4 className="font-medium mb-3 text-foreground">Bank Account Details</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <Label htmlFor="edit_bank_account_number">Account Number</Label>
+                    <Input
+                      id="edit_bank_account_number"
+                      value={editData.bank_account_number}
+                      onChange={(e) => setEditData({...editData, bank_account_number: e.target.value.replace(/\D/g, '')})}
+                      placeholder="e.g. 123456789012"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      maxLength={16}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="edit_bank_ifsc">IFSC Code</Label>
+                    <Input
+                      id="edit_bank_ifsc"
+                      value={editData.bank_ifsc}
+                      onChange={(e) => setEditData({...editData, bank_ifsc: e.target.value.toUpperCase()})}
+                      placeholder="e.g. ABCD0123456"
+                      maxLength={11}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="edit_bank_name">Bank Name</Label>
+                    <Input
+                      id="edit_bank_name"
+                      value={editData.bank_name}
+                      onChange={(e) => setEditData({...editData, bank_name: e.target.value})}
+                      placeholder="e.g. State Bank of India"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="edit_bank_account_holder">Account Holder Name</Label>
+                    <Input
+                      id="edit_bank_account_holder"
+                      value={editData.bank_account_holder}
+                      onChange={(e) => setEditData({...editData, bank_account_holder: e.target.value})}
+                      placeholder="Name as on bank account"
+                    />
+                  </div>
+                </div>
+              </div>
+
               {/* ── Password Management (admin-only) ────────────────── */}
               <div className="border-t pt-4">
                 <h4 className="font-medium mb-3 text-foreground flex items-center gap-2">
@@ -1029,6 +1105,37 @@ const EmployeesPage = () => {
                   </div>
                 )}
               </div>
+              {(selectedEmployee.bank_account_number || selectedEmployee.bank_ifsc || selectedEmployee.bank_name || selectedEmployee.bank_account_holder) && (
+                <div className="border-t pt-4 mt-2">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Bank Account Details</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    {selectedEmployee.bank_account_number && (
+                      <div>
+                        <Label className="text-muted-foreground text-xs">Account Number</Label>
+                        <p className="font-medium font-mono">{selectedEmployee.bank_account_number}</p>
+                      </div>
+                    )}
+                    {selectedEmployee.bank_ifsc && (
+                      <div>
+                        <Label className="text-muted-foreground text-xs">IFSC Code</Label>
+                        <p className="font-medium font-mono">{selectedEmployee.bank_ifsc}</p>
+                      </div>
+                    )}
+                    {selectedEmployee.bank_name && (
+                      <div>
+                        <Label className="text-muted-foreground text-xs">Bank Name</Label>
+                        <p className="font-medium">{selectedEmployee.bank_name}</p>
+                      </div>
+                    )}
+                    {selectedEmployee.bank_account_holder && (
+                      <div>
+                        <Label className="text-muted-foreground text-xs">Account Holder Name</Label>
+                        <p className="font-medium">{selectedEmployee.bank_account_holder}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </DialogContent>

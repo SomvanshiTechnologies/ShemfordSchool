@@ -203,6 +203,15 @@ const UsersPage = () => {
 
   const handleCreateUser = async (e) => {
     e.preventDefault();
+    const isValidEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v || '').trim());
+    if (!isValidEmail(createData.email)) {
+      toast.error('Please enter a valid email address.');
+      return;
+    }
+    if (createData.phone && !/^\d{10}$/.test(createData.phone.trim())) {
+      toast.error('Phone number must be exactly 10 digits.');
+      return;
+    }
     try {
       await api.post('/auth/create-user', createData);
       toast.success('User account created successfully');
@@ -283,7 +292,14 @@ const UsersPage = () => {
                   </div>
                   <div className="space-y-2">
                     <Label>Phone</Label>
-                    <Input value={createData.phone} onChange={(e) => setCreateData({...createData, phone: e.target.value})} data-testid="create-phone" placeholder="Phone" />
+                    <Input
+                      value={createData.phone}
+                      onChange={(e) => setCreateData({...createData, phone: e.target.value.replace(/\D/g, '').slice(0, 10)})}
+                      data-testid="create-phone"
+                      placeholder="10-digit mobile number"
+                      inputMode="numeric"
+                      maxLength={10}
+                    />
                   </div>
                 </div>
                 <div className="space-y-2">

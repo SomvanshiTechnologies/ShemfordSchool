@@ -17,13 +17,13 @@ const STEPS = [
 ];
 
 const REQUIRED_DOCUMENTS = [
-  { type: 'birth_certificate', name: 'Birth Certificate', mandatory: false },
-  { type: 'aadhaar_card', name: 'Aadhaar Card', mandatory: false },
-  { type: 'passport_photo', name: 'Passport Photo', mandatory: false },
-  { type: 'previous_marksheet', name: 'Previous Marksheet', mandatory: false },
-  { type: 'transfer_certificate', name: 'Transfer Certificate (TC)', mandatory: false },
-  { type: 'caste_certificate', name: 'Caste Certificate', mandatory: false },
-  { type: 'medical_certificate', name: 'Medical Certificate', mandatory: false },
+  { type: 'birth_certificate',    name: 'Birth Certificate',           mandatory: false, accepts: 'PDF, JPG, PNG' },
+  { type: 'aadhaar_card',         name: 'Aadhaar Card',                mandatory: false, accepts: 'PDF, JPG, PNG' },
+  { type: 'passport_photo',       name: 'Passport Photo',              mandatory: false, accepts: 'JPG, PNG'      },
+  { type: 'previous_marksheet',   name: 'Previous Marksheet',          mandatory: false, accepts: 'PDF, JPG, PNG' },
+  { type: 'transfer_certificate', name: 'Transfer Certificate (TC)',   mandatory: false, accepts: 'PDF, JPG, PNG' },
+  { type: 'caste_certificate',    name: 'Caste Certificate',           mandatory: false, accepts: 'PDF, JPG, PNG' },
+  { type: 'medical_certificate',  name: 'Medical Certificate',         mandatory: false, accepts: 'PDF, JPG, PNG' },
 ];
 
 const STREAMS_FOR_CLASS = ['11th', '12th'];
@@ -83,18 +83,21 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
   const doStep1 = async () => {
     const err = {};
     const isTenDigits = (v) => /^\d{10}$/.test((v || '').trim());
+    const isValidEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v || '').trim());
     if (!data.first_name?.trim()) err.first_name = 'First Name is required';
     if (!data.last_name?.trim()) err.last_name = 'Last Name is required';
     if (!data.gender) err.gender = 'Gender is required';
     if (!data.date_of_birth) err.date_of_birth = 'Date of Birth is required';
-    // Email is OPTIONAL — students log in with their admission number + the
-    // password generated against it, so an email isn't required (matches desktop).
+    // Email is optional but must be valid format when provided.
+    if (data.email?.trim() && !isValidEmail(data.email)) err.email = 'Please enter a valid email address.';
     if (!data.phone?.trim()) err.phone = 'Phone is required';
     else if (!isTenDigits(data.phone)) err.phone = 'Phone must be exactly 10 digits';
     if (!data.address?.trim()) err.address = 'Address is required';
     // Parent / mother contact numbers are optional, but when provided must be 10 digits.
     if (data.parent_phone?.trim() && !isTenDigits(data.parent_phone)) err.parent_phone = 'Contact number must be 10 digits';
     if (data.mother_phone?.trim() && !isTenDigits(data.mother_phone)) err.mother_phone = 'Mother contact must be 10 digits';
+    if (data.parent_email?.trim() && !isValidEmail(data.parent_email)) err.parent_email = 'Please enter a valid email address.';
+    if (data.mother_email?.trim() && !isValidEmail(data.mother_email)) err.mother_email = 'Please enter a valid email address.';
     setErrors(err);
     if (Object.keys(err).length > 0) { toast.error('Please fill required fields'); return; }
     setLoading(true);
@@ -136,8 +139,8 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
     if (_isPhoto && !['image/jpeg','image/png'].includes(file.type) && !/(\.jpe?g|\.png)$/i.test(file.name)) {
       toast.error('Passport photo must be a JPG or PNG image.'); return;
     }
-    if (!_isPhoto && file.type !== 'application/pdf' && !/(\.pdf)$/i.test(file.name)) {
-      toast.error('Documents must be uploaded as PDF.'); return;
+    if (!_isPhoto && !['application/pdf','image/jpeg','image/png'].includes(file.type) && !/(\.pdf|\.jpe?g|\.png)$/i.test(file.name)) {
+      toast.error('Document must be a PDF, JPG, or PNG file.'); return;
     }
     setDocLoading(p => ({ ...p, [docType]: true }));
     try {
@@ -156,7 +159,7 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
     if (!docInputRef.current[docType]) {
       const i = document.createElement('input');
       i.type = 'file';
-      i.accept = docType === 'passport_photo' ? '.jpg,.jpeg,.png' : '.pdf';
+      i.accept = docType === 'passport_photo' ? '.jpg,.jpeg,.png' : '.pdf,.jpg,.jpeg,.png';
       i.onchange = (e) => {
         const f = e.target.files?.[0];
         if (f) {
@@ -250,13 +253,13 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
                 <p style={{fontSize:13,fontWeight:700,color:'#1A1A1A',marginBottom:10}}>Father / Guardian</p>
                 <Input label="Name" value={data.parent_name} onChange={(e) => setData({...data, parent_name: e.target.value})} />
                 <Input label="Phone" inputMode="numeric" maxLength={10} value={data.parent_phone} onChange={(e) => { const v = e.target.value.replace(/\D/g, '').slice(0, 10); setData({...data, parent_phone: v}); setErrors(p => ({...p, parent_phone:''})); }} error={errors.parent_phone} />
-                <Input label="Email" type="email" value={data.parent_email} onChange={(e) => setData({...data, parent_email: e.target.value})} />
+                <Input label="Email" type="email" value={data.parent_email} onChange={(e) => { setData({...data, parent_email: e.target.value}); setErrors(p => ({...p, parent_email:''})); }} error={errors.parent_email} />
               </div>
               <div style={{borderTop:'1px solid #F0F0F0',paddingTop:12,marginTop:8}}>
                 <p style={{fontSize:13,fontWeight:700,color:'#1A1A1A',marginBottom:10}}>Mother</p>
                 <Input label="Name" value={data.mother_name} onChange={(e) => setData({...data, mother_name: e.target.value})} />
                 <Input label="Phone" inputMode="numeric" maxLength={10} value={data.mother_phone} onChange={(e) => { const v = e.target.value.replace(/\D/g, '').slice(0, 10); setData({...data, mother_phone: v}); setErrors(p => ({...p, mother_phone:''})); }} error={errors.mother_phone} />
-                <Input label="Email" type="email" value={data.mother_email} onChange={(e) => setData({...data, mother_email: e.target.value})} />
+                <Input label="Email" type="email" value={data.mother_email} onChange={(e) => { setData({...data, mother_email: e.target.value}); setErrors(p => ({...p, mother_email:''})); }} error={errors.mother_email} />
               </div>
             </>
           )}
@@ -330,7 +333,7 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
                   </div>
                 </div>
               ) : (
-                <p style={{fontSize:12,color:'#666',marginBottom:12}}>Upload admission documents. Mandatory documents are required, or skip all now and upload later.</p>
+                <p style={{fontSize:12,color:'#666',marginBottom:12}}>Upload admission documents. Skip all now and upload later via the student edit panel.</p>
               )}
               <div>
                 {REQUIRED_DOCUMENTS.map(doc => {
@@ -344,6 +347,7 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
                           <p style={{fontSize:12,fontWeight:600,color:'#1A1A1A'}}>
                             {doc.name}
                             {doc.mandatory && <span style={{fontSize:9,color:'#dc2626',fontWeight:800,marginLeft:4,textTransform:'uppercase'}}>Required</span>}
+                            {doc.accepts && <p style={{fontSize:10,color:'#9CA3AF',marginTop:2}}>Supported formats: {doc.accepts}</p>}
                           </p>
                           {up && <p style={{fontSize:10,color:'#16a34a',wordBreak:'break-word'}}>{up.file_name}</p>}
                         </div>
@@ -356,7 +360,6 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
                   );
                 })}
               </div>
-              <p style={{fontSize:10,color:'#888',marginTop:8}}>Passport photo: JPG/PNG · All other documents: PDF · Max 5 MB</p>
             </>
           )}
 
@@ -422,10 +425,13 @@ const MobileStudentOnboarding = ({ classes, onClose, onCompleted }) => {
                       </select>
                     </div>
                     {payment.method === 'split' && (
-                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-                        <Input label="Cash Amount" type="number" value={payment.split_cash} onChange={(e) => setPayment(p => ({...p, split_cash: e.target.value}))} placeholder="0" />
-                        <Input label="Online Amount" type="number" value={payment.split_online} onChange={(e) => setPayment(p => ({...p, split_online: e.target.value}))} placeholder="0" />
-                      </div>
+                      <>
+                        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+                          <Input label="Cash Amount" type="number" value={payment.split_cash} onChange={(e) => setPayment(p => ({...p, split_cash: e.target.value}))} placeholder="0" />
+                          <Input label="Online Amount" type="number" value={payment.split_online} onChange={(e) => setPayment(p => ({...p, split_online: e.target.value}))} placeholder="0" />
+                        </div>
+                        <Input label="Online Ref / UTR No." value={payment.transaction_id} onChange={(e) => setPayment(p => ({...p, transaction_id: e.target.value}))} placeholder="UPI Ref / UTR / NEFT" />
+                      </>
                     )}
                     {payment.method !== 'cash' && payment.method !== 'split' && (
                       <Input

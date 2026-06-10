@@ -2,7 +2,7 @@
 import { useAuth } from '../contexts/AuthContext';
 import { useSession } from '../contexts/SessionContext';
 import api from '../lib/api';
-import { getCached, setCached } from '../lib/pageCache';
+import { getCached, setCached, invalidatePrefix } from '../lib/pageCache';
 import { PAYMENT_METHODS_WITH_POS, fetchPaymentMethods, fmtPaymentMethod } from '../lib/paymentMethods';
 import { clampISODate } from '../lib/dateBounds';
 
@@ -155,6 +155,8 @@ const FeesPage = () => {
   const [admissionPayForm, setAdmissionPayForm] = useState({ method: 'cash', transaction_id: '', remarks: '', split_cash: '', split_online: '' });
   const [processingAdmissionPay, setProcessingAdmissionPay] = useState(false);
 
+  // Collect tab: all active students (sorted by most recently paid first)
+  const [collectChart, setCollectChart] = useState([]);
   // Due chart
   const [dueChart, setDueChart] = useState([]);
   const [dueSearch, setDueSearch] = useState('');
@@ -223,27 +225,27 @@ const FeesPage = () => {
     const cached = getCached('fees:admin-data');
     if (cached) {
       setStudents(cached.students);
-      setDueChart(cached.due);
+      setCollectChart(cached.collect ?? []);
       setConcessions(cached.concessions);
       setLoading(false);
     }
     setRefreshing(true);
     try {
       const ay = viewSession ? { academic_year: viewSession } : {};
-      const [studRes, dueRes, concRes, sessRes] = await Promise.all([
+      const [studRes, collectRes, concRes, sessRes] = await Promise.all([
         api.get('/students', { params: { is_active: true, limit: 500, ...ay } }).catch(() => ({ data: [] })),
-        api.get('/fees/due-chart', { params: ay }).catch(() => ({ data: [] })),
+        api.get('/fees/due-chart').catch(() => ({ data: [] })),
         api.get('/fees/concessions').catch(() => ({ data: [] })),
         api.get('/fees/sessions').catch(() => ({ data: [] })),
       ]);
-      const studArr = studRes.data.students ?? (Array.isArray(studRes.data) ? studRes.data : []);
-      const dueArr = Array.isArray(dueRes.data) ? dueRes.data : [];
-      const concArr = Array.isArray(concRes.data) ? concRes.data : [];
+      const studArr    = studRes.data.students ?? (Array.isArray(studRes.data) ? studRes.data : []);
+      const collectArr = Array.isArray(collectRes.data) ? collectRes.data : [];
+      const concArr    = Array.isArray(concRes.data) ? concRes.data : [];
       setStudents(studArr);
-      setDueChart(dueArr);
+      setCollectChart(collectArr);
       setConcessions(concArr);
       setDueSessions(Array.isArray(sessRes.data) ? sessRes.data : []);
-      setCached('fees:admin-data', { students: studArr, due: dueArr, concessions: concArr });
+      setCached('fees:admin-data', { students: studArr, collect: collectArr, concessions: concArr });
     } catch {}
     finally { setRefreshing(false); }
   }, [viewSession]);
@@ -291,6 +293,9 @@ const FeesPage = () => {
 
   useEffect(() => {
     setLoading(true);
+    // Bust cache on mount so schema changes (new fields like total_paid) are
+    // picked up immediately instead of serving a stale sessionStorage entry.
+    invalidatePrefix('fees:');
     const init = async () => {
       if (isParent || isStudent) {
         await fetchParentData();
@@ -356,7 +361,7 @@ const FeesPage = () => {
         registration_fee: 0, admission_fee: 0, caution_deposit: 0,
         annual_charge: 0, activity_fee: 0, exam_fee: 0, lab_fee: 0,
         monthly_tuition: 0, upgradation_fee: 0,
-        due_day: 10, late_fee: 0, late_fee_enabled: false,
+        due_day: 10, grace_days: 0, late_fee: 0, late_fee_enabled: false,
         sibling_admission_discount_amount: 0,
         sibling_tuition_discount_amount: 0,
         notes: '',
@@ -458,6 +463,19 @@ const FeesPage = () => {
       // Clear the partial/split inputs so the next collection starts blank
       // (pay-in-full) instead of carrying over this payment's amount.
       setPayForm(f => ({ ...f, partial_amount: '', split_cash: '', split_online: '' }));
+      // Bust the fee cache so the collect table re-sorts from fresh server data,
+      // not from the stale cached order.
+      invalidatePrefix('fees:');
+      // Optimistic update: move the paid student to the top immediately so the
+      // user sees the change before the background re-fetch completes.
+      const nowIso = new Date().toISOString();
+      setCollectChart(prev => {
+        const idx = prev.findIndex(s => s.student_id === selectedStudentId);
+        if (idx < 0) return prev;
+        const updated = { ...prev[idx], last_payment_at: nowIso };
+        return [updated, ...prev.filter((_, i) => i !== idx)];
+      });
+      setCollectPage(1);
       const lr = await api.get(`/fees/ledger/${selectedStudentId}`);
       setStudentLedger(lr.data);
       fetchAdminData();
@@ -485,6 +503,15 @@ const FeesPage = () => {
       const res = await api.post('/fees/admission-payment', admPayload);
       toast.success(res.data.message);
       setShowAdmissionPayDialog(false);
+      invalidatePrefix('fees:');
+      const nowIso = new Date().toISOString();
+      setCollectChart(prev => {
+        const idx = prev.findIndex(s => s.student_id === selectedStudentId);
+        if (idx < 0) return prev;
+        const updated = { ...prev[idx], last_payment_at: nowIso };
+        return [updated, ...prev.filter((_, i) => i !== idx)];
+      });
+      setCollectPage(1);
       const lr = await api.get(`/fees/ledger/${selectedStudentId}`);
       setStudentLedger(lr.data);
       fetchAdminData();
@@ -741,7 +768,7 @@ const FeesPage = () => {
   // ── Loading state ─────────────────────────────────────────────────────────
 
   // Only show spinner on first load with no cached data
-  if (loading && students.length === 0 && myChildren.length === 0 && dueChart.length === 0) return (
+  if (loading && students.length === 0 && myChildren.length === 0 && collectChart.length === 0 && dueChart.length === 0) return (
     <div className="flex items-center justify-center h-64">
       <div className="animate-spin rounded-full h-8 w-8 border-2 border-slate-900 border-t-transparent" />
     </div>
@@ -1014,36 +1041,44 @@ const FeesPage = () => {
                 const cls = classes.find(c => c.name === collectClassFilter);
                 return (cls?.sections || []).map(s => s.section_name || s).filter(Boolean);
               })();
-              const filteredCollect = dueChart.filter(s => {
-                if (collectClassFilter !== 'all' && s.class_name !== collectClassFilter) return false;
-                if (collectSectionFilter !== 'all' && s.section !== collectSectionFilter) return false;
-                return true;
-              });
+              const filteredCollect = collectChart
+                .filter(s => {
+                  if (collectClassFilter !== 'all' && s.class_name !== collectClassFilter) return false;
+                  if (collectSectionFilter !== 'all' && s.section !== collectSectionFilter) return false;
+                  return true;
+                })
+                .sort((a, b) => {
+                  const ta = a.last_payment_at || '';
+                  const tb = b.last_payment_at || '';
+                  if (tb !== ta) return tb > ta ? 1 : -1;
+                  return (b.total_due || 0) - (a.total_due || 0);
+                });
               return (
               <div className="space-y-2">
                 <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                  Students with Pending Fees ({filteredCollect.length}{filteredCollect.length !== dueChart.length ? ` of ${dueChart.length}` : ''})
+                  Students ({filteredCollect.length}{filteredCollect.length !== collectChart.length ? ` of ${collectChart.length}` : ''})
                 </p>
                 {filteredCollect.length === 0 ? (
                   <div className="flex items-center gap-2 text-sm text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3">
-                    <CheckCircle2 className="h-4 w-4 shrink-0" /> {dueChart.length === 0 ? 'All fees collected — no pending dues.' : 'No pending students match the selected filters.'}
+                    <CheckCircle2 className="h-4 w-4 shrink-0" /> {collectChart.length === 0 ? 'No active students found.' : 'No students match the selected filters.'}
                   </div>
                 ) : (
                   <div className="border border-slate-200 rounded-xl overflow-hidden">
-                    <div className="grid grid-cols-6 gap-4 px-4 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                      <span>Admission No.</span><span>Student</span><span>Class</span><span>Section</span><span>Academic Year</span><span>Pending</span>
+                    <div className="grid grid-cols-7 gap-4 px-4 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      <span>Admission No.</span><span>Student</span><span>Class</span><span>Section</span><span>Academic Year</span><span>Paid</span><span>Pending</span>
                     </div>
                     {filteredCollect.slice((collectPage - 1) * COLLECT_PAGE_SIZE, collectPage * COLLECT_PAGE_SIZE).map(s => (
                       <button
                         key={s.student_id}
                         onClick={() => selectSearchResult({ student_id: s.student_id, name: s.name, admission_number: s.admission_number, class_name: s.class_name, section: s.section, stream: s.stream })}
-                        className="w-full text-left grid grid-cols-6 gap-4 px-4 py-3 hover:bg-orange-50 border-b border-slate-100 last:border-0 items-center transition-colors"
+                        className="w-full text-left grid grid-cols-7 gap-4 px-4 py-3 hover:bg-orange-50 border-b border-slate-100 last:border-0 items-center transition-colors"
                       >
                         <p className="text-sm text-slate-600 font-mono">{s.admission_number || '—'}</p>
                         <p className="text-sm font-semibold text-slate-900 truncate">{s.name}</p>
                         <p className="text-sm text-slate-600">{s.class_name || '—'}{s.stream ? ` (${s.stream})` : ''}</p>
                         <p className="text-sm text-slate-600">{s.section || '—'}</p>
                         <p className="text-sm text-slate-600">{s.academic_year || viewSession || '—'}</p>
+                        <p className="text-sm font-semibold text-green-600">{(s.total_paid > 0) ? `Rs.${Number(s.total_paid).toLocaleString('en-IN')}` : '—'}</p>
                         <div>
                           <p className="text-sm font-bold text-red-600">Rs.{Number(s.total_due || 0).toLocaleString('en-IN')}</p>
                           {s.entries_overdue > 0 && <p className="text-[10px] text-red-400">{s.entries_overdue} overdue</p>}
@@ -1251,7 +1286,7 @@ const FeesPage = () => {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-slate-50">
-                    {['Admission No.', 'Name', 'Class', 'Academic Year', 'Total Due', 'Entries Pending', 'Overdue', 'Oldest Due', 'Status', 'Action'].map(h => (
+                    {['Admission No.', 'Name', 'Class', 'Academic Year', 'Paid', 'Total Due', 'Entries Pending', 'Overdue', 'Oldest Due', 'Status', 'Action'].map(h => (
                       <TableHead key={h} className="text-[10px] uppercase tracking-wider font-bold text-slate-500">{h}</TableHead>
                     ))}
                   </TableRow>
@@ -1259,7 +1294,7 @@ const FeesPage = () => {
                 <TableBody>
                   {filteredDue.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={10} className="text-center py-12 text-slate-500">
+                      <TableCell colSpan={11} className="text-center py-12 text-slate-500">
                         <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-green-500" />
                         No pending dues found
                       </TableCell>
@@ -1270,6 +1305,7 @@ const FeesPage = () => {
                       <TableCell className="font-medium">{d.name}</TableCell>
                       <TableCell className="text-sm">{d.class_name}-{d.section} {d.stream ? `(${d.stream})` : ''}</TableCell>
                       <TableCell className="text-xs text-slate-600">{d.academic_year || viewSession || '—'}</TableCell>
+                      <TableCell className="font-semibold text-green-600">{d.total_paid ? fmt(d.total_paid) : '—'}</TableCell>
                       <TableCell className="font-bold text-red-600">{fmt(d.total_due)}</TableCell>
                       <TableCell>{d.entries_pending}</TableCell>
                       <TableCell>
@@ -1563,7 +1599,7 @@ const FeesPage = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label className="text-xs font-bold uppercase tracking-wider">Due Day</Label>
                 <Input
@@ -1574,12 +1610,21 @@ const FeesPage = () => {
                 />
               </div>
               <div>
+                <Label className="text-xs font-bold uppercase tracking-wider">Grace Days</Label>
+                <Input
+                  type="number" min={0} max={30}
+                  className="mt-1 h-8 text-sm"
+                  value={configForm.grace_days ?? 0}
+                  onChange={e => setConfigForm(f => ({ ...f, grace_days: parseInt(e.target.value) || 0 }))}
+                />
+              </div>
+              <div>
                 <Label className="text-xs font-bold uppercase tracking-wider">Sibling — Admission Disc Rs.</Label>
-                <div className="flex items-center mt-1 gap-1.5">
-                  <span className="text-xs text-slate-500">Rs.</span>
+                <div className="relative mt-1">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-400 pointer-events-none">Rs.</span>
                   <Input
                     type="number" min={0}
-                    className="mt-0 h-8 text-sm"
+                    className="h-8 text-sm pl-8"
                     value={configForm.sibling_admission_discount_amount ?? 0}
                     onChange={e => setConfigForm(f => ({ ...f, sibling_admission_discount_amount: parseFloat(e.target.value) || 0 }))}
                   />
@@ -1587,11 +1632,11 @@ const FeesPage = () => {
               </div>
               <div>
                 <Label className="text-xs font-bold uppercase tracking-wider">Sibling — Tuition Disc Rs.</Label>
-                <div className="flex items-center mt-1 gap-1.5">
-                  <span className="text-xs text-slate-500">Rs.</span>
+                <div className="relative mt-1">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-400 pointer-events-none">Rs.</span>
                   <Input
                     type="number" min={0}
-                    className="mt-0 h-8 text-sm"
+                    className="h-8 text-sm pl-8"
                     value={configForm.sibling_tuition_discount_amount ?? 0}
                     onChange={e => setConfigForm(f => ({ ...f, sibling_tuition_discount_amount: parseFloat(e.target.value) || 0 }))}
                   />
@@ -1743,9 +1788,16 @@ const FeesPage = () => {
                   <Label className="text-xs font-bold uppercase tracking-wider">Online Amount</Label>
                   <Input type="number" min={0} step="0.01" className="mt-1 h-9 text-sm" value={payForm.split_online} onChange={e => setPayForm(f => ({ ...f, split_online: e.target.value }))} placeholder="0" />
                 </div>
-                <p className="col-span-2 text-[10px] text-slate-500">
-                  Cash + Online must equal the total amount.
-                </p>
+                <div className="col-span-2">
+                  <Label className="text-xs font-bold uppercase tracking-wider">Online Transaction Ref / UTR No.</Label>
+                  <Input
+                    className="mt-1 h-9 text-sm bg-white"
+                    value={payForm.transaction_id}
+                    onChange={e => setPayForm(f => ({ ...f, transaction_id: e.target.value }))}
+                    placeholder="UPI Ref / UTR / NEFT / Cheque no."
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">Collect the online portion (UPI / NEFT / Razorpay) separately and enter the reference here. Cash + Online must equal the total amount.</p>
+                </div>
               </div>
             )}
             {payForm.method === 'pos_terminal' ? (
@@ -1754,7 +1806,7 @@ const FeesPage = () => {
                 <p className="text-xs text-slate-500 mt-1">Click "Send to POS" below to open the POS terminal dialog.</p>
               </div>
             ) : (
-              payForm.method !== 'cash' && (
+              payForm.method !== 'cash' && payForm.method !== 'split' && (
                 <div>
                   <Label className="text-xs font-bold uppercase tracking-wider">Transaction ID / Ref No.</Label>
                   <Input
@@ -1951,7 +2003,16 @@ const FeesPage = () => {
                   <Label className="text-xs font-bold uppercase tracking-wider">Online Amount</Label>
                   <Input type="number" min={0} step="0.01" className="mt-1 h-9 text-sm" value={admissionPayForm.split_online} onChange={e => setAdmissionPayForm(f => ({ ...f, split_online: e.target.value }))} placeholder="0" />
                 </div>
-                <p className="col-span-2 text-[10px] text-slate-500">Cash + Online must equal the total amount.</p>
+                <div className="col-span-2">
+                  <Label className="text-xs font-bold uppercase tracking-wider">Online Transaction Ref / UTR No.</Label>
+                  <Input
+                    className="mt-1 h-9 text-sm bg-white"
+                    value={admissionPayForm.transaction_id}
+                    onChange={e => setAdmissionPayForm(f => ({ ...f, transaction_id: e.target.value }))}
+                    placeholder="UPI Ref / UTR / NEFT / Cheque no."
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">Collect the online portion separately and enter the reference here. Cash + Online must equal the total amount.</p>
+                </div>
               </div>
             )}
             {admissionPayForm.method !== 'cash' && admissionPayForm.method !== 'split' && (
@@ -2156,7 +2217,7 @@ const LedgerView = ({
               <p className="text-sm text-slate-500">
                 {student.class_name}-{student.section}
                 {student.stream && ` · ${student.stream}`}
-                {student.admission_number && ` · Adm# ${student.admission_number}`}
+                {student.admission_number && ` · Admission no: ${student.admission_number}`}
                 {` · ${student.academic_year}`}
               </p>
             </div>

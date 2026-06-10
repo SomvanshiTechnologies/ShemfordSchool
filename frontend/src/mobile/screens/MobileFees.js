@@ -288,7 +288,9 @@ const CollectTab = () => {
 
   useEffect(() => {
     const controller = new AbortController();
-    if (!initialDue) setLoadingDue(true);
+    // Bust cache on mount so new fields (total_paid) are always fresh.
+    invalidatePrefix('m-fees:due-chart');
+    setLoadingDue(true);
     api.get('/fees/due-chart', { signal: controller.signal })
       .then(r => {
         const arr = Array.isArray(r.data) ? r.data : [];
@@ -422,7 +424,15 @@ const CollectTab = () => {
         </div>
       ) : (
         <div className="m-list">
-          {dueChart.slice((duePage - 1) * REPORT_PAGE_SIZE, duePage * REPORT_PAGE_SIZE).map(s => (
+          {[...dueChart]
+            .sort((a, b) => {
+              const ta = a.last_payment_at || '';
+              const tb = b.last_payment_at || '';
+              if (tb !== ta) return tb > ta ? 1 : -1;
+              return (b.total_due || 0) - (a.total_due || 0);
+            })
+            .slice((duePage - 1) * REPORT_PAGE_SIZE, duePage * REPORT_PAGE_SIZE)
+            .map(s => (
             <button
               key={s.student_id}
               onClick={() => setSelectedStudentId(s.student_id)}
@@ -432,6 +442,7 @@ const CollectTab = () => {
               <div style={{minWidth:0,flex:1}}>
                 <p style={{fontSize:13,fontWeight:700,color:'#1A1A1A',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.name}</p>
                 <p style={{fontSize:11,color:'#888',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.class_name}-{s.section} · {s.admission_number || '—'}</p>
+                {s.total_paid > 0 && <p style={{fontSize:11,color:'#16a34a',fontWeight:600}}>Paid: {fmt(s.total_paid)}</p>}
               </div>
               <div style={{textAlign:'right',flexShrink:0}}>
                 <p style={{fontWeight:800,fontSize:13,color:'#dc2626'}}>{fmt(s.total_due)}</p>
@@ -738,6 +749,7 @@ const PaymentSheet = ({ studentId, ledger, payIds, onClose, onSuccess }) => {
                 <FormInput label="Cash Amount" type="number" value={splitCash} onChange={setSplitCash} />
                 <FormInput label="Online Amount" type="number" value={splitOnline} onChange={setSplitOnline} />
               </div>
+              <FormInput label="Online Ref / UTR No." value={transactionId} onChange={setTransactionId} placeholder="UPI Ref / UTR / NEFT" />
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 12px',background:'#F8F8F8',borderRadius:10}}>
                 <span style={{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:'#666'}}>Amount to collect</span>
                 <span style={{fontSize:15,fontWeight:800,color:'#1A1A1A'}}>{fmt((parseFloat(splitCash) || 0) + (parseFloat(splitOnline) || 0))}</span>
@@ -1340,6 +1352,7 @@ const ConfigEditSheet = ({ config, year, classes, onClose, onSaved }) => {
     monthly_tuition: config.monthly_tuition || 0,
     upgradation_fee: config.upgradation_fee || 0,
     due_day: config.due_day || 10,
+    grace_days: config.grace_days || 0,
     late_fee: config.late_fee || 0,
     late_fee_enabled: config.late_fee_enabled || false,
     sibling_admission_discount_amount: config.sibling_admission_discount_amount || 0,
@@ -1407,6 +1420,7 @@ const ConfigEditSheet = ({ config, year, classes, onClose, onSaved }) => {
             <span style={{fontSize:13,fontWeight:600,color:'#1A1A1A'}}>Enable Late Fee</span>
           </label>
           <NumberField label="Due Day (of month)" value={form.due_day} onChange={(v) => set('due_day', v)} />
+          <NumberField label="Grace Days (after due date)" value={form.grace_days} onChange={(v) => set('grace_days', v)} />
 
           <p className="m-section">Sibling Discounts</p>
           <NumberField label="Sibling Admission Discount (Rs.)" value={form.sibling_admission_discount_amount} onChange={(v) => set('sibling_admission_discount_amount', v)} />

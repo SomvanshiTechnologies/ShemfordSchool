@@ -273,6 +273,7 @@ class FeeComponentConfig(BaseModel):
     upgradation_fee: float = 0
     # Payment settings
     due_day: int = 10
+    grace_days: int = 0  # Days after due_date before a fee is marked overdue
     late_fee: float = 0
     late_fee_enabled: bool = False
     # Sibling discount (school policy) — fixed amounts in ₹
@@ -362,6 +363,7 @@ class UpgradationRecord(BaseModel):
     to_stream: Optional[str] = None
     from_section: str = ""
     to_section: str = ""
+    from_academic_year: Optional[str] = None  # student's session at time of request
     academic_year: str  # the NEW academic year after upgradation
     upgradation_fee: float = 0
     upgradation_fee_ledger_id: Optional[str] = None

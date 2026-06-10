@@ -23,7 +23,7 @@ Annual increase:
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from typing import Optional, List
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 import io
 import logging
 import re
@@ -79,7 +79,7 @@ from models import (
     UserRole, FeeComponentConfig, StudentLedgerEntry, FeePayment,
     FeeComponentType, FEE_COMPONENT_FREQUENCY
 )
-from auth_utils import get_current_user, require_roles, create_audit_log
+from auth_utils import get_current_user, require_roles, create_audit_log, request_session
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -200,8 +200,7 @@ def get_academic_year_months(academic_year: str) -> List[str]:
 def get_remaining_months(academic_year: str, from_date: str) -> List[str]:
     all_months = get_academic_year_months(academic_year)
     from_month = from_date[:7]
-    remaining = [m for m in all_months if m >= from_month]
-    return remaining if remaining else all_months
+    return [m for m in all_months if m >= from_month]
 
 
 def current_academic_year() -> str:
@@ -302,36 +301,40 @@ async def check_sibling(student_id: str, parent_id: Optional[str], parent_email:
 
 
 async def refresh_overdue_for_student(student_id: str):
-    """Mark pending ledger entries as overdue when past due date; apply late fee."""
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    await db.student_ledger.update_many(
-        {"student_id": student_id, "status": "pending", "due_date": {"$lt": today}},
-        {"$set": {"status": "overdue"}}
-    )
-
-    # Apply late fees for overdue tuition entries (if class config has it enabled)
+    """Mark pending ledger entries as overdue when past grace period; apply late fee."""
     student = await db.students.find_one({"student_id": student_id}, {"_id": 0})
+    cfg = None
+    grace_days = 0
     if student:
         cfg = await get_fee_config(
             student.get("class_name", ""),
             student.get("academic_year", current_academic_year()),
             student.get("stream")
         )
-        if cfg and cfg.get("late_fee_enabled") and cfg.get("late_fee", 0) > 0:
-            late_fee_amount = cfg["late_fee"]
-            overdue_no_late = await db.student_ledger.find({
-                "student_id": student_id,
-                "status": "overdue",
-                "late_fee_applied": 0,
-                "fee_component": "tuition"
-            }, {"_id": 0}).to_list(100)
-            for entry in overdue_no_late:
-                new_net = entry["gross_amount"] - entry.get("concession_amount", 0) + late_fee_amount
-                await db.student_ledger.update_one(
-                    {"ledger_id": entry["ledger_id"]},
-                    {"$set": {"late_fee_applied": late_fee_amount, "net_amount": new_net}}
-                )
+        grace_days = int(cfg.get("grace_days", 0)) if cfg else 0
+
+    # A fee is overdue only after due_date + grace_days has passed
+    effective_cutoff = (datetime.now() - timedelta(days=grace_days)).strftime("%Y-%m-%d")
+    await db.student_ledger.update_many(
+        {"student_id": student_id, "status": "pending", "due_date": {"$lt": effective_cutoff}},
+        {"$set": {"status": "overdue"}}
+    )
+
+    # Apply late fees for overdue tuition entries (if class config has it enabled)
+    if cfg and cfg.get("late_fee_enabled") and cfg.get("late_fee", 0) > 0:
+        late_fee_amount = cfg["late_fee"]
+        overdue_no_late = await db.student_ledger.find({
+            "student_id": student_id,
+            "status": "overdue",
+            "late_fee_applied": 0,
+            "fee_component": "tuition"
+        }, {"_id": 0}).to_list(100)
+        for entry in overdue_no_late:
+            new_net = entry["gross_amount"] - entry.get("concession_amount", 0) + late_fee_amount
+            await db.student_ledger.update_one(
+                {"ledger_id": entry["ledger_id"]},
+                {"$set": {"late_fee_applied": late_fee_amount, "net_amount": new_net}}
+            )
 
     # Update student fee_status
     overdue = await db.student_ledger.count_documents({"student_id": student_id, "status": "overdue"})
@@ -409,22 +412,11 @@ def build_admission_fee_breakdown(cfg: dict, is_sibling: bool) -> List[dict]:
 
 
 def _due_date(year_month: str, due_day: int) -> str:
-    """
-    Compute due date for a fee entry: YYYY-MM-{due_day}.
-    If the due date would be in the past (entry created late), push it to next month so the
-    entry isn't immediately overdue on creation.
-    """
+    """Return YYYY-MM-{due_day} for the given year-month.
+    No date shifting — due dates always match the published fee schedule.
+    Overdue transitions use the grace_days from Fee Config, not admission timing."""
     yr, mn = year_month.split("-")
-    candidate = f"{yr}-{mn}-{str(due_day).zfill(2)}"
-    today = datetime.now().strftime("%Y-%m-%d")
-    if candidate < today:
-        m, y = int(mn), int(yr)
-        if m == 12:
-            m, y = 1, y + 1
-        else:
-            m += 1
-        candidate = f"{y}-{str(m).zfill(2)}-{str(due_day).zfill(2)}"
-    return candidate
+    return f"{yr}-{mn}-{str(due_day).zfill(2)}"
 
 
 async def create_admission_ledger(student: dict, cfg: dict, academic_year: str, admission_month: str):
@@ -446,7 +438,6 @@ async def create_admission_ledger(student: dict, cfg: dict, academic_year: str, 
     sibling_tuit_disc = cfg.get("sibling_tuition_discount_amount", 0) if is_sibling else 0
 
     all_months = get_academic_year_months(academic_year)
-    # Month index of admission month
     remaining_months = get_remaining_months(academic_year, f"{admission_month}-01")
 
     ledger_entries = []
@@ -470,8 +461,7 @@ async def create_admission_ledger(student: dict, cfg: dict, academic_year: str, 
             disc = min(sibling_adm_disc, gross)  # Don't discount more than the fee
             disc_reason = f"Sibling discount (Rs.{disc})" if disc > 0 else None
         net = gross - disc
-        yr, mn = admission_month.split("-")
-        due_date = f"{yr}-{mn}-{str(due_day).zfill(2)}"
+        due_date = _due_date(admission_month, due_day)
         entry = StudentLedgerEntry(
             student_id=student_id,
             admission_number=admission_number,
@@ -537,7 +527,7 @@ async def create_admission_ledger(student: dict, cfg: dict, academic_year: str, 
             if existing:
                 continue
             yr, mn = month_str.split("-")
-            due_date = f"{yr}-{mn}-{str(due_day).zfill(2)}"
+            due_date = _due_date(month_str, due_day)
             month_names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
                            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
             desc = f"Tuition — {month_names[int(mn)]} {yr}"
@@ -885,19 +875,32 @@ async def get_student_ledger(student_id: str, request: Request):
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    # (#5) Do NOT call refresh_overdue_for_student here — it caused late-fee accumulation
-    # on every ledger GET. Overdue status is updated by:
-    #   1. The due-chart endpoint (bulk update on load)
-    #   2. POST /fees/refresh-overdue (explicit admin trigger)
-    # Quick in-memory check only — no DB write:
-    today = datetime.now().strftime("%Y-%m-%d")
+    # Lightweight overdue transition: no late-fee logic here (that lives in refresh_overdue_for_student).
+    # Respects grace_days from the student's fee config so a fee is never marked overdue
+    # until due_date + grace_days has passed.
+    _cfg = await get_fee_config(
+        student.get("class_name", ""),
+        student.get("academic_year", current_academic_year()),
+        student.get("stream")
+    )
+    _grace = int(_cfg.get("grace_days", 0)) if _cfg else 0
+    _cutoff = (datetime.now() - timedelta(days=_grace)).strftime("%Y-%m-%d")
     await db.student_ledger.update_many(
-        {"student_id": student_id, "status": "pending", "due_date": {"$lt": today}},
+        {"student_id": student_id, "status": "pending", "due_date": {"$lt": _cutoff}},
         {"$set": {"status": "overdue"}}
     )
 
+    sess = request_session(request)
+    if sess:
+        # Current session: all entries. Previous sessions: only unpaid dues.
+        ledger_filter = {"student_id": student_id, "$or": [
+            {"academic_year": sess},
+            {"academic_year": {"$ne": sess}, "status": {"$in": ["pending", "overdue"]}},
+        ]}
+    else:
+        ledger_filter = {"student_id": student_id}
     entries = await db.student_ledger.find(
-        {"student_id": student_id}, {"_id": 0}
+        ledger_filter, {"_id": 0}
     ).sort([("fee_type", 1), ("due_date", 1)]).to_list(500)
 
     for e in entries:
@@ -922,7 +925,7 @@ async def get_student_ledger(student_id: str, request: Request):
                            student_id, student["class_name"], student.get("academic_year"))
 
     payments = await db.fee_payments.find(
-        {"student_id": student_id}, {"_id": 0}
+        {"student_id": student_id, **({"academic_year": sess} if sess else {})}, {"_id": 0}
     ).sort("payment_date", -1).to_list(500)
 
     # Summaries
@@ -1083,7 +1086,7 @@ async def record_admission_payment(request: Request):
     receipt_number = await get_next_receipt_number()
 
     # Spread the collected amount across entries, oldest first.
-    pending_updates = []   # (ledger_id, set_doc) — payment_id stamped after FeePayment
+    pending_updates = []   # (ledger_id, set_doc, pay_here) — payment_id stamped after FeePayment
     covered_entries = []
     remaining_to_apply = collect_total
     for entry in pending_entries:
@@ -1106,7 +1109,7 @@ async def record_admission_payment(request: Request):
             set_doc = {"status": "overdue" if past_due else "pending",
                        "amount_paid": new_paid, "remaining_balance": new_remaining,
                        "paid_date": today, "receipt_number": receipt_number}
-        pending_updates.append((entry["ledger_id"], set_doc))
+        pending_updates.append((entry["ledger_id"], set_doc, round(pay_here, 2)))
         remaining_to_apply = round(remaining_to_apply - pay_here, 2)
 
     payment = FeePayment(
@@ -1135,8 +1138,14 @@ async def record_admission_payment(request: Request):
         pay_dict["split_payments"] = {k: float(v) for k, v in split_payments.items() if float(v) > 0}
 
     ledger_updates = [
-        UpdateOne({"ledger_id": lid}, {"$set": {**doc, "payment_id": payment.payment_id}})
-        for lid, doc in pending_updates
+        UpdateOne(
+            {"ledger_id": lid},
+            {
+                "$set": {**doc, "payment_id": payment.payment_id},
+                "$push": {"payment_allocations": {"payment_id": payment.payment_id, "amount": pay_here}},
+            }
+        )
+        for lid, doc, pay_here in pending_updates
     ]
 
     try:
@@ -1481,7 +1490,10 @@ async def pay_fee(request: Request):
             }
         ledger_updates.append(UpdateOne(
             {"ledger_id": entry["ledger_id"]},
-            {"$set": set_doc},
+            {
+                "$set": set_doc,
+                "$push": {"payment_allocations": {"payment_id": payment.payment_id, "amount": paid_now}},
+            },
         ))
 
     try:
@@ -1544,21 +1556,37 @@ async def get_due_chart(
         {"$set": {"status": "overdue"}}
     )
 
-    # 2. Aggregate pending/overdue totals per student. For entries that
-    # have been partially paid (amount_paid > 0), sum remaining_balance
-    # instead of net_amount so the chart reflects what's actually owed.
-    ledger_match: dict = {"status": {"$in": ["pending", "overdue"]}}
-    # Fee Type (category) and Duration (month) are independent filters,
-    # combined with AND. fee_selections is a comma list of fee_component names.
+    # 2. Fetch ALL active students first.
+    student_query: dict = {"is_active": True}
+    if class_name:
+        student_query["class_name"] = class_name
+    if section:
+        student_query["section"] = section
+    if academic_year:
+        student_query["academic_year"] = academic_year
+
+    students = await db.students.find(student_query, {
+        "_id": 0, "student_id": 1, "first_name": 1, "last_name": 1,
+        "class_name": 1, "section": 1, "stream": 1, "admission_number": 1, "fee_status": 1,
+        "phone": 1, "academic_year": 1,
+    }).to_list(5000)
+
+    if not students:
+        return []
+
+    student_map = {s["student_id"]: s for s in students}
+    all_student_ids = list(student_map.keys())
+
+    # 3. Aggregate pending/overdue totals — scoped to this student set.
+    ledger_match: dict = {"status": {"$in": ["pending", "overdue"]}, "student_id": {"$in": all_student_ids}}
     comps = [s.strip() for s in (fee_selections or "").split(",") if s.strip()]
     if fee_component and fee_component not in comps:
-        comps.append(fee_component)  # legacy single-value support
+        comps.append(fee_component)
     if len(comps) == 1:
         ledger_match["fee_component"] = comps[0]
     elif len(comps) > 1:
         ledger_match["fee_component"] = {"$in": comps}
     if month:
-        # Duration filter: YYYY-MM prefix match on the YYYY-MM-DD due_date.
         ledger_match["due_date"] = {"$regex": f"^{month}-"}
     ledger_pipeline = [
         {"$match": ledger_match},
@@ -1576,38 +1604,37 @@ async def get_due_chart(
             "entries_partial": {"$sum": {
                 "$cond": [{"$gt": [{"$ifNull": ["$amount_paid", 0]}, 0]}, 1, 0]
             }},
-            "oldest_due":      {"$min": "$due_date"},
+            "oldest_due": {"$min": "$due_date"},
         }},
     ]
     ledger_rows = await db.student_ledger.aggregate(ledger_pipeline).to_list(10000)
-    if not ledger_rows:
-        return []
+    ledger_map = {r["_id"]: r for r in ledger_rows}
 
-    student_ids = [r["_id"] for r in ledger_rows]
+    # 4. Payment summary: most recent timestamp + total paid.
+    last_pay_rows = await db.fee_payments.aggregate([
+        {"$match": {"student_id": {"$in": all_student_ids}}},
+        {"$group": {
+            "_id": "$student_id",
+            "last_at": {"$max": "$created_at"},
+            "total_paid": {"$sum": "$amount"},
+        }},
+    ]).to_list(10000)
 
-    # 3. Fetch matching students in one query
-    student_query: dict = {"is_active": True, "student_id": {"$in": student_ids}}
-    if class_name:
-        student_query["class_name"] = class_name
-    if section:
-        student_query["section"] = section
-    if academic_year:
-        student_query["academic_year"] = academic_year
+    def _to_iso(v):
+        if not v:
+            return ""
+        return v.isoformat() if hasattr(v, "isoformat") else str(v)
 
-    students = await db.students.find(student_query, {
-        "_id": 0, "student_id": 1, "first_name": 1, "last_name": 1,
-        "class_name": 1, "section": 1, "stream": 1, "admission_number": 1, "fee_status": 1,
-        "phone": 1, "academic_year": 1,
-    }).to_list(5000)
+    last_payment_map = {r["_id"]: _to_iso(r["last_at"]) for r in last_pay_rows}
+    total_paid_map   = {r["_id"]: round(r.get("total_paid") or 0, 2) for r in last_pay_rows}
 
-    student_map = {s["student_id"]: s for s in students}
+    # 5. Build chart for every student. Students with no pending dues get
+    # total_due=0 and still appear — they sort to the bottom naturally.
     due_chart = []
-    for row in ledger_rows:
-        s = student_map.get(row["_id"])
-        if not s:
-            continue  # inactive or filtered out by class_name
+    for sid, s in student_map.items():
+        row = ledger_map.get(sid, {})
         due_chart.append({
-            "student_id":       row["_id"],
+            "student_id":       sid,
             "admission_number": s.get("admission_number", ""),
             "name":             f"{s['first_name']} {s['last_name']}",
             "class_name":       s["class_name"],
@@ -1615,22 +1642,27 @@ async def get_due_chart(
             "stream":           s.get("stream"),
             "academic_year":    s.get("academic_year", ""),
             "mobile":           s.get("phone", ""),
-            "total_due":        round(row["total_due"], 2),
-            "entries_pending":  row["entries_pending"],
-            "entries_overdue":  row["entries_overdue"],
+            "total_due":        round(row.get("total_due", 0), 2),
+            "entries_pending":  row.get("entries_pending", 0),
+            "entries_overdue":  row.get("entries_overdue", 0),
             "entries_partial":  row.get("entries_partial", 0),
             "fee_status":       s.get("fee_status", "pending"),
-            "oldest_due":       row["oldest_due"] or "",
+            "oldest_due":       row.get("oldest_due") or "",
+            "last_payment_at":  last_payment_map.get(sid, ""),
+            "total_paid":       total_paid_map.get(sid, 0),
         })
 
+    # Sort: most recently paid first; students who never paid fall to the bottom.
+    # Tiebreaker: highest pending amount.
     due_chart.sort(key=lambda x: x["total_due"], reverse=True)
+    due_chart.sort(key=lambda x: x.get("last_payment_at") or "", reverse=True)
 
-    # (#26) Server-side name / admission number search
+    # Server-side name / admission number search
     if search:
-        s = search.strip().lower()
+        sl = search.strip().lower()
         due_chart = [
             r for r in due_chart
-            if s in r["name"].lower() or s in r.get("admission_number", "").lower()
+            if sl in r["name"].lower() or sl in r.get("admission_number", "").lower()
         ]
 
     return due_chart

@@ -163,7 +163,7 @@ const MobileStudents = () => {
   };
 
   const handleToggleWebLogin = async (student) => {
-    const newVal = student.web_login_enabled === false ? true : false;
+    const newVal = student.web_login_enabled === true ? false : true;
     try {
       await api.patch(`/students/${student.student_id}/web-login`, { web_login_enabled: newVal });
       setSelected(prev => prev ? { ...prev, web_login_enabled: newVal } : prev);
@@ -253,19 +253,19 @@ const MobileStudents = () => {
                 <label
                   onClick={(e) => e.stopPropagation()}
                   style={{display:'flex',alignItems:'center',cursor:'pointer',flexShrink:0}}
-                  title={s.web_login_enabled !== false ? 'Portal login enabled' : 'App only'}
+                  title={s.web_login_enabled === true ? 'Portal login enabled' : 'App only'}
                 >
                   <input
                     type="checkbox"
                     style={{position:'absolute',opacity:0,width:0,height:0,appearance:'none',WebkitAppearance:'none',pointerEvents:'none'}}
-                    checked={s.web_login_enabled !== false}
+                    checked={s.web_login_enabled === true}
                     onChange={(e) => { e.stopPropagation(); handleToggleWebLogin(s); }}
                   />
                   <span style={{
                     display:'inline-flex',alignItems:'center',justifyContent:'center',
                     width:18,height:18,borderRadius:4,flexShrink:0,
-                    background: s.web_login_enabled !== false ? '#E88A1A' : '#FFF',
-                    border: s.web_login_enabled !== false ? 'none' : '2px solid #D1D5DB',
+                    background: s.web_login_enabled === true ? '#E88A1A' : '#FFF',
+                    border: s.web_login_enabled === true ? 'none' : '2px solid #D1D5DB',
                   }}>
                     {s.web_login_enabled !== false && (
                       <svg width="11" height="8" viewBox="0 0 11 8" fill="none">

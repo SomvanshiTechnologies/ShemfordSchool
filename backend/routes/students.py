@@ -194,6 +194,7 @@ async def get_students(
     all_sessions: bool = False,  # bypass session scoping (e.g. upgradation search)
     name_only: bool = False,  # search only student name/admission, not parent fields
     status: Optional[str] = "active",  # active | inactive | all
+    sort_by: Optional[str] = None,      # "last_upgraded" → recently upgraded first
     page: int = 1,
     limit: int = 50,
 ):
@@ -290,16 +291,22 @@ async def get_students(
         "fee_status": 1, "is_active": 1, "app_locked": 1,
         "roll_number": 1, "user_id": 1, "parent_id": 1,
         "is_sibling": 1, "admission_date": 1,
-        "web_login_enabled": 1,
+        "web_login_enabled": 1, "last_upgraded_at": 1,
     }
 
     limit = max(1, min(limit, 200))
     skip = (page - 1) * limit
 
+    sort_order = (
+        [("last_upgraded_at", -1), ("class_name", 1), ("first_name", 1)]
+        if sort_by == "last_upgraded"
+        else [("class_name", 1), ("section", 1), ("first_name", 1)]
+    )
+
     total, students = await asyncio.gather(
         db.students.count_documents(query),
         db.students.find(query, LIST_FIELDS)
-            .sort([("class_name", 1), ("section", 1), ("first_name", 1)])
+            .sort(sort_order)
             .skip(skip)
             .limit(limit)
             .to_list(limit),

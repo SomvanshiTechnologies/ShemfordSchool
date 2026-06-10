@@ -24,14 +24,110 @@ def _stream_section(to_class: str, to_section: str, to_stream: Optional[str]) ->
 
 from database import db
 from models import UserRole, StudentLedgerEntry, UpgradationRecord
-from auth_utils import get_current_user, require_roles, create_audit_log
+from auth_utils import get_current_user, require_roles, create_audit_log, request_session
 from routes.fees import (
     get_fee_config, create_admission_ledger, refresh_overdue_for_student,
     get_remaining_months, current_academic_year, get_next_receipt_number,
+    active_session,
 )
 from models import FeePayment
 
 router = APIRouter()
+
+
+async def _backfill_from_academic_year():
+    """
+    One-time migration: stamp from_academic_year on every upgradation_record
+    that is missing it by computing academic_year − 1 year.
+    e.g. academic_year="2026-2027" → from_academic_year="2025-2026"
+    Safe to re-run (only touches records where from_academic_year is absent).
+    """
+    legacy = await db.upgradation_records.find(
+        {"from_academic_year": {"$in": [None, ""]}, "academic_year": {"$exists": True}},
+        {"_id": 1, "academic_year": 1},
+    ).to_list(10000)
+    # Also catch records where the field simply doesn't exist in the document
+    legacy += await db.upgradation_records.find(
+        {"from_academic_year": {"$exists": False}, "academic_year": {"$exists": True}},
+        {"_id": 1, "academic_year": 1},
+    ).to_list(10000)
+
+    ops = []
+    for rec in legacy:
+        ay = rec.get("academic_year", "")
+        m = _re.match(r"^(\d{4})-(\d{4})$", ay)
+        if not m:
+            continue
+        y1, y2 = int(m.group(1)), int(m.group(2))
+        from_ay = f"{y1 - 1}-{y2 - 1}"
+        ops.append((rec["_id"], from_ay))
+
+    for oid, from_ay in ops:
+        await db.upgradation_records.update_one(
+            {"_id": oid},
+            {"$set": {"from_academic_year": from_ay}},
+        )
+
+    return len(ops)
+
+
+async def _backfill_streams():
+    """
+    One-time migration: copy section → stream (and set from_stream / to_stream) for
+    11th/12th records and students where stream was never stored.
+    Valid stream names are read from class_structures (admin-configured, not hardcoded).
+    Safe to re-run — only touches records where stream is absent/null.
+    """
+    stream_cls_pat = _re.compile(r"^(class\s*)?(11|12)(th)?$", _re.I)
+
+    # Gather valid section (= stream) names for 11th/12th from class_structures
+    stream_classes = await db.class_structures.find(
+        {}, {"_id": 0, "name": 1, "sections": 1}
+    ).to_list(200)
+    valid_streams = set()
+    for cls in stream_classes:
+        if stream_cls_pat.match((cls.get("name") or "").strip()):
+            for sec in (cls.get("sections") or []):
+                sname = (sec.get("section_name") or "").strip()
+                if sname:
+                    valid_streams.add(sname.lower())
+
+    if not valid_streams:
+        return 0
+
+    n = 0
+    # Fix upgradation_records
+    async for rec in db.upgradation_records.find({}):
+        updates = {}
+        to_cls = (rec.get("to_class") or "").strip()
+        if stream_cls_pat.match(to_cls) and not rec.get("to_stream"):
+            sec = (rec.get("to_section") or "").strip()
+            if sec.lower() in valid_streams:
+                updates["to_stream"] = sec.title()
+        from_cls = (rec.get("from_class") or "").strip()
+        if stream_cls_pat.match(from_cls) and not rec.get("from_stream"):
+            sec = (rec.get("from_section") or "").strip()
+            if sec.lower() in valid_streams:
+                updates["from_stream"] = sec.title()
+        if updates:
+            await db.upgradation_records.update_one(
+                {"_id": rec["_id"]}, {"$set": updates}
+            )
+            n += 1
+
+    # Fix students in 11th/12th with null stream
+    async for stu in db.students.find({"stream": None, "is_active": True}):
+        cls_name = (stu.get("class_name") or "").strip()
+        if stream_cls_pat.match(cls_name):
+            sec = (stu.get("section") or "").strip()
+            if sec.lower() in valid_streams:
+                await db.students.update_one(
+                    {"student_id": stu["student_id"]},
+                    {"$set": {"stream": sec.title()}}
+                )
+                n += 1
+
+    return n
 
 
 async def _validate_upgrade_target(student: dict, to_class: str, to_section: str, to_stream: Optional[str],
@@ -96,7 +192,7 @@ async def request_upgrade(student_id: str, request: Request):
     to_class = body.get("to_class")
     to_section = body.get("to_section")
     to_stream = body.get("to_stream")
-    academic_year = body.get("academic_year", current_academic_year())
+    academic_year = body.get("academic_year") or await active_session()
     notes = body.get("notes", "")
 
     if not to_class or not to_section:
@@ -136,16 +232,21 @@ async def request_upgrade(student_id: str, request: Request):
     # An already-APPROVED upgrade for this year is a hard block. A PENDING
     # request is not — if the student now has no dues we complete that queued
     # request right away instead of forcing a separate approval step.
+    # Query without status filter to catch orphaned records from previous attempts.
     blocking = await db.upgradation_records.find_one({
         "student_id": student_id,
         "academic_year": academic_year,
-        "status": {"$in": ["pending_approval", "approved"]},
     })
     if blocking and blocking.get("status") == "approved":
         raise HTTPException(
             status_code=409,
             detail=f"Student was already upgraded to {blocking['to_class']} in {academic_year}."
         )
+    if blocking and blocking.get("status") not in ("pending_approval", "approved", None):
+        # Orphaned record from a failed/cancelled previous attempt — remove it so a
+        # fresh request can proceed.
+        await db.upgradation_records.delete_one({"upgradation_id": blocking["upgradation_id"]})
+        blocking = None
     if blocking and blocking.get("status") == "pending_approval":
         if has_pending_dues and not body.get("upgradation_fee_pre_paid", False):
             # Still owes fees — keep it queued for manual approval after collection.
@@ -168,6 +269,7 @@ async def request_upgrade(student_id: str, request: Request):
                 "from_class": student["class_name"],
                 "from_section": student["section"],
                 "from_stream": student.get("stream"),
+                "from_academic_year": student.get("academic_year"),
                 "to_class": to_class,
                 "to_section": to_section,
                 "to_stream": to_stream,
@@ -202,6 +304,7 @@ async def request_upgrade(student_id: str, request: Request):
         to_stream=to_stream,
         from_section=student["section"],
         to_section=to_section,
+        from_academic_year=student.get("academic_year"),
         academic_year=academic_year,
         upgradation_fee=upgradation_fee,
         upgradation_fee_paid=False,
@@ -259,7 +362,15 @@ async def request_upgrade(student_id: str, request: Request):
 
     # Has dues / forced → persist a pending-approval record (this is what shows
     # in Upgradation History) and wait for the admin to approve it.
-    await db.upgradation_records.insert_one(upg_dict)
+    try:
+        await db.upgradation_records.insert_one(upg_dict)
+    except Exception as exc:
+        if "duplicate key" in str(exc).lower() or "11000" in str(exc):
+            raise HTTPException(
+                status_code=409,
+                detail=f"An upgrade request for {academic_year} already exists for this student."
+            )
+        raise
     upg_dict.pop("_id", None)
 
     await create_audit_log("upgradation", upg.upgradation_id, "request", {
@@ -388,6 +499,7 @@ async def _perform_upgrade_approval(upg: dict, user: dict, *, auto: bool = False
             "academic_year": upg["academic_year"],
             "roll_number": new_roll,
             "fee_status": "pending",
+            "last_upgraded_at": datetime.now(timezone.utc).isoformat(),
         }}
     )
 
@@ -536,7 +648,7 @@ async def create_upgrade_fee_entry(student_id: str, request: Request):
     to_class = body.get("to_class")
     to_section = body.get("to_section")
     to_stream = body.get("to_stream")
-    academic_year = body.get("academic_year", current_academic_year())
+    academic_year = body.get("academic_year") or await active_session()
 
     if not to_class or not to_section:
         raise HTTPException(status_code=400, detail="to_class and to_section are required")
@@ -733,6 +845,8 @@ async def get_upgradation_history(
     request: Request,
     student_id: Optional[str] = None,
     academic_year: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 500,
 ):
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     q = {}
@@ -740,7 +854,16 @@ async def get_upgradation_history(
         q["student_id"] = student_id
     if academic_year:
         q["academic_year"] = academic_year
-    records = await db.upgradation_records.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    else:
+        # Scope to the session the admin is viewing — the FROM session
+        # (the year the student was promoted out of).
+        sess = request_session(request)
+        if sess:
+            q["from_academic_year"] = sess
+    if status:
+        q["status"] = status
+    sort_field = "approved_at" if status == "approved" else "created_at"
+    records = await db.upgradation_records.find(q, {"_id": 0}).sort(sort_field, -1).to_list(limit)
 
     # Bulk-fetch linked ledger entries so fee-paid status reflects the LIVE
     # ledger state — payment can be made via the general /fees/pay flow

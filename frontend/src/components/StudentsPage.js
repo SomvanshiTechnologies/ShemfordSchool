@@ -57,13 +57,13 @@ const ONBOARDING_STEPS = [
 ];
 
 const REQUIRED_DOCUMENTS = [
-  { type: 'birth_certificate', name: 'Birth Certificate', mandatory: false },
-  { type: 'aadhaar_card', name: 'Aadhaar Card', mandatory: false },
-  { type: 'passport_photo', name: 'Passport Photo', mandatory: false },
-  { type: 'previous_marksheet', name: 'Previous Class Marksheet', mandatory: false },
-  { type: 'transfer_certificate', name: 'Transfer Certificate (TC)', mandatory: false },
-  { type: 'caste_certificate', name: 'Caste Certificate', mandatory: false },
-  { type: 'medical_certificate', name: 'Medical Fitness Certificate', mandatory: false },
+  { type: 'birth_certificate',    name: 'Birth Certificate',              mandatory: false, accepts: 'PDF, JPG, PNG' },
+  { type: 'aadhaar_card',         name: 'Aadhaar Card',                   mandatory: false, accepts: 'PDF, JPG, PNG' },
+  { type: 'passport_photo',       name: 'Passport Photo',                 mandatory: false, accepts: 'JPG, PNG'      },
+  { type: 'previous_marksheet',   name: 'Previous Class Marksheet',       mandatory: false, accepts: 'PDF, JPG, PNG' },
+  { type: 'transfer_certificate', name: 'Transfer Certificate (TC)',      mandatory: false, accepts: 'PDF, JPG, PNG' },
+  { type: 'caste_certificate',    name: 'Caste Certificate',              mandatory: false, accepts: 'PDF, JPG, PNG' },
+  { type: 'medical_certificate',  name: 'Medical Fitness Certificate',    mandatory: false, accepts: 'PDF, JPG, PNG' },
 ];
 
 // Classes that require stream selection — must match backend CLASSES_WITH_STREAMS exactly
@@ -165,7 +165,7 @@ const StudentsPage = () => {
     setRefreshing(true);
 
     try {
-      const params = { page: pg, limit: PAGE_SIZE };
+      const params = { page: pg, limit: PAGE_SIZE, sort_by: 'last_upgraded' };
       if (filterClass) params.class_name = filterClass;
       if (filterSection) params.section = filterSection;
       if (filterStatus) params.status = filterStatus;
@@ -258,18 +258,21 @@ const StudentsPage = () => {
     // Validate all required fields client-side
     const errors = {};
     const isTenDigits = (v) => /^\d{10}$/.test((v || '').trim());
+    const isValidEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v || '').trim());
     if (!onbData.first_name?.trim()) errors.first_name = 'First Name is required';
     if (!onbData.last_name?.trim()) errors.last_name = 'Last Name is required';
     if (!onbData.gender) errors.gender = 'Gender is required';
     if (!onbData.date_of_birth) errors.date_of_birth = 'Date of Birth is required';
-    // Email is OPTIONAL — students log in with their admission number + the
-    // password generated against it, so an email isn't required.
+    // Email is optional but must be valid format when provided.
+    if (onbData.email?.trim() && !isValidEmail(onbData.email)) errors.email = 'Please enter a valid email address.';
     if (!onbData.phone?.trim()) errors.phone = 'Phone is required';
     else if (!isTenDigits(onbData.phone)) errors.phone = 'Phone must be exactly 10 digits';
     if (!onbData.address?.trim()) errors.address = 'Address is required';
     // Parent / mother contact numbers are optional, but when provided must be 10 digits.
     if (onbData.parent_phone?.trim() && !isTenDigits(onbData.parent_phone)) errors.parent_phone = 'Contact number must be 10 digits';
     if (onbData.mother_phone?.trim() && !isTenDigits(onbData.mother_phone)) errors.mother_phone = 'Mother contact must be 10 digits';
+    if (onbData.parent_email?.trim() && !isValidEmail(onbData.parent_email)) errors.parent_email = 'Please enter a valid email address.';
+    if (onbData.mother_email?.trim() && !isValidEmail(onbData.mother_email)) errors.mother_email = 'Please enter a valid email address.';
     // Parent / guardian details are optional — admins can fill them in later
     setOnbErrors(errors);
     if (Object.keys(errors).length > 0) {
@@ -329,8 +332,8 @@ const StudentsPage = () => {
         toast.error('Passport photo must be a JPG or PNG image.'); return;
       }
     } else {
-      if (file.type !== 'application/pdf' && !/(\.pdf)$/i.test(file.name)) {
-        toast.error('Documents must be uploaded as PDF.'); return;
+      if (!['application/pdf','image/jpeg','image/png'].includes(file.type) && !/(\.pdf|\.jpe?g|\.png)$/i.test(file.name)) {
+        toast.error('Document must be a PDF, JPG, or PNG file.'); return;
       }
     }
     setOnbDocLoading(prev => ({ ...prev, [docType]: true }));
@@ -362,7 +365,7 @@ const StudentsPage = () => {
     if (!docFileInputRefs.current[docType]) {
       const input = document.createElement('input');
       input.type = 'file';
-      input.accept = docType === 'passport_photo' ? '.jpg,.jpeg,.png' : '.pdf';
+      input.accept = docType === 'passport_photo' ? '.jpg,.jpeg,.png' : '.pdf,.jpg,.jpeg,.png';
       input.onchange = (e) => {
         const file = e.target.files?.[0];
         if (file) {
@@ -1025,8 +1028,8 @@ const StudentsPage = () => {
                 <TableHead className="w-[52px] text-center">
                   {(() => {
                     const active = filteredStudents.filter(s => s.is_active !== false);
-                    const allEnabled = active.length > 0 && active.every(s => s.web_login_enabled !== false);
-                    const noneEnabled = active.length > 0 && active.every(s => s.web_login_enabled === false);
+                    const allEnabled = active.length > 0 && active.every(s => s.web_login_enabled === true);
+                    const noneEnabled = active.length > 0 && active.every(s => s.web_login_enabled !== true);
                     return (
                       <div className="flex justify-center">
                         <Checkbox
@@ -1046,9 +1049,9 @@ const StudentsPage = () => {
                     <TableCell className="text-center">
                       <div className="flex justify-center">
                         <Checkbox
-                          checked={student.web_login_enabled !== false}
-                          onCheckedChange={() => handleToggleWebLogin(student.student_id, student.web_login_enabled !== false)}
-                          title={student.web_login_enabled !== false ? 'Portal login enabled — uncheck to restrict to app only' : 'App only — check to enable portal login'}
+                          checked={student.web_login_enabled === true}
+                          onCheckedChange={() => handleToggleWebLogin(student.student_id, student.web_login_enabled === true)}
+                          title={student.web_login_enabled === true ? 'Portal login enabled — uncheck to restrict to app only' : 'App only — check to enable portal login'}
                           disabled={!student.is_active}
                           className="data-[state=checked]:bg-orange-500 data-[state=checked]:border-orange-500"
                         />
@@ -1056,12 +1059,12 @@ const StudentsPage = () => {
                     </TableCell>
                     <TableCell className="font-mono text-sm select-none" onCopy={e => e.preventDefault()} onContextMenu={e => e.preventDefault()}>{student.admission_number}</TableCell>
                     <TableCell>
-                      <p className="font-medium text-foreground flex items-center gap-2">
+                      <span className="font-medium text-foreground flex items-center gap-2">
                         {student.first_name} {student.last_name}
                         {student.is_sibling && (
                           <Badge className="bg-blue-50 text-blue-700 border border-blue-200 text-[10px] px-1.5 py-0" title="Sibling discount applied">Sibling</Badge>
                         )}
-                      </p>
+                      </span>
                       <p className="text-sm text-muted-foreground">{student.email || ''}</p>
                     </TableCell>
                     <TableCell>Class {student.class_name} - {student.section}</TableCell>
@@ -1219,12 +1222,12 @@ const StudentsPage = () => {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <Label>First Name <span className="text-red-500">*</span></Label>
-                  <Input value={onbData.first_name} onChange={(e) => { setOnbData({...onbData, first_name: e.target.value}); setOnbErrors(p => ({...p, first_name: ''})); }} className={onbErrors.first_name ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-first-name" />
+                  <Input value={onbData.first_name} onChange={(e) => { const v = e.target.value.replace(/[^a-zA-Z\s\-'.]/g, ''); setOnbData({...onbData, first_name: v}); setOnbErrors(p => ({...p, first_name: ''})); }} className={onbErrors.first_name ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-first-name" />
                   {onbErrors.first_name && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.first_name}</p>}
                 </div>
                 <div className="space-y-1">
                   <Label>Last Name <span className="text-red-500">*</span></Label>
-                  <Input value={onbData.last_name} onChange={(e) => { setOnbData({...onbData, last_name: e.target.value}); setOnbErrors(p => ({...p, last_name: ''})); }} className={onbErrors.last_name ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-last-name" />
+                  <Input value={onbData.last_name} onChange={(e) => { const v = e.target.value.replace(/[^a-zA-Z\s\-'.]/g, ''); setOnbData({...onbData, last_name: v}); setOnbErrors(p => ({...p, last_name: ''})); }} className={onbErrors.last_name ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-last-name" />
                   {onbErrors.last_name && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.last_name}</p>}
                 </div>
               </div>
@@ -1282,7 +1285,7 @@ const StudentsPage = () => {
                 <div className="grid gap-4">
                   <div className="space-y-1">
                     <Label>Father / Guardian Name</Label>
-                    <Input value={onbData.parent_name} onChange={(e) => { setOnbData({...onbData, parent_name: e.target.value}); setOnbErrors(p => ({...p, parent_name: ''})); }} className={onbErrors.parent_name ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-parent-name" />
+                    <Input value={onbData.parent_name} onChange={(e) => { const v = e.target.value.replace(/[^a-zA-Z\s\-'.]/g, ''); setOnbData({...onbData, parent_name: v}); setOnbErrors(p => ({...p, parent_name: ''})); }} className={onbErrors.parent_name ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-parent-name" />
                     {onbErrors.parent_name && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.parent_name}</p>}
                   </div>
                   <div className="grid grid-cols-2 gap-4">
@@ -1291,7 +1294,11 @@ const StudentsPage = () => {
                       <Input value={onbData.parent_phone} inputMode="numeric" maxLength={10} onChange={(e) => { const v = e.target.value.replace(/\D/g, '').slice(0, 10); setOnbData({...onbData, parent_phone: v}); setOnbErrors(p => ({...p, parent_phone: ''})); }} className={onbErrors.parent_phone ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-parent-phone" />
                       {onbErrors.parent_phone && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.parent_phone}</p>}
                     </div>
-                    <div className="space-y-1"><Label>Parent Email</Label><Input type="email" value={onbData.parent_email} onChange={(e) => setOnbData({...onbData, parent_email: e.target.value})} data-testid="onb-parent-email" /></div>
+                    <div className="space-y-1">
+                      <Label>Parent Email</Label>
+                      <Input type="email" value={onbData.parent_email} onChange={(e) => { setOnbData({...onbData, parent_email: e.target.value}); setOnbErrors(p => ({...p, parent_email: ''})); }} className={onbErrors.parent_email ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-parent-email" />
+                      {onbErrors.parent_email && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.parent_email}</p>}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1300,7 +1307,7 @@ const StudentsPage = () => {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <Label>Mother Name</Label>
-                    <Input value={onbData.mother_name} onChange={(e) => { setOnbData({...onbData, mother_name: e.target.value}); setOnbErrors(p => ({...p, mother_name: ''})); }} className={onbErrors.mother_name ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-mother-name" />
+                    <Input value={onbData.mother_name} onChange={(e) => { const v = e.target.value.replace(/[^a-zA-Z\s\-'.]/g, ''); setOnbData({...onbData, mother_name: v}); setOnbErrors(p => ({...p, mother_name: ''})); }} className={onbErrors.mother_name ? 'border-red-500 focus-visible:ring-red-400' : ''} data-testid="onb-mother-name" />
                     {onbErrors.mother_name && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.mother_name}</p>}
                   </div>
                   <div className="space-y-1">
@@ -1313,9 +1320,11 @@ const StudentsPage = () => {
                     <Input
                       type="email"
                       value={onbData.mother_email}
-                      onChange={(e) => setOnbData({ ...onbData, mother_email: e.target.value })}
+                      onChange={(e) => { setOnbData({ ...onbData, mother_email: e.target.value }); setOnbErrors(p => ({...p, mother_email: ''})); }}
+                      className={onbErrors.mother_email ? 'border-red-500 focus-visible:ring-red-400' : ''}
                       data-testid="onb-mother-email"
                     />
+                    {onbErrors.mother_email && <p className="text-xs text-red-500 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{onbErrors.mother_email}</p>}
                   </div>
                 </div>
               </div>
@@ -1453,7 +1462,7 @@ const StudentsPage = () => {
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  Upload admission documents. Mandatory documents are required — or skip all now and upload later via the student edit panel.
+                  Upload admission documents. Skip all now and upload later via the student edit panel.
                 </p>
               )}
               <div className="space-y-3">
@@ -1475,6 +1484,7 @@ const StudentsPage = () => {
                         )}
                         <div>
                           <span className="text-sm font-medium">{doc.name}</span>
+                          {doc.accepts && <p className="text-xs text-slate-400 mt-0.5">Supported formats: {doc.accepts}</p>}
                           {uploaded && (
                             <div className="flex items-center gap-2 mt-0.5">
                               <span className="text-xs text-green-600">✓ {uploaded.file_name}</span>
@@ -1509,9 +1519,7 @@ const StudentsPage = () => {
                   );
                 })}
               </div>
-              <p className="text-xs text-slate-500">
-                Accepted formats: PDF, JPG, PNG · Max size: 5 MB per file
-              </p>
+
               <DialogFooter className="flex-wrap gap-2">
                 <Button variant="outline" onClick={() => setOnbStep(2)}><ArrowLeft className="h-4 w-4 mr-1" /> Back</Button>
                 {!onbSkipDocs && (

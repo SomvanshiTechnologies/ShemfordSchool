@@ -19,7 +19,24 @@ load_dotenv(ROOT_DIR / '.env')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("shemford.api")
 
-app = FastAPI(title="Shemford School Management System")
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(application):
+    # Run one-time migrations on startup
+    try:
+        from routes.upgradation import _backfill_from_academic_year, _backfill_streams
+        n = await _backfill_from_academic_year()
+        if n:
+            logging.getLogger("shemford.api").info("Backfilled from_academic_year on %d upgradation records", n)
+        n2 = await _backfill_streams()
+        if n2:
+            logging.getLogger("shemford.api").info("Backfilled stream fields on %d records", n2)
+    except Exception as exc:
+        logging.getLogger("shemford.api").warning("upgradation backfill skipped: %s", exc)
+    yield
+
+app = FastAPI(title="Shemford School Management System", lifespan=lifespan)
 
 # ── Serve uploaded files ──────────────────────────────────────────────────────
 _uploads_dir = ROOT_DIR / "uploads"

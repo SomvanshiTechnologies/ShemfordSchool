@@ -101,6 +101,7 @@ async def _ensure_sessions_seeded():
     present in students/ledger + the previously-stored active session.
     """
     if await db.sessions.count_documents({}) > 0:
+        await _auto_advance_session()
         return
     found = set()
     for coll in (db.students, db.student_ledger):
@@ -135,10 +136,65 @@ async def _ensure_sessions_seeded():
         })
     if docs:
         await db.sessions.insert_many(docs)
+    await _auto_advance_session()
+
+
+async def _auto_advance_session():
+    """
+    Idempotent: if today is on or after April 1st and the computed academic year
+    differs from the active session, auto-create and activate the new session.
+    Called after every seed/read so the rollover happens without admin action.
+    """
+    computed = _computed_session()
+    active = await db.sessions.find_one({"is_active": True}, {"_id": 0, "session_name": 1, "session_id": 1})
+    if active and active.get("session_name") == computed:
+        return  # already on the right session, nothing to do
+
+    now_iso = _dt.now(_tz.utc).isoformat()
+    sy = int(computed.split("-")[0])
+
+    existing = await db.sessions.find_one({"session_name": computed}, {"_id": 0, "session_id": 1})
+    if not existing:
+        session_id = f"sess_{_uuid.uuid4().hex[:12]}"
+        await db.sessions.insert_one({
+            "session_id": session_id,
+            "session_name": computed,
+            "start_date": f"{sy}-04-01",
+            "end_date": f"{sy + 1}-03-31",
+            "status": "active",
+            "is_active": True,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        })
+    else:
+        await db.sessions.update_one(
+            {"session_name": computed},
+            {"$set": {"is_active": True, "status": "active", "updated_at": now_iso}},
+        )
+
+    # Demote all other active sessions.
+    async for cur in db.sessions.find(
+        {"is_active": True, "session_name": {"$ne": computed}},
+        {"_id": 0, "session_id": 1, "session_name": 1},
+    ):
+        await db.sessions.update_one(
+            {"session_id": cur["session_id"]},
+            {"$set": {
+                "is_active": False,
+                "status": _derive_status(cur["session_name"], False),
+                "updated_at": now_iso,
+            }},
+        )
+
+    # Keep legacy school_settings in sync.
+    await db.school_settings.update_one(
+        {"_id": "session"}, {"$set": {"active_session": computed}}, upsert=True
+    )
 
 
 async def _active_session_name() -> str:
     """The active session's name, with safe fallbacks."""
+    await _auto_advance_session()
     doc = await db.sessions.find_one({"is_active": True}, {"_id": 0, "session_name": 1})
     if doc:
         return doc["session_name"]

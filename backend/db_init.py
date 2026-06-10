@@ -140,6 +140,8 @@ async def create_indexes(db):
         db.upgradation_records.create_index([("student_id", ASCENDING), ("created_at", DESCENDING)], background=True),
         # One upgrade per student per academic year — DB-level enforcement
         db.upgradation_records.create_index([("student_id", ASCENDING), ("academic_year", ASCENDING)], unique=True, background=True),
+        # Session-scoped history queries: filter by from_academic_year, sort by created_at
+        db.upgradation_records.create_index([("from_academic_year", ASCENDING), ("created_at", DESCENDING)], background=True),
 
         # ── class_structures ──────────────────────────────────────────────────
         db.class_structures.create_index([("name", ASCENDING), ("is_active", ASCENDING)], background=True),
