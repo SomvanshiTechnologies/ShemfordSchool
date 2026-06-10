@@ -17,7 +17,8 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from database import db
 from models import UserRole
 from auth_utils import (
-    get_current_user, require_roles, calculate_grade, create_audit_log, get_teacher_assigned_classes
+    get_current_user, require_roles, calculate_grade, create_audit_log,
+    get_teacher_assigned_classes, request_session,
 )
 
 router = APIRouter()
@@ -29,6 +30,9 @@ logger = logging.getLogger(__name__)
 @router.get("/reports/dashboard")
 async def get_dashboard_stats(request: Request, academic_year: Optional[str] = None):
     user = await get_current_user(request)
+    # Fall back to the X-Academic-Year header so callers that don't pass the
+    # query param (e.g. mobile dashboard) still get session-scoped figures.
+    academic_year = academic_year or request_session(request)
     stats = {}
 
     if user["role"] in [UserRole.ADMIN, UserRole.ACCOUNTANT]:
@@ -134,6 +138,7 @@ async def get_dashboard_stats(request: Request, academic_year: Optional[str] = N
 @router.get("/reports/financial")
 async def get_financial_report(request: Request, start_date: Optional[str] = None, end_date: Optional[str] = None, academic_year: Optional[str] = None):
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    academic_year = academic_year or request_session(request)
     import asyncio as _asyncio
 
     # Scope every figure to the selected session so each academic year shows
@@ -182,6 +187,7 @@ async def get_financial_report(request: Request, start_date: Optional[str] = Non
 @router.get("/reports/financial/export")
 async def export_financial_report(request: Request, format: str = "pdf", start_date: Optional[str] = None, end_date: Optional[str] = None, academic_year: Optional[str] = None):
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    academic_year = academic_year or request_session(request)
 
     query = {}
     if academic_year:

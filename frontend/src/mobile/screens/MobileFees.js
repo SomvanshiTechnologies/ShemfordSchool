@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
+import { useSession } from '../../contexts/SessionContext';
 import api from '../../lib/api';
 import { getCached, setCached, invalidatePrefix } from '../../lib/pageCache';
 import { previewReportInTab } from '../../lib/preview';
@@ -264,7 +265,9 @@ const TabBar = ({ tabs, active, onChange }) => (
 // ─── Collect Tab ───────────────────────────────────────────────────────────
 
 const CollectTab = () => {
-  const initialDue = getCached('m-fees:due-chart') || null;
+  const { viewSession } = useSession();
+  const dueCacheKey = `m-fees:due-chart:${viewSession || ''}`;
+  const initialDue = getCached(dueCacheKey) || null;
   const [dueChart, setDueChart] = useState(initialDue || []);
   const [loadingDue, setLoadingDue] = useState(!initialDue);
   const [search, setSearch] = useState('');
@@ -279,28 +282,30 @@ const CollectTab = () => {
 
   const fetchDue = useCallback(async () => {
     try {
-      const r = await api.get('/fees/due-chart');
+      const ay = viewSession ? { academic_year: viewSession } : {};
+      const r = await api.get('/fees/due-chart', { params: ay });
       const arr = Array.isArray(r.data) ? r.data : [];
       setDueChart(arr);
-      setCached('m-fees:due-chart', arr);
+      setCached(dueCacheKey, arr);
     } catch {}
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [viewSession, dueCacheKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const controller = new AbortController();
     // Bust cache on mount so new fields (total_paid) are always fresh.
-    invalidatePrefix('m-fees:due-chart');
+    invalidatePrefix(`m-fees:due-chart:${viewSession || ''}`);
     setLoadingDue(true);
-    api.get('/fees/due-chart', { signal: controller.signal })
+    const ay = viewSession ? { academic_year: viewSession } : {};
+    api.get('/fees/due-chart', { params: ay, signal: controller.signal })
       .then(r => {
         const arr = Array.isArray(r.data) ? r.data : [];
         setDueChart(arr);
-        setCached('m-fees:due-chart', arr);
+        setCached(dueCacheKey, arr);
       })
       .catch(() => {})
       .finally(() => { if (!controller.signal.aborted) setLoadingDue(false); });
     return () => controller.abort();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [viewSession, dueCacheKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const [duePage, setDuePage] = useState(1);
   useEffect(() => { setDuePage(1); }, [dueChart]);
 
@@ -831,7 +836,9 @@ const ReportsTab = () => {
 };
 
 const SummaryReport = () => {
-  const initial = getCached('m-fees:reports') || null;
+  const { viewSession } = useSession();
+  const reportsCacheKey = `m-fees:reports:${viewSession || ''}`;
+  const initial = getCached(reportsCacheKey) || null;
   const [data, setData] = useState(initial);
   const [loading, setLoading] = useState(!initial);
   const [sendingReminders, setSendingReminders] = useState(false);
@@ -839,21 +846,23 @@ const SummaryReport = () => {
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get('/fees/due-chart');
+      const ay = viewSession ? { academic_year: viewSession } : {};
+      const r = await api.get('/fees/due-chart', { params: ay });
       const arr = Array.isArray(r.data) ? r.data : [];
       const totalDue = arr.reduce((s, x) => s + (x.total_due || 0), 0);
       const totalOverdue = arr.reduce((s, x) => s + (x.entries_overdue || 0), 0);
       const overdueStudents = arr.filter(x => (x.entries_overdue || 0) > 0).length;
       const result = { totalDue, totalOverdue, overdueStudents, students: arr.length };
       setData(result);
-      setCached('m-fees:reports', result);
+      setCached(reportsCacheKey, result);
     } catch {}
-  }, []); // eslint-disable-line
+  }, [viewSession, reportsCacheKey]); // eslint-disable-line
 
   useEffect(() => {
     const controller = new AbortController();
     if (!initial) setLoading(true);
-    api.get('/fees/due-chart', { signal: controller.signal })
+    const ay = viewSession ? { academic_year: viewSession } : {};
+    api.get('/fees/due-chart', { params: ay, signal: controller.signal })
       .then(r => {
         const arr = Array.isArray(r.data) ? r.data : [];
         const totalDue = arr.reduce((s, x) => s + (x.total_due || 0), 0);
@@ -861,12 +870,12 @@ const SummaryReport = () => {
         const overdueStudents = arr.filter(x => (x.entries_overdue || 0) > 0).length;
         const result = { totalDue, totalOverdue, overdueStudents, students: arr.length };
         setData(result);
-        setCached('m-fees:reports', result);
+        setCached(reportsCacheKey, result);
       })
       .catch(() => {})
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, []); // eslint-disable-line
+  }, [viewSession, reportsCacheKey]); // eslint-disable-line
 
   const sendReminders = async () => {
     setSendingReminders(true);
@@ -914,6 +923,7 @@ const SummaryReport = () => {
 };
 
 const CollectionReport = () => {
+  const { viewSession } = useSession();
   const [duration, setDuration] = useState('this_month');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -928,8 +938,9 @@ const CollectionReport = () => {
       p.start_date = startDate;
       p.end_date = endDate;
     }
+    if (viewSession) p.academic_year = viewSession;
     return p;
-  }, [duration, startDate, endDate]);
+  }, [duration, startDate, endDate, viewSession]);
   const cacheKey = useMemo(() => `m-fees:report-collection:${JSON.stringify(params)}`, [params]);
 
   // Skip fetching while user is still picking a custom range
@@ -1052,6 +1063,7 @@ const durationToAsOfDate = (duration, custom) => {
 };
 
 const DueReport = () => {
+  const { viewSession } = useSession();
   const [duration, setDuration] = useState('all_time');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -1062,7 +1074,11 @@ const DueReport = () => {
   // Due is point-in-time; for a custom From-To, "due as of <To>" is the
   // closest semantic match to the desktop API.
   const asOfDate = useMemo(() => durationToAsOfDate(duration, endDate), [duration, endDate]);
-  const params = useMemo(() => (asOfDate ? { as_of_date: asOfDate } : {}), [asOfDate]);
+  const params = useMemo(() => {
+    const p = asOfDate ? { as_of_date: asOfDate } : {};
+    if (viewSession) p.academic_year = viewSession;
+    return p;
+  }, [asOfDate, viewSession]);
   const cacheKey = useMemo(() => `m-fees:report-due:${JSON.stringify(params)}`, [params]);
 
   const customIncomplete = duration === 'custom' && (!startDate || !endDate);

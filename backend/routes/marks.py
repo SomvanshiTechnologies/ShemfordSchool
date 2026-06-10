@@ -63,6 +63,7 @@ async def get_exams(
 ):
     """Get exam definitions. Teachers see all, parents/students see published only."""
     user = await get_current_user(request)
+    academic_year = academic_year or request_session(request)
     query = {}
     if class_name:
         query["class_name"] = class_name
@@ -262,6 +263,7 @@ async def get_marks(
 ):
     """Get marks. Parent/Student see only published exam marks."""
     user = await get_current_user(request)
+    academic_year = academic_year or request_session(request)
     query = {}
 
     if user["role"] == UserRole.STUDENT:

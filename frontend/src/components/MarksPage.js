@@ -494,9 +494,9 @@ const MarksPage = () => {
                     const exam = exams.find(e => e.exam_id === v);
                     setSelectedExam(exam || null);
                     setSelectedSection('');
-                  }}>
+                  }} disabled={exams.length === 0}>
                     <SelectTrigger data-testid="marks-exam-select">
-                      <SelectValue placeholder="Choose an exam" />
+                      <SelectValue placeholder={exams.length === 0 ? 'No exams for this session' : 'Choose an exam'} />
                     </SelectTrigger>
                     <SelectContent>
                       {exams.filter(e => !e.is_locked || isAdmin).map(e => (
@@ -506,6 +506,11 @@ const MarksPage = () => {
                       ))}
                     </SelectContent>
                   </Select>
+                  {exams.length === 0 && isAdmin && (
+                    <p className="text-xs text-slate-500">
+                      Go to the <button className="underline text-slate-700 font-medium" onClick={() => setActiveTab('exams')}>Exams tab</button> to create one.
+                    </p>
+                  )}
                 </div>
                 {selectedExam && (
                   <div className="space-y-1.5">

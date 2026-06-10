@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
+import { useSession } from '../../contexts/SessionContext';
 import api from '../../lib/api';
 import { getCached, setCached, invalidatePrefix } from '../../lib/pageCache';
 import { previewInTab } from '../../lib/preview';
@@ -108,6 +109,7 @@ const GradePill = ({ pct }) => {
 
 const MobileMarks = () => {
   const { user } = useAuth();
+  const { viewSession } = useSession();
   const isAdmin = user?.role === 'admin';
   const isTeacher = user?.role === 'teacher';
   const canEditMarks = isAdmin || isTeacher;
@@ -118,17 +120,19 @@ const MobileMarks = () => {
   const [showExamForm, setShowExamForm] = useState(false);
 
   // Shared lookups
+  const examsCacheKey = `marks:exams:${viewSession || ''}`;
   const [classes, setClasses] = useState(getCached('classes') || []);
   const [subjects, setSubjects] = useState(getCached('subjects') || []);
-  const [exams, setExams] = useState(getCached('marks:exams') || []);
+  const [exams, setExams] = useState(getCached(examsCacheKey) || []);
 
   useEffect(() => {
     (async () => {
       try {
+        const ayParam = viewSession ? { academic_year: viewSession } : {};
         const [c, s, e] = await Promise.all([
           api.get('/classes'),
           api.get('/subjects'),
-          api.get('/exams'),
+          api.get('/exams', { params: ayParam }),
         ]);
         const cs = Array.isArray(c.data) ? c.data : [];
         const ss = Array.isArray(s.data) ? s.data : [];
@@ -136,19 +140,20 @@ const MobileMarks = () => {
         setClasses(cs); setSubjects(ss); setExams(es);
         setCached('classes', cs);
         setCached('subjects', ss);
-        setCached('marks:exams', es);
+        setCached(examsCacheKey, es);
       } catch {}
     })();
-  }, []);
+  }, [viewSession, examsCacheKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshExams = useCallback(async () => {
     try {
-      const r = await api.get('/exams');
+      const ayParam = viewSession ? { academic_year: viewSession } : {};
+      const r = await api.get('/exams', { params: ayParam });
       const arr = Array.isArray(r.data) ? r.data : [];
       setExams(arr);
-      setCached('marks:exams', arr);
+      setCached(examsCacheKey, arr);
     } catch {}
-  }, []);
+  }, [viewSession, examsCacheKey]);
 
   const tabs = [
     ...(isAdmin ? [{ key: 'exams', label: 'Exams' }] : []),
@@ -406,14 +411,17 @@ const EntryTab = ({ exams, classes, isAdmin }) => {
           const ex = examOptions.find(x => x.exam_id === e.target.value);
           setSelectedExam(ex || null);
           setSelSection('');
-        }}>
-          <option value="">Choose an exam</option>
+        }} disabled={examOptions.length === 0}>
+          <option value="">{examOptions.length === 0 ? 'No exams for this session' : 'Choose an exam'}</option>
           {examOptions.map(e => (
             <option key={e.exam_id} value={e.exam_id}>
               {e.name} — {e.class_name}{e.is_locked ? ' (Locked)' : ''}
             </option>
           ))}
         </select>
+        {examOptions.length === 0 && isAdmin && (
+          <p style={{fontSize:11,color:'#888',marginTop:4}}>No exams defined for this session. Create one in the Exams tab.</p>
+        )}
       </div>
 
       {selectedExam && (
@@ -558,8 +566,8 @@ const ViewTab = ({ exams, classes }) => {
           const ex = exams.find(x => x.exam_id === e.target.value);
           setSelectedExam(ex || null);
           setSelSection('');
-        }}>
-          <option value="">Choose an exam</option>
+        }} disabled={exams.length === 0}>
+          <option value="">{exams.length === 0 ? 'No exams for this session' : 'Choose an exam'}</option>
           {exams.map(e => <option key={e.exam_id} value={e.exam_id}>{e.name} — {e.class_name}</option>)}
         </select>
       </div>

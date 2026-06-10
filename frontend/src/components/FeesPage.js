@@ -234,7 +234,7 @@ const FeesPage = () => {
       const ay = viewSession ? { academic_year: viewSession } : {};
       const [studRes, collectRes, concRes, sessRes] = await Promise.all([
         api.get('/students', { params: { is_active: true, limit: 500, ...ay } }).catch(() => ({ data: [] })),
-        api.get('/fees/due-chart').catch(() => ({ data: [] })),
+        api.get('/fees/due-chart', { params: ay }).catch(() => ({ data: [] })),
         api.get('/fees/concessions').catch(() => ({ data: [] })),
         api.get('/fees/sessions').catch(() => ({ data: [] })),
       ]);

@@ -571,6 +571,7 @@ async def list_fee_component_configs(
     class_name: Optional[str] = None,
 ):
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    academic_year = academic_year or request_session(request)
     query = {"is_active": True}
     if academic_year:
         query["academic_year"] = academic_year
@@ -1547,6 +1548,7 @@ async def get_due_chart(
     academic_year: Optional[str] = None,  # e.g. "2025-2026"
 ):
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    academic_year = academic_year or request_session(request)
 
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -2265,6 +2267,7 @@ async def report_fees_collection(
 ):
     """Fees Collection Report — JSON for the dashboard."""
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    academic_year = academic_year or request_session(request)
     return await _collect_report_rows(
         duration=duration, start_date=start_date, end_date=end_date,
         class_name=class_name, section=section, fee_type=fee_type,
@@ -2431,6 +2434,7 @@ async def report_fees_due(
 ):
     """Due Fees Report — JSON for the dashboard."""
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    academic_year = academic_year or request_session(request)
     return await _due_report_rows(
         class_name=class_name, section=section, fee_type=fee_type,
         fee_component=fee_component, fee_month=fee_month,

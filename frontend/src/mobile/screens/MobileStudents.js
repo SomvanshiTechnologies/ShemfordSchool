@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../../lib/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { useSession } from '../../contexts/SessionContext';
 import { getCached, setCached, invalidatePrefix } from '../../lib/pageCache';
 import { copyText } from '../../lib/clipboard';
 import { toast } from 'sonner';
@@ -28,21 +29,17 @@ const STREAM_SECTIONS = [{ section_name: 'Science' }, { section_name: 'Humanitie
 
 const MobileStudents = () => {
   const { isAdmin, isAccountant } = useAuth();
+  const { viewSession } = useSession();
   const canManage = isAdmin || isAccountant;
 
-  // Seed from cache so revisits paint instantly
-  const initialCacheKey = 'm-students::1';
-  const initialCache = getCached(initialCacheKey);
-  const initialClasses = getCached('classes') || [];
-
-  const [students, setStudents] = useState(initialCache?.students || []);
-  const [classes, setClasses] = useState(initialClasses);
+  const [students, setStudents] = useState([]);
+  const [classes, setClasses] = useState(getCached('classes') || []);
   const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(!initialCache);
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(initialCache?.pages || 1);
-  const [total, setTotal] = useState(initialCache?.total || 0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
   const searchDebounce = useRef(null);
 
   // Detail-sheet state
@@ -56,7 +53,7 @@ const MobileStudents = () => {
   const [showCsvImport, setShowCsvImport] = useState(false);
 
   const fetchStudents = useCallback(async (pg = 1, q = '') => {
-    const cacheKey = `m-students:${q || ''}:${pg}`;
+    const cacheKey = `m-students:${viewSession || ''}:${q || ''}:${pg}`;
     const cached = getCached(cacheKey);
 
     if (cached) { // SWR: show stale, revalidate in background
@@ -73,7 +70,9 @@ const MobileStudents = () => {
       const params = { page: pg, limit: PAGE_SIZE };
       if (q.trim()) {
         params.search = q.trim();
-        params.all_sessions = true;
+      }
+      if (viewSession) {
+        params.academic_year = viewSession;
       }
       const r = await api.get('/students', { params });
       const arr = Array.isArray(r.data) ? r.data : (r.data?.students ?? []);
@@ -85,7 +84,7 @@ const MobileStudents = () => {
       setCached(cacheKey, { students: arr, pages, total: tot });
     } catch {}
     finally { setLoading(false); setRefreshing(false); }
-  }, []);
+  }, [viewSession]);
 
   const fetchClasses = useCallback(async () => {
     try {

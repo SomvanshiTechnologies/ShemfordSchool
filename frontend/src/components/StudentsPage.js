@@ -171,8 +171,8 @@ const StudentsPage = () => {
       if (filterStatus) params.status = filterStatus;
       if (search.trim()) {
         params.search = search.trim();
-        params.all_sessions = true; // name search is cross-session so students in old years are findable
-      } else if (viewSession) {
+      }
+      if (viewSession) {
         params.academic_year = viewSession;
       }
       const res = await api.get('/students', { params });

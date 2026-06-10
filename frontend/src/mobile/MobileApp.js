@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useSession } from '../contexts/SessionContext';
+import { clearAllCache } from '../lib/pageCache';
 import MobileLayout from './MobileLayout';
 import AdminDashboard from './screens/AdminDashboard';
 import TeacherDashboard from './screens/TeacherDashboard';
@@ -33,8 +35,24 @@ const RoleDashboard = () => {
 };
 
 const MobileApp = () => {
+  const { viewSession } = useSession();
+  const prevSession = useRef(viewSession);
+
+  // Wipe the SWR page-cache whenever the admin switches to a different session.
+  // Without this, getCached() returns stale data from the old session until the
+  // TTL expires, making every module look the same across sessions.
+  useEffect(() => {
+    if (prevSession.current !== viewSession) {
+      clearAllCache();
+      prevSession.current = viewSession;
+    }
+  }, [viewSession]);
+
   return (
     <MobileLayout>
+      {/* key forces all screens to remount when the session changes,
+          so every screen's useEffect re-fires and fetches the new session's data. */}
+      <div key={viewSession}>
       <Routes>
         <Route path="/" element={<RoleDashboard />} />
         <Route path="/attendance" element={<MobileAttendance />} />
@@ -53,6 +71,7 @@ const MobileApp = () => {
         <Route path="/payroll" element={<MobilePayroll />} />
         <Route path="*" element={<Navigate to="/m" replace />} />
       </Routes>
+      </div>
     </MobileLayout>
   );
 };

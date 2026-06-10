@@ -268,10 +268,12 @@ const MobileUpgradation = () => {
       <TabBar tabs={[
         { key: 'upgrade', label: 'Upgrade' },
         { key: 'history', label: 'History' },
+        { key: 'recent', label: 'Recently Upgraded' },
       ]} active={tab} onChange={setTab} />
 
       {tab === 'upgrade' && <UpgradeTab classes={classes} payMethods={payMethods} />}
       {tab === 'history' && <HistoryTab isAdmin={isAdmin} payMethods={payMethods} />}
+      {tab === 'recent' && <RecentTab />}
     </div>
   );
 };
@@ -1474,6 +1476,95 @@ const ViewSheet = ({ row, onClose, openPreview }) => {
         </div>
       )}
     </Sheet>
+  );
+};
+
+// ─── Recently Upgraded Tab ─────────────────────────────────────────────────
+
+const PAGE_SIZE_RECENT = 20;
+
+const RecentTab = () => {
+  const { viewSession } = useSession();
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await api.get('/upgradation/history', { params: { status: 'approved', limit: 500 } });
+      setRows(Array.isArray(r.data) ? r.data : []);
+      setPage(1);
+    } catch (e) { if (!e._handled) toast.error(e.response?.data?.detail || 'Failed to load'); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load, viewSession]);
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE_RECENT));
+  const slice = rows.slice((page - 1) * PAGE_SIZE_RECENT, page * PAGE_SIZE_RECENT);
+
+  return (
+    <div style={{padding:'0 0 24px'}}>
+      <div style={{display:'flex',justifyContent:'flex-end',padding:'12px 16px 0'}}>
+        <button onClick={load} disabled={loading}
+          style={{fontSize:12,fontWeight:600,color:'#E88A1A',background:'none',border:'1px solid #E88A1A',borderRadius:8,padding:'5px 14px',cursor:loading?'default':'pointer',opacity:loading?0.6:1,display:'flex',alignItems:'center',gap:6}}>
+          {loading ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />} Refresh
+        </button>
+      </div>
+
+      {loading && (
+        <div style={{display:'flex',justifyContent:'center',padding:'48px 0',color:'#888'}}>
+          <Loader2 size={24} className="animate-spin" />
+        </div>
+      )}
+
+      {!loading && rows.length === 0 && (
+        <div style={{textAlign:'center',padding:'48px 16px',color:'#888',display:'flex',flexDirection:'column',alignItems:'center',gap:8}}>
+          <AlertCircle size={22} />
+          <span style={{fontSize:13}}>No approved upgrades yet.</span>
+        </div>
+      )}
+
+      {!loading && rows.length > 0 && (
+        <div style={{padding:'12px 16px',display:'flex',flexDirection:'column',gap:10}}>
+          {slice.map(r => (
+            <div key={r.upgradation_id} style={{background:'#fff',border:'1px solid #F0F0F0',borderRadius:14,padding:'12px 14px',boxShadow:'0 1px 4px rgba(0,0,0,0.04)'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8,marginBottom:6}}>
+                <div style={{minWidth:0}}>
+                  <p style={{fontSize:14,fontWeight:700,color:'#1A1A1A',lineHeight:1.3,wordBreak:'break-word'}}>{r.student_name || r.student_id}</p>
+                  <p style={{fontSize:11,color:'#888',marginTop:2}}>{r.admission_number || '—'}</p>
+                </div>
+                <span style={{fontSize:10,fontWeight:700,color:'#16a34a',background:'#dcfce7',padding:'2px 8px',borderRadius:99,whiteSpace:'nowrap',flexShrink:0}}>Upgraded</span>
+              </div>
+              <div style={{display:'flex',alignItems:'center',gap:6,fontSize:12,marginBottom:4}}>
+                <span style={{color:'#666'}}>{fmtClassSec(r.from_class, r.from_section, r.from_stream)}</span>
+                <ArrowUpCircle size={12} color="#E88A1A" />
+                <span style={{fontWeight:700,color:'#1A1A1A'}}>{fmtClassSec(r.to_class, r.to_section, r.to_stream)}</span>
+              </div>
+              <div style={{display:'flex',gap:16,fontSize:11,color:'#888'}}>
+                <span>Year: <strong style={{color:'#1A1A1A'}}>{r.academic_year || '—'}</strong></span>
+                <span>On: <strong style={{color:'#1A1A1A'}}>{isoToDisplay(r.approved_at || r.created_at)}</strong></span>
+              </div>
+            </div>
+          ))}
+
+          {totalPages > 1 && (
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',gap:8}}>
+              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}
+                style={{display:'flex',alignItems:'center',gap:4,fontSize:12,fontWeight:600,color: page<=1?'#ccc':'#E88A1A',background:'none',border:'1px solid',borderColor:page<=1?'#eee':'#E88A1A',borderRadius:8,padding:'5px 12px',cursor:page<=1?'default':'pointer'}}>
+                <ChevronLeft size={13} /> Prev
+              </button>
+              <span style={{fontSize:12,color:'#666'}}>Page {page} / {totalPages}</span>
+              <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages}
+                style={{display:'flex',alignItems:'center',gap:4,fontSize:12,fontWeight:600,color:page>=totalPages?'#ccc':'#E88A1A',background:'none',border:'1px solid',borderColor:page>=totalPages?'#eee':'#E88A1A',borderRadius:8,padding:'5px 12px',cursor:page>=totalPages?'default':'pointer'}}>
+                Next <ChevronRight size={13} />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 };
 

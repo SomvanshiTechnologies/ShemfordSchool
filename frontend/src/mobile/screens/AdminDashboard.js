@@ -1,19 +1,22 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../../lib/api';
+import { useSession } from '../../contexts/SessionContext';
 import { Users, CreditCard, Calendar, GraduationCap, BarChart3, Bell, FileText, ClipboardList, Settings } from 'lucide-react';
 
 const AdminDashboard = () => {
   const navigate = useNavigate();
+  const { viewSession } = useSession();
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const ay = viewSession ? { academic_year: viewSession } : {};
     Promise.all([
       api.get('/students').catch(() => ({ data: [] })),
       api.get('/employees').catch(() => ({ data: [] })),
-      api.get('/fees/due-chart').catch(() => ({ data: [] })),
-      api.get('/reports/financial').catch(() => ({ data: {} })),
+      api.get('/fees/due-chart', { params: ay }).catch(() => ({ data: [] })),
+      api.get('/reports/financial', { params: ay }).catch(() => ({ data: {} })),
     ]).then(([s, e, d, f]) => {
       const totalDue = d.data.reduce((sum, x) => sum + (x.total_due || 0), 0);
       const overdueCount = d.data.filter(x => x.months_overdue > 0).length;
@@ -26,7 +29,7 @@ const AdminDashboard = () => {
         pending: f.data.total_pending || 0,
       });
     }).finally(() => setLoading(false));
-  }, []);
+  }, [viewSession]);
 
   if (loading) return (
     <div>
