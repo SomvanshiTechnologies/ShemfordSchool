@@ -21,6 +21,10 @@ from starlette.responses import JSONResponse
 # ── Public path registry ──────────────────────────────────────────────────────
 
 _PUBLIC_EXACT: frozenset = frozenset({
+    # Health/readiness probes — load balancers & container runtimes, no auth
+    "/api/health",
+    "/api/readiness",
+
     # Auth — unauthenticated entry points
     "/api/auth/login",
     "/api/auth/register",
