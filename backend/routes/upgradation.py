@@ -570,16 +570,36 @@ async def _perform_upgrade_approval(upg: dict, user: dict, *, auto: bool = False
     await refresh_overdue_for_student(upg["student_id"])
 
     approved_at = datetime.now(timezone.utc).isoformat()
+    # Upsert the FULL record (not just the status fields) so that EVERY upgrade is
+    # persisted in upgradation_records — including direct / no-dues upgrades that
+    # were never inserted as a pending request. This is what makes them appear in
+    # the "Recently Upgraded" view. For dues-gated upgrades the record already
+    # exists and is simply updated in place.
     await db.upgradation_records.update_one(
         {"upgradation_id": upgradation_id},
         {"$set": {
+            "upgradation_id": upgradation_id,
+            "student_id": upg["student_id"],
+            "from_class": upg.get("from_class"),
+            "to_class": upg["to_class"],
+            "from_section": upg.get("from_section"),
+            "to_section": eff_section,
+            "from_stream": upg.get("from_stream"),
+            "to_stream": resolved_stream,
+            "from_academic_year": upg.get("from_academic_year"),
+            "academic_year": upg["academic_year"],
+            "requested_by": upg.get("requested_by"),
+            "performed_by": upg.get("performed_by", user["user_id"]),
+            "notes": upg.get("notes"),
+            "created_at": upg.get("created_at") or approved_at,
             "status": "approved",
             "approved_by": user["user_id"],
             "approved_at": approved_at,
             "auto_approved": auto,
             "upgradation_fee": upgradation_fee,
             "upgradation_fee_ledger_id": upg_ledger_id,
-        }}
+        }},
+        upsert=True,
     )
 
     await create_audit_log("upgradation", upgradation_id, "auto-approve" if auto else "approve", {
@@ -967,9 +987,12 @@ async def get_upgradation_history(
         q["student_id"] = student_id
     if academic_year:
         q["academic_year"] = academic_year
-    else:
-        # Scope to the session the admin is viewing — the FROM session
-        # (the year the student was promoted out of).
+    elif status != "approved":
+        # Scope the approval-queue / History view to the session the admin is
+        # viewing — the FROM session (the year the student was promoted out of).
+        # The "Recently Upgraded" view (status=approved) is intentionally NOT
+        # session-scoped: it is an activity log of every completed upgrade and
+        # must surface students regardless of which session is currently active.
         sess = request_session(request)
         if sess:
             q["from_academic_year"] = sess

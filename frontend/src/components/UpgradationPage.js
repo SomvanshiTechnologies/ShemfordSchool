@@ -330,22 +330,16 @@ export default function UpgradationPage() {
       const res = await api.get(`/fees/ledger/${stu.student_id}`);
       const ledger = res.data?.ledger || {};
       const all = [...(ledger.one_time || []), ...(ledger.yearly || []), ...(ledger.monthly || [])];
-      const entries = all.filter(e => {
-        if (e.status !== 'pending' && e.status !== 'overdue') return false;
-        // When opened from history, show ONLY the upgradation fee.
-        // Regular dues are settled through the Fees module, not here.
-        if (rowId && e.fee_component !== 'upgradation') return false;
-        return true;
-      });
+      // Show ALL outstanding dues (tuition + upgradation fee) so the admin can
+      // clear everything in one go. Previously, when opened from a history row,
+      // tuition was hidden and only the upgradation fee could be collected here —
+      // which left tuition perpetually pending.
+      const entries = all.filter(e => e.status === 'pending' || e.status === 'overdue' || e.status === 'partially_paid');
       setPendingEntries(entries);
-      // When opened from history, pre-check and lock the upgradation fee (mandatory).
-      // Admin can additionally tick other dues but cannot uncheck the upgrade fee.
-      if (rowId) {
-        const upgEntry = entries.find(e => e.fee_component === 'upgradation');
-        setCollectIds(upgEntry ? [upgEntry.ledger_id] : []);
-      } else {
-        setCollectIds([]);
-      }
+      // Pre-select every pending fee so a single "Collect" clears all dues. The
+      // upgradation fee stays locked (mandatory) when opened from a history row;
+      // other dues can be unticked if the admin only wants to collect some.
+      setCollectIds(entries.map(e => e.ledger_id));
     } catch (e) {
       if (!e._handled) toast.error(e.response?.data?.detail || 'Failed to load pending fees');
       setShowCollectDialog(false);

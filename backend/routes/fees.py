@@ -331,9 +331,33 @@ async def refresh_overdue_for_student(student_id: str):
         }, {"_id": 0}).to_list(100)
         for entry in overdue_no_late:
             new_net = entry["gross_amount"] - entry.get("concession_amount", 0) + late_fee_amount
+            # Keep remaining_balance in sync with the bumped net_amount. Otherwise
+            # the late fee is never collectable: a stale remaining_balance (left at
+            # the pre-late-fee net) means a "full" payment settles only the original
+            # amount and leaves the late fee as a perpetual residual.
+            already_paid = float(entry.get("amount_paid", 0) or 0)
+            new_remaining = round(new_net - already_paid, 2)
             await db.student_ledger.update_one(
                 {"ledger_id": entry["ledger_id"]},
-                {"$set": {"late_fee_applied": late_fee_amount, "net_amount": new_net}}
+                {"$set": {"late_fee_applied": late_fee_amount, "net_amount": new_net,
+                          "remaining_balance": new_remaining}}
+            )
+
+    # Self-heal: remaining_balance must always equal net_amount - amount_paid for
+    # any entry that still owes money. Legacy rows where a late fee bumped
+    # net_amount without syncing remaining_balance would otherwise leave the late
+    # fee uncollectable (a "full" collection stops at the stale balance). Correct
+    # them in place on every read / payment so no student is left with a phantom
+    # residual.
+    async for entry in db.student_ledger.find(
+        {"student_id": student_id, "status": {"$in": ["pending", "overdue", "partially_paid"]}},
+        {"_id": 0, "ledger_id": 1, "net_amount": 1, "amount_paid": 1, "remaining_balance": 1},
+    ):
+        correct = round(float(entry.get("net_amount", 0)) - float(entry.get("amount_paid", 0) or 0), 2)
+        if abs(float(entry.get("remaining_balance") or 0) - correct) > 0.005:
+            await db.student_ledger.update_one(
+                {"ledger_id": entry["ledger_id"]},
+                {"$set": {"remaining_balance": correct}},
             )
 
     # Update student fee_status
@@ -876,20 +900,13 @@ async def get_student_ledger(student_id: str, request: Request):
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    # Lightweight overdue transition: no late-fee logic here (that lives in refresh_overdue_for_student).
-    # Respects grace_days from the student's fee config so a fee is never marked overdue
-    # until due_date + grace_days has passed.
-    _cfg = await get_fee_config(
-        student.get("class_name", ""),
-        student.get("academic_year", current_academic_year()),
-        student.get("stream")
-    )
-    _grace = int(_cfg.get("grace_days", 0)) if _cfg else 0
-    _cutoff = (datetime.now() - timedelta(days=_grace)).strftime("%Y-%m-%d")
-    await db.student_ledger.update_many(
-        {"student_id": student_id, "status": "pending", "due_date": {"$lt": _cutoff}},
-        {"$set": {"status": "overdue"}}
-    )
+    # Apply overdue transitions AND late fees at read time so the ledger the user
+    # sees already reflects any late fee owed. Previously late fees were only
+    # applied later, inside /fees/pay, so the displayed amount (and the total the
+    # collect dialog summed) was short by the late fee — leaving a residual equal
+    # to the late fee after "collect all". This also self-heals any stale
+    # remaining_balance left by the old behaviour.
+    await refresh_overdue_for_student(student_id)
 
     sess = request_session(request)
     if sess:
@@ -1345,8 +1362,11 @@ async def pay_fee(request: Request):
 
     await refresh_overdue_for_student(student_id)
 
-    # Entries with amount_paid > 0 stay in 'pending'/'overdue' until cleared
-    payable_statuses = ["pending", "overdue"]
+    # Collectable = anything not fully paid: pending, overdue, OR partially_paid.
+    # A partial remainder still owes a balance and must be collectable — otherwise
+    # "collect all dues" can never zero out a student who has a partial remainder,
+    # which the fee summary still counts as outstanding.
+    payable_statuses = ["pending", "overdue", "partially_paid"]
     if ledger_ids:
         entries_to_pay = await db.student_ledger.find({
             "student_id": student_id,

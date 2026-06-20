@@ -161,15 +161,12 @@ const useCollectFlow = (onPaid) => {
       const res = await api.get(`/fees/ledger/${stu.student_id}`);
       const ledger = res.data?.ledger || {};
       const all = [...(ledger.one_time || []), ...(ledger.yearly || []), ...(ledger.monthly || [])];
-      const pending = all.filter(e => e.status === 'pending' || e.status === 'overdue');
+      const pending = all.filter(e => e.status === 'pending' || e.status === 'overdue' || e.status === 'partially_paid');
       setEntries(pending);
-      // When opened from a history row, pre-select and lock the upgradation fee
-      // (mandatory) — admin can additionally tick other dues but cannot uncheck
-      // the upgrade fee. Mirrors desktop openCollectDialog.
-      if (rid) {
-        const upgEntry = pending.find(e => e.fee_component === 'upgradation');
-        setIds(upgEntry ? [upgEntry.ledger_id] : []);
-      }
+      // Pre-select every pending fee so a single "Collect" clears all dues
+      // (tuition + upgradation fee) in one payment. The upgradation fee stays
+      // locked (mandatory) when opened from a history row. Mirrors desktop.
+      setIds(pending.map(e => e.ledger_id));
     } catch (e) {
       if (!e._handled) toast.error(e.response?.data?.detail || 'Failed to load pending fees');
       setShow(false);
