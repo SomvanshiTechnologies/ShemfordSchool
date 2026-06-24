@@ -307,20 +307,17 @@ async def initiate_pos_payment(body: POSInitiateRequest, request: Request):
 
     # ── Call Ezetap P2P adapter ───────────────────────────────────────────────
     external_ref = body.external_ref_number or f"SFS-{pos_order_id[-8:].upper()}"
+    # Ezetap P2P adapter expects rupees as a clean string ("700", "700.5"), the
+    # mode under "mode", and the target terminal under pushTo.deviceId — see the
+    # POS Bridge demo collection (/api/3.0/p2padapter/pay).
+    amount_rupees_str = f"{body.amount_paise / 100:.2f}".rstrip("0").rstrip(".")
     ezetap_payload = {
-        "appKey": EZETAP_APP_KEY,
         "username": EZETAP_USERNAME,
-        "merchantOrderId": external_ref,
-        "amount": str(body.amount_paise / 100),  # Ezetap expects rupees as string
-        "paymentBy": mode,
-        "deviceId": body.device_id,
+        "appKey": EZETAP_APP_KEY,
+        "amount": amount_rupees_str,
         "externalRefNumber": external_ref,
-        "orderDetails": {
-            "studentId": body.student_id,
-            "studentName": f"{student.get('first_name', '')} {student.get('last_name', '')}",
-            "admissionNumber": student.get("admission_number", ""),
-            "posOrderId": pos_order_id,
-        },
+        "pushTo": {"deviceId": body.device_id},
+        "mode": mode,
     }
 
     p2p_request_id = None
@@ -525,10 +522,13 @@ async def cancel_pos_payment(body: POSCancelRequest, request: Request):
         }
 
     # ── Call Ezetap cancel ────────────────────────────────────────────────────
+    # The demo cancel (/api/3.0/p2p/cancel) also pushes to the device so it stops
+    # waiting for the customer — include pushTo.deviceId from the original order.
     ezetap_payload = {
-        "appKey": EZETAP_APP_KEY,
         "username": EZETAP_USERNAME,
+        "appKey": EZETAP_APP_KEY,
         "origP2pRequestId": pos_order.get("p2p_request_id", ""),
+        "pushTo": {"deviceId": pos_order.get("device_id", "")},
     }
 
     try:
