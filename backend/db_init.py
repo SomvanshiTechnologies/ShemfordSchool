@@ -171,8 +171,15 @@ async def create_indexes(db):
         # ── razorpay_orders ───────────────────────────────────────────────────
         db.razorpay_orders.create_index([("internal_order_id", ASCENDING)], unique=True, background=True),
         db.razorpay_orders.create_index([("rzp_order_id", ASCENDING)], unique=True, background=True),
-        # Idempotency: one payment_id can only ever appear once
-        db.razorpay_orders.create_index([("rzp_payment_id", ASCENDING)], unique=True, sparse=True, background=True),
+        # Idempotency: one payment_id can only ever appear once. PARTIAL (not
+        # sparse) — orders are inserted with rzp_payment_id=null until verified,
+        # and a sparse index still indexes explicit nulls (so two unverified
+        # orders would collide). Enforce uniqueness only once it's a real string.
+        # NOTE: existing deployments created this as sparse-unique; run
+        # fix_razorpay_payment_id_index.py once to migrate before this matches.
+        db.razorpay_orders.create_index([("rzp_payment_id", ASCENDING)], unique=True,
+                                        partialFilterExpression={"rzp_payment_id": {"$type": "string"}},
+                                        background=True),
         db.razorpay_orders.create_index([("student_id", ASCENDING), ("status", ASCENDING), ("created_at", DESCENDING)], background=True),
         db.razorpay_orders.create_index([("webhook_event_id", ASCENDING)], sparse=True, background=True),
         db.razorpay_orders.create_index([("receipt_number", ASCENDING)], sparse=True, background=True),
