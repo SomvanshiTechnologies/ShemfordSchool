@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../lib/api';
+import { useAuth } from './AuthContext';
 
 // Academic-session context.
 //
@@ -23,6 +24,7 @@ export const useSession = () => {
 const VIEW_KEY = 'view_session';
 
 export const SessionProvider = ({ children }) => {
+  const { user } = useAuth();
   const [activeSession, setActiveSession] = useState('');
   const [available, setAvailable] = useState([]);
   const [sessions, setSessions] = useState([]); // full session objects (status, dates)
@@ -51,7 +53,19 @@ export const SessionProvider = ({ children }) => {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  // (Re)load the session whenever auth state changes. On the login page there is
+  // no user yet and /settings/session 401s, leaving the session empty. The moment
+  // the user logs in we must refetch so view_session (and the X-Academic-Year
+  // header it drives) is populated WITHOUT a manual page refresh — otherwise the
+  // first data fetches run session-less and the dashboard shows no data until reload.
+  useEffect(() => {
+    if (user) {
+      setLoading(true);
+      load();
+    } else {
+      setLoading(false);
+    }
+  }, [user, load]);
 
   // Switch which session the user is viewing (persisted).
   const setViewSession = useCallback((s) => {
