@@ -228,10 +228,16 @@ async def login_user(credentials: UserLogin):
             }))
         raise HTTPException(status_code=403, detail="Account is deactivated")
 
-    # Block web login for students whose admin has restricted them to app-only
+    # Block web login for students whose admin has restricted them to app-only.
+    # A student has one record per academic session, so we must not rely on which
+    # record find_one happens to return — look for ANY of this user's student
+    # records that has web login turned off (matches login by email OR Student ID).
     if credentials.platform == "web" and user.get("role") == "student":
-        stu = await db.students.find_one({"user_id": user["user_id"]}, {"_id": 0, "web_login_enabled": 1})
-        if stu and stu.get("web_login_enabled") is False:
+        disabled = await db.students.find_one(
+            {"user_id": user["user_id"], "web_login_enabled": False},
+            {"_id": 0, "student_id": 1},
+        )
+        if disabled:
             raise HTTPException(
                 status_code=403,
                 detail="APP_ONLY_LOGIN"
