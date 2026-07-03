@@ -3,6 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSession } from '../contexts/SessionContext';
 import { toast } from 'sonner';
 import api from '../lib/api';
+import { getCached, setCached } from '../lib/pageCache';
 import { Progress } from './ui/progress';
 import { displaySection } from '../lib/utils';
 import {
@@ -518,7 +519,11 @@ const AccountantDashboard = ({ stats }) => (
 ───────────────────────────────────────────── */
 const Dashboard = () => {
   const { user } = useAuth();
-  const { viewSession } = useSession();
+  const { viewSession, loading: sessionLoading } = useSession();
+  // Cache key is scoped to role + viewed session so each session/role keeps its
+  // own snapshot and switching never shows the wrong figures.
+  const cacheKey = `dashboard:${user?.role || ''}:${viewSession || ''}`;
+
   const [stats,            setStats]            = useState({});
   const [financial,        setFinancial]        = useState(null);
   const [attendanceAlerts, setAttendanceAlerts] = useState(null);
@@ -526,39 +531,59 @@ const Dashboard = () => {
   const [loading,          setLoading]          = useState(true);
 
   useEffect(() => {
-    // Scope dashboard data to the academic year the admin is viewing.
+    // SWR-style: paint the last cached snapshot instantly (Moodle-style, no
+    // spinner on a warm cache), then revalidate in the background.
+    const cached = getCached(cacheKey);
+    if (cached) {
+      setStats(cached.stats || {});
+      setFinancial(cached.financial ?? null);
+      setAttendanceAlerts(cached.attendanceAlerts ?? null);
+      setRecentActivity(cached.recentActivity ?? null);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
+
+    // Hold the network fetch until the academic session is resolved — otherwise
+    // this effect fires once with a stale/empty session and again once it lands,
+    // doubling every request on login.
+    if (sessionLoading) return;
+
+    let cancelled = false;
     const ayParams = viewSession ? { academic_year: viewSession } : {};
-    const fetchStats = async () => {
-      try {
-        const response = await api.get('/reports/dashboard', { params: ayParams });
-        setStats(response.data);
-      } catch (error) {
-        console.error('Failed to fetch dashboard stats:', error);
-      } finally { setLoading(false); }
+
+    const fetchAll = async () => {
+      const isAdmin = user?.role === 'admin';
+      const tasks = [api.get('/reports/dashboard', { params: ayParams })];
+      if (isAdmin) {
+        tasks.push(
+          api.get('/reports/financial', { params: ayParams }),
+          api.get('/attendance/alerts', { params: { threshold: 75 } }),
+          api.get('/audit-logs', { params: { limit: 5 } }),
+        );
+      }
+      const [statsRes, finRes, alertsRes, logsRes] = await Promise.allSettled(tasks);
+      if (cancelled) return;
+
+      const next = { ...cached };
+      if (statsRes.status === 'fulfilled') { next.stats = statsRes.value.data; setStats(next.stats); }
+      else console.error('Failed to fetch dashboard stats:', statsRes.reason);
+      if (isAdmin) {
+        if (finRes?.status    === 'fulfilled') { next.financial = finRes.value.data;            setFinancial(next.financial); }
+        if (alertsRes?.status === 'fulfilled') { next.attendanceAlerts = alertsRes.value.data;  setAttendanceAlerts(next.attendanceAlerts); }
+        if (logsRes?.status   === 'fulfilled') { next.recentActivity = logsRes.value.data;      setRecentActivity(next.recentActivity); }
+      }
+      setLoading(false);
+      if (statsRes.status === 'fulfilled') setCached(cacheKey, next);
     };
 
-    const fetchAdminExtras = async () => {
-      const [fin, alerts, logs] = await Promise.allSettled([
-        api.get('/reports/financial', { params: ayParams }),
-        api.get('/attendance/alerts', { params: { threshold: 75 } }),
-        api.get('/audit-logs', { params: { limit: 5 } }),
-      ]);
-      if (fin.status    === 'fulfilled') setFinancial(fin.value.data);
-      if (alerts.status === 'fulfilled') setAttendanceAlerts(alerts.value.data);
-      if (logs.status   === 'fulfilled') setRecentActivity(logs.value.data);
-    };
-
-    fetchStats();
-    if (user?.role === 'admin') fetchAdminExtras();
+    fetchAll();
 
     const intervalId = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        fetchStats();
-        if (user?.role === 'admin') fetchAdminExtras();
-      }
+      if (document.visibilityState === 'visible') fetchAll();
     }, 60000);
-    return () => clearInterval(intervalId);
-  }, [user?.role, viewSession]);
+    return () => { cancelled = true; clearInterval(intervalId); };
+  }, [user?.role, viewSession, sessionLoading, cacheKey]);
 
   if (loading) {
     return (

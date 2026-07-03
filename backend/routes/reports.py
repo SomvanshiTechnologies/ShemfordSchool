@@ -25,10 +25,16 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+async def _noop():
+    """Awaitable placeholder so optional ops can sit in an asyncio.gather()."""
+    return None
+
+
 # ==================== DASHBOARD ====================
 
 @router.get("/reports/dashboard")
 async def get_dashboard_stats(request: Request, academic_year: Optional[str] = None):
+    import asyncio as _asyncio
     user = await get_current_user(request)
     # Fall back to the X-Academic-Year header so callers that don't pass the
     # query param (e.g. mobile dashboard) still get session-scoped figures.
@@ -41,12 +47,41 @@ async def get_dashboard_stats(request: Request, academic_year: Optional[str] = N
         stu_q = {"is_active": True}
         if academic_year:
             stu_q["academic_year"] = academic_year
-        stats["total_students"] = await db.students.count_documents(stu_q)
-        stats["total_employees"] = await db.employees.count_documents({"is_active": True})
-        stats["fee_overdue_count"] = await db.students.count_documents(
-            {**stu_q, "fee_status": "overdue"}
+
+        # The month/session collection aggregation pipeline depends only on the
+        # selected academic_year, so it can run alongside the counts.
+        if academic_year:
+            coll_pipeline = [
+                {"$match": {"academic_year": academic_year}},
+                {"$group": {"_id": None, "total": {"$sum": "$amount"}}},
+            ]
+        else:
+            current_month = datetime.now().strftime("%Y-%m")
+            coll_pipeline = [
+                {"$match": {"payment_date": {"$regex": f"^{current_month}"}}},
+                {"$group": {"_id": None, "total": {"$sum": "$amount"}}},
+            ]
+
+        # Round-trip 1: every count/lookup that has no dependency on another runs
+        # concurrently (mirrors the /reports/financial pattern). This collapses
+        # ~6 serial Mongo round-trips into one.
+        (
+            total_students, total_employees, fee_overdue_count, open_issues,
+            active, coll_agg,
+        ) = await _asyncio.gather(
+            db.students.count_documents(stu_q),
+            db.employees.count_documents({"is_active": True}),
+            db.students.count_documents({**stu_q, "fee_status": "overdue"}),
+            db.issues.count_documents({"status": "open"}),
+            db.sessions.find_one({"is_active": True}, {"_id": 0, "session_name": 1})
+            if academic_year else _noop(),
+            db.fee_payments.aggregate(coll_pipeline).to_list(1),
         )
-        stats["open_issues"] = await db.issues.count_documents({"status": "open"})
+        stats["total_students"] = total_students
+        stats["total_employees"] = total_employees
+        stats["fee_overdue_count"] = fee_overdue_count
+        stats["open_issues"] = open_issues
+        stats["month_collection"] = coll_agg[0]["total"] if coll_agg else 0
 
         # "Today's present" must reflect the selected session, not the live
         # clock — otherwise every session shows the same number. Use real today
@@ -55,7 +90,6 @@ async def get_dashboard_stats(request: Request, academic_year: Optional[str] = N
         today = datetime.now().strftime("%Y-%m-%d")
         ref_date = today
         if academic_year:
-            active = await db.sessions.find_one({"is_active": True}, {"_id": 0, "session_name": 1})
             active_ay = active.get("session_name") if active else None
             try:
                 sy = int(academic_year.split("-")[0])
@@ -66,38 +100,24 @@ async def get_dashboard_stats(request: Request, academic_year: Optional[str] = N
                     ref_date = today if s_start <= today <= s_end else s_end
             except (ValueError, IndexError):
                 ref_date = today
-        present_count = await db.attendance.count_documents({
+        # Round-trip 2: this single count depends on ref_date (derived above).
+        stats["today_present"] = await db.attendance.count_documents({
             "entity_type": "student", "date": ref_date, "status": "present"
         })
-        stats["today_present"] = present_count
-
-        # For a selected session, show that session's total collection; for the
-        # live/active session keep the current-month figure.
-        if academic_year:
-            coll_agg = await db.fee_payments.aggregate([
-                {"$match": {"academic_year": academic_year}},
-                {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
-            ]).to_list(1)
-            stats["month_collection"] = coll_agg[0]["total"] if coll_agg else 0
-        else:
-            current_month = datetime.now().strftime("%Y-%m")
-            month_agg = await db.fee_payments.aggregate([
-                {"$match": {"payment_date": {"$regex": f"^{current_month}"}}},
-                {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
-            ]).to_list(1)
-            stats["month_collection"] = month_agg[0]["total"] if month_agg else 0
 
     if user["role"] == UserRole.TEACHER:
         today = datetime.now().strftime("%Y-%m-%d")
-        teacher_attendance = await db.attendance.find(
-            {"marked_by": user["user_id"]}, {"_id": 0, "class_name": 1, "section": 1}
-        ).to_list(10000)
+        teacher_attendance, today_marked = await _asyncio.gather(
+            db.attendance.find(
+                {"marked_by": user["user_id"]}, {"_id": 0, "class_name": 1, "section": 1}
+            ).to_list(10000),
+            db.attendance.count_documents({"marked_by": user["user_id"], "date": today}),
+        )
         unique_classes = set()
         for a in teacher_attendance:
             if a.get("class_name") and a.get("section"):
                 unique_classes.add(f"{a['class_name']}-{a['section']}")
         stats["assigned_classes"] = len(unique_classes)
-        today_marked = await db.attendance.count_documents({"marked_by": user["user_id"], "date": today})
         stats["pending_attendance"] = max(len(unique_classes) - (1 if today_marked > 0 else 0), 0)
         stats["pending_marks_entry"] = 0
 

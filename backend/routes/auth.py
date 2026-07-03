@@ -258,10 +258,18 @@ async def login_user(credentials: UserLogin):
     if isinstance(user.get("created_at"), str):
         user["created_at"] = datetime.fromisoformat(user["created_at"])
 
+    # Ship the active academic session with the login response so the frontend
+    # can scope its very first data fetches (X-Academic-Year) immediately,
+    # instead of blocking them on a follow-up /settings/session round trip.
+    active_sess = await db.sessions.find_one(
+        {"is_active": True}, {"_id": 0, "session_name": 1}
+    )
+
     return {
         "token": token,
         "refresh_token": refresh_token,
         "user": UserResponse(**user).model_dump(),
+        "active_session": active_sess.get("session_name") if active_sess else None,
     }
 
 

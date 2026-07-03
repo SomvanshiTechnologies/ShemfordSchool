@@ -360,12 +360,9 @@ const Layout = ({ children }) => {
   const { user }   = useAuth();
   const location   = useLocation();
   const isMobile   = useMobile();
-  const { reloadSessions } = useSession();
 
-  // The session context loads once at app mount — which may be before login
-  // (401). Re-fetch when the authenticated layout mounts so the selector
-  // populates right after sign-in.
-  useEffect(() => { if (user) reloadSessions(); }, [user, reloadSessions]);
+  // Note: SessionContext already (re)loads /settings/session whenever `user`
+  // changes, so the layout no longer fires its own duplicate reloadSessions().
 
   useEffect(() => {
     const checkAppLock = async () => {

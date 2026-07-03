@@ -94,6 +94,7 @@ api.interceptors.response.use(
           // Refresh failed — log out
           localStorage.removeItem('auth_token');
           localStorage.removeItem('refresh_token');
+          localStorage.removeItem('auth_user');
           if (window.location.pathname !== '/login') {
             window.location.href = '/login';
           }
@@ -104,6 +105,7 @@ api.interceptors.response.use(
       // No refresh token or refresh endpoint itself failed — log out
       localStorage.removeItem('auth_token');
       localStorage.removeItem('refresh_token');
+      localStorage.removeItem('auth_user');
       if (window.location.pathname !== '/login') {
         window.location.href = '/login';
       }

@@ -1,6 +1,26 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { clearAllCache } from '../lib/pageCache';
+import { warmCacheAfterLogin } from '../lib/prefetch';
+
+// Persisted identity (Skillora-style): the last authenticated user object is
+// kept in localStorage so a page load renders the app shell instantly instead
+// of blocking on the /auth/me round trip. /auth/me still revalidates in the
+// background — if the token turns out to be dead, state is cleared and the
+// API layer's 401 handling redirects to /login.
+const USER_KEY = 'auth_user';
+
+const readStoredUser = () => {
+  try { return JSON.parse(localStorage.getItem(USER_KEY)) || null; }
+  catch { return null; }
+};
+
+const storeUser = (u) => {
+  try {
+    if (u) localStorage.setItem(USER_KEY, JSON.stringify(u));
+    else localStorage.removeItem(USER_KEY);
+  } catch { /* quota/serialization — identity cache is optional */ }
+};
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -16,8 +36,11 @@ export const useAuth = () => {
 };
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
+  // Hydrate synchronously from the persisted identity: a returning user's UI
+  // mounts immediately (loading=false) and pages paint from pageCache while
+  // checkAuth revalidates against the server in the background.
+  const [user, setUser] = useState(() => (localStorage.getItem('auth_token') ? readStoredUser() : null));
+  const [loading, setLoading] = useState(() => !(localStorage.getItem('auth_token') && readStoredUser()));
   const [token, setToken] = useState(localStorage.getItem('auth_token'));
 
   const checkAuth = useCallback(async () => {
@@ -36,10 +59,12 @@ export const AuthProvider = ({ children }) => {
           withCredentials: true
         });
         setUser(response.data);
+        storeUser(response.data);
         setToken(storedToken);
       } catch (error) {
         console.error('Auth check failed:', error);
         localStorage.removeItem('auth_token');
+        storeUser(null);
         setToken(null);
         setUser(null);
       }
@@ -50,9 +75,11 @@ export const AuthProvider = ({ children }) => {
           withCredentials: true
         });
         setUser(response.data);
+        storeUser(response.data);
       } catch (error) {
         // Not authenticated
         setUser(null);
+        storeUser(null);
       }
     }
     setLoading(false);
@@ -64,11 +91,19 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     const response = await axios.post(`${API}/auth/login`, { email, password, platform: "web" });
-    const { token: newToken, refresh_token, user: userData } = response.data;
+    const { token: newToken, refresh_token, user: userData, active_session } = response.data;
     localStorage.setItem('auth_token', newToken);
     if (refresh_token) localStorage.setItem('refresh_token', refresh_token);
+    // Seed the academic session BEFORE setUser: SessionContext reads it the
+    // moment `user` lands, letting the first data fetches (X-Academic-Year)
+    // fire immediately instead of waiting for /settings/session.
+    if (active_session) localStorage.setItem('view_session', active_session);
     setToken(newToken);
     setUser(userData);
+    storeUser(userData);
+    // Warm the page cache for the heavy list pages (fire-and-forget) so
+    // navigating there right after login paints instantly.
+    warmCacheAfterLogin(userData, active_session);
     return userData;
   };
 
@@ -79,6 +114,7 @@ export const AuthProvider = ({ children }) => {
     if (refresh_token) localStorage.setItem('refresh_token', refresh_token);
     setToken(newToken);
     setUser(newUser);
+    storeUser(newUser);
     return newUser;
   };
 
@@ -106,6 +142,7 @@ export const AuthProvider = ({ children }) => {
     }
     localStorage.removeItem('auth_token');
     localStorage.removeItem('refresh_token');
+    storeUser(null);
     clearAllCache();
     setToken(null);
     setUser(null);
@@ -113,6 +150,7 @@ export const AuthProvider = ({ children }) => {
 
   const setAuthUser = (userData) => {
     setUser(userData);
+    storeUser(userData);
   };
 
   const value = {

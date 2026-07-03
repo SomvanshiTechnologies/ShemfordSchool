@@ -58,9 +58,22 @@ export const SessionProvider = ({ children }) => {
   // the user logs in we must refetch so view_session (and the X-Academic-Year
   // header it drives) is populated WITHOUT a manual page refresh — otherwise the
   // first data fetches run session-less and the dashboard shows no data until reload.
+  //
+  // Fast path: the login response (or a previous visit) already stashed the
+  // active session in localStorage. Seed from it and DON'T block consumers —
+  // pages start fetching data in parallel with /settings/session instead of
+  // waiting a full extra round trip after login. If the stashed value turns out
+  // stale, load() corrects viewSession and dependent pages refetch.
   useEffect(() => {
     if (user) {
-      setLoading(true);
+      const seeded = localStorage.getItem(VIEW_KEY);
+      if (seeded) {
+        setActiveSession((prev) => prev || seeded);
+        setViewSessionState(seeded);
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
       load();
     } else {
       setLoading(false);
