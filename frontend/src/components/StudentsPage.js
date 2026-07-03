@@ -44,7 +44,10 @@ import {
   TableRow,
 } from './ui/table';
 import { toast } from 'sonner';
-import { Plus, Search, Upload, Eye, Edit, GraduationCap, Filter, FileUp, Download, CheckCircle, XCircle, ArrowRight, ArrowLeft, CreditCard, User, BookOpen, KeyRound, RefreshCw, Copy, EyeOff, Loader2, UserX, UserCheck, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Search, Upload, Eye, Edit, GraduationCap, Filter, FileUp, Download, CheckCircle, XCircle, ArrowRight, ArrowLeft, CreditCard, User, BookOpen, KeyRound, RefreshCw, Copy, EyeOff, Loader2, UserX, UserCheck, AlertCircle, ChevronLeft, ChevronRight, MoreVertical } from 'lucide-react';
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
+} from './ui/dropdown-menu';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -1109,14 +1112,33 @@ const StudentsPage = () => {
                       }
                     </TableCell>
                     <TableCell className="sticky right-0 bg-white text-right shadow-[-4px_0_6px_-1px_rgba(0,0,0,0.06)]">
-                      <Button variant="ghost" size="sm" onClick={async () => { setSelectedStudent(student); setPwResult(null); setPwInput(''); setPwVisible(false); setShowViewDialog(true); try { const r0 = await api.get(`/students/${student.student_id}`); setSelectedStudent(r0.data); } catch {} }} data-testid={`view-${student.student_id}`}><Eye className="h-4 w-4" /></Button>
-                      {isAdmin && student.is_active && <Button variant="ghost" size="sm" onClick={() => handleEditStudent(student)} data-testid={`edit-${student.student_id}`}><Edit className="h-4 w-4" /></Button>}
-                      {isAdmin && student.is_active && (
-                        <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-700 hover:bg-red-50" onClick={() => { setDeactivateTarget(student); setShowDeactivateDialog(true); }} data-testid={`deactivate-${student.student_id}`} title="Deactivate Student"><UserX className="h-4 w-4" /></Button>
-                      )}
-                      {isAdmin && !student.is_active && (
-                        <Button variant="ghost" size="sm" className="text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50" onClick={() => handleReactivateStudent(student)} data-testid={`reactivate-${student.student_id}`} title="Reactivate Student"><UserCheck className="h-4 w-4" /></Button>
-                      )}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="sm" title="Actions" data-testid={`actions-${student.student_id}`}>
+                            <MoreVertical className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-44">
+                          <DropdownMenuItem onClick={async () => { setSelectedStudent(student); setPwResult(null); setPwInput(''); setPwVisible(false); setShowViewDialog(true); try { const r0 = await api.get(`/students/${student.student_id}`); setSelectedStudent(r0.data); } catch {} }} data-testid={`view-${student.student_id}`}>
+                            <Eye className="h-4 w-4 mr-2" /> View Details
+                          </DropdownMenuItem>
+                          {isAdmin && student.is_active && (
+                            <DropdownMenuItem onClick={() => handleEditStudent(student)} data-testid={`edit-${student.student_id}`}>
+                              <Edit className="h-4 w-4 mr-2" /> Edit
+                            </DropdownMenuItem>
+                          )}
+                          {isAdmin && student.is_active && (
+                            <DropdownMenuItem className="text-red-600 focus:text-red-700 focus:bg-red-50" onClick={() => { setDeactivateTarget(student); setShowDeactivateDialog(true); }} data-testid={`deactivate-${student.student_id}`}>
+                              <UserX className="h-4 w-4 mr-2" /> Deactivate
+                            </DropdownMenuItem>
+                          )}
+                          {isAdmin && !student.is_active && (
+                            <DropdownMenuItem className="text-emerald-600 focus:text-emerald-700 focus:bg-emerald-50" onClick={() => handleReactivateStudent(student)} data-testid={`reactivate-${student.student_id}`}>
+                              <UserCheck className="h-4 w-4 mr-2" /> Reactivate
+                            </DropdownMenuItem>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </TableCell>
                   </TableRow>
                 ))}

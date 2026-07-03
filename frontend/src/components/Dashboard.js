@@ -554,27 +554,37 @@ const Dashboard = () => {
 
     const fetchAll = async () => {
       const isAdmin = user?.role === 'admin';
-      const tasks = [api.get('/reports/dashboard', { params: ayParams })];
-      if (isAdmin) {
-        tasks.push(
-          api.get('/reports/financial', { params: ayParams }),
-          api.get('/attendance/alerts', { params: { threshold: 75 } }),
-          api.get('/audit-logs', { params: { limit: 5 } }),
-        );
-      }
-      const [statsRes, finRes, alertsRes, logsRes] = await Promise.allSettled(tasks);
-      if (cancelled) return;
-
+      // Everything fires in parallel, but the page paints as soon as the
+      // headline stats land — the admin widgets (financial / alerts / activity)
+      // stream in as they arrive instead of holding the whole page hostage to
+      // the slowest request.
       const next = { ...cached };
-      if (statsRes.status === 'fulfilled') { next.stats = statsRes.value.data; setStats(next.stats); }
-      else console.error('Failed to fetch dashboard stats:', statsRes.reason);
-      if (isAdmin) {
-        if (finRes?.status    === 'fulfilled') { next.financial = finRes.value.data;            setFinancial(next.financial); }
-        if (alertsRes?.status === 'fulfilled') { next.attendanceAlerts = alertsRes.value.data;  setAttendanceAlerts(next.attendanceAlerts); }
-        if (logsRes?.status   === 'fulfilled') { next.recentActivity = logsRes.value.data;      setRecentActivity(next.recentActivity); }
+      const extrasPromise = isAdmin ? Promise.allSettled([
+        api.get('/reports/financial', { params: ayParams }),
+        api.get('/attendance/alerts', { params: { threshold: 75 } }),
+        api.get('/audit-logs', { params: { limit: 5 } }),
+      ]) : null;
+
+      let statsOk = false;
+      try {
+        const statsRes = await api.get('/reports/dashboard', { params: ayParams });
+        if (cancelled) return;
+        next.stats = statsRes.data;
+        setStats(next.stats);
+        statsOk = true;
+      } catch (error) {
+        console.error('Failed to fetch dashboard stats:', error);
       }
       setLoading(false);
-      if (statsRes.status === 'fulfilled') setCached(cacheKey, next);
+
+      if (extrasPromise) {
+        const [finRes, alertsRes, logsRes] = await extrasPromise;
+        if (cancelled) return;
+        if (finRes.status    === 'fulfilled') { next.financial = finRes.value.data;            setFinancial(next.financial); }
+        if (alertsRes.status === 'fulfilled') { next.attendanceAlerts = alertsRes.value.data;  setAttendanceAlerts(next.attendanceAlerts); }
+        if (logsRes.status   === 'fulfilled') { next.recentActivity = logsRes.value.data;      setRecentActivity(next.recentActivity); }
+      }
+      if (statsOk) setCached(cacheKey, next);
     };
 
     fetchAll();

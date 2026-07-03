@@ -23,6 +23,15 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(application):
+    # A custom lifespan REPLACES FastAPI's default event handling, so classic
+    # @app.on_event("startup"/"shutdown") hooks are silently ignored. ALL
+    # startup/shutdown work must therefore live here.
+    _validate_env()
+    from db_init import create_indexes
+    from job_queue import recover_stale_jobs, start_worker, stop_worker
+    await create_indexes(db)
+    await recover_stale_jobs()
+    start_worker()
     # Run one-time migrations on startup
     try:
         from routes.upgradation import _backfill_from_academic_year, _backfill_streams
@@ -34,7 +43,10 @@ async def lifespan(application):
             logging.getLogger("shemford.api").info("Backfilled stream fields on %d records", n2)
     except Exception as exc:
         logging.getLogger("shemford.api").warning("upgradation backfill skipped: %s", exc)
+    logger.info("Startup complete — DB indexes verified, job worker running")
     yield
+    stop_worker()
+    client.close()
 
 app = FastAPI(title="Shemford School Management System", lifespan=lifespan)
 
@@ -216,22 +228,8 @@ def _validate_env():
         )
 
 
-@app.on_event("startup")
-async def startup_event():
-    _validate_env()
-    from db_init import create_indexes
-    from job_queue import recover_stale_jobs, start_worker
-    await create_indexes(db)
-    await recover_stale_jobs()
-    start_worker()
-    logger.info("Startup complete — DB indexes verified, job worker running")
-
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    from job_queue import stop_worker
-    stop_worker()
-    client.close()
+# NOTE: startup/shutdown logic lives in lifespan() above — @app.on_event hooks
+# do not fire when a custom lifespan is passed to FastAPI, so don't add any.
 
 
 # ── Liveness probe ────────────────────────────────────────────────────────────
