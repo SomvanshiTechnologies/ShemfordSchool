@@ -541,6 +541,12 @@ const Dashboard = () => {
       setRecentActivity(cached.recentActivity ?? null);
       setLoading(false);
     } else {
+      // No snapshot for this role/session yet. Keep whatever is already on
+      // screen (keepPreviousData-style) — switching sessions must not blank
+      // the page to a spinner. The render below only shows the full spinner
+      // when there is truly nothing to paint (very first load); otherwise the
+      // stale figures stay visible under an "Updating…" chip until the new
+      // session's data replaces them.
       setLoading(true);
     }
 
@@ -595,7 +601,11 @@ const Dashboard = () => {
     return () => { cancelled = true; clearInterval(intervalId); };
   }, [user?.role, viewSession, sessionLoading, cacheKey]);
 
-  if (loading) {
+  // Full-page spinner only when there is nothing at all to show (first ever
+  // load). On session/role switches the previous figures remain visible with
+  // an "Updating…" indicator while the new data loads.
+  const hasData = Object.keys(stats).length > 0;
+  if (loading && !hasData) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="relative">
@@ -622,11 +632,18 @@ const Dashboard = () => {
   return (
     <div data-testid="dashboard">
       {/* Page header */}
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Dashboard</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          Welcome back, <span className="font-semibold text-slate-700">{user?.name}</span>
-        </p>
+      <div className="mb-8 flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Dashboard</h1>
+          <p className="text-sm text-slate-500 mt-1">
+            Welcome back, <span className="font-semibold text-slate-700">{user?.name}</span>
+          </p>
+        </div>
+        {loading && (
+          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 bg-slate-100 rounded-full px-3 py-1.5 mt-1">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Updating…
+          </span>
+        )}
       </div>
 
       <DashComponent
