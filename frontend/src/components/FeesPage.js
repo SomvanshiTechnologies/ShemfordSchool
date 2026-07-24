@@ -676,6 +676,14 @@ const FeesPage = () => {
     if (!payLedgerIds.length) { toast.error('Select at least one fee entry'); return; }
     if (!posForm.device_id.trim()) { toast.error('Enter POS device ID'); return; }
 
+    // Ezetap device IDs are "<serial>|ezetap_android". The serial printed on the
+    // back of the machine is just the number, so accept the bare serial and add
+    // the suffix automatically — otherwise the whitelist check and the Ezetap
+    // push both reject it. Idempotent if the user already typed the full form.
+    const normalizedDeviceId = posForm.device_id.trim().includes('|')
+      ? posForm.device_id.trim()
+      : `${posForm.device_id.trim()}|ezetap_android`;
+
     // Calculate total due for selected ledger entries
     const allEntries = [
       ...(studentLedger?.ledger?.one_time || []),
@@ -686,8 +694,8 @@ const FeesPage = () => {
     const totalRupees = selected.reduce((s, e) => s + (Number(e.remaining_balance || e.net_amount) || 0), 0);
     const totalPaise = Math.round(totalRupees * 100);
 
-    // Save device_id to localStorage for next time
-    localStorage.setItem('pos_device_id', posForm.device_id);
+    // Save the normalized device_id to localStorage for next time
+    localStorage.setItem('pos_device_id', normalizedDeviceId);
 
     setPosStatus('polling');
     setPosMessage('Sending payment request to POS terminal...');
@@ -699,7 +707,7 @@ const FeesPage = () => {
         student_id: selectedStudentId,
         ledger_ids: payLedgerIds,
         amount_paise: totalPaise,
-        device_id: posForm.device_id,
+        device_id: normalizedDeviceId,
         mode: posForm.mode,
       });
       const orderId = res.data.pos_order_id;
@@ -1876,9 +1884,9 @@ const FeesPage = () => {
                     className="mt-1 h-9 text-sm font-mono"
                     value={posForm.device_id}
                     onChange={e => setPosForm(f => ({ ...f, device_id: e.target.value }))}
-                    placeholder="e.g. 10200000001"
+                    placeholder="e.g. 1494493509"
                   />
-                  <p className="text-xs text-slate-500 mt-1">Printed on the back of the Ezetap device.</p>
+                  <p className="text-xs text-slate-500 mt-1">The serial (S/N) printed on the back of the Ezetap device — just the number. We add the “|ezetap_android” suffix automatically.</p>
                 </div>
                 <div>
                   <Label className="text-xs font-bold uppercase tracking-wider">Payment Mode</Label>

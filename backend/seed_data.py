@@ -185,6 +185,15 @@ async def seed_classes():
             for s in SHEMFORD_SECTIONS_SEED
         ]
 
+    def _stream_sections(capacity=45):
+        # For 11th/12th the section IS the stream (see routes/classes.py) —
+        # colour sections don't apply to senior classes.
+        return [
+            {"section_name": s, "capacity": capacity,
+             "class_teacher_id": None, "class_teacher_name": None}
+            for s in ("Science", "Humanities")
+        ]
+
     docs = []
     for order, cls_name in enumerate(all_class_names):
         is_senior = cls_name in ("11th", "12th")
