@@ -691,8 +691,26 @@ const FeesPage = () => {
       ...(studentLedger?.ledger?.monthly || []),
     ];
     const selected = allEntries.filter(e => payLedgerIds.includes(e.ledger_id));
-    const totalRupees = selected.reduce((s, e) => s + (Number(e.remaining_balance || e.net_amount) || 0), 0);
-    const totalPaise = Math.round(totalRupees * 100);
+    const fullRupees = selected.reduce((s, e) => s + (Number(e.remaining_balance || e.net_amount) || 0), 0);
+
+    // Honour the "Amount to collect" field: when the admin types a partial
+    // amount (only allowed for a single selected entry, same rule as cash),
+    // charge THAT on the machine — not the full balance. Blank = pay in full.
+    let chargeRupees = fullRupees;
+    const partial = parseFloat(payForm.partial_amount);
+    if (payForm.partial_amount && partial > 0) {
+      if (payLedgerIds.length !== 1) {
+        toast.error('Partial payment supports exactly one selected entry.');
+        return;
+      }
+      if (partial > fullRupees + 0.01) {
+        toast.error(`Amount exceeds the balance due (Rs.${fullRupees.toLocaleString('en-IN')}).`);
+        return;
+      }
+      chargeRupees = partial;
+    }
+    const totalPaise = Math.round(chargeRupees * 100);
+    if (totalPaise < 100) { toast.error('Amount must be at least Rs.1.'); return; }
 
     // Save the normalized device_id to localStorage for next time
     localStorage.setItem('pos_device_id', normalizedDeviceId);

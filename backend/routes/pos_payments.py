@@ -164,27 +164,53 @@ async def _finalize_pos_payment(pos_order: dict, ezetap_resp: dict, user: dict):
     pay_dict["pos_order_id"] = pos_order_id
     pay_dict["created_at"] = pay_dict["created_at"].isoformat()
 
-    # Build per-entry updates: set amount_paid to each entry's net_amount
-    ledger_updates = [
-        UpdateOne(
+    # Allocate the amount actually charged on the terminal across the selected
+    # entries oldest-first (mirrors /fees/pay). A partial POS payment must only
+    # reduce the balance — NOT clear the whole fee. An entry flips to "paid"
+    # only when fully covered; otherwise its remaining_balance reflects what is
+    # still owed. Full payments (charged >= total due) settle every entry.
+    ordered = sorted(
+        (entry_map[lid] for lid in ledger_ids if lid in entry_map),
+        key=lambda e: e.get("due_date") or "",
+    )
+    remaining_to_apply = round(amount_rupees, 2)
+    ledger_updates = []
+    for entry in ordered:
+        lid = entry["ledger_id"]
+        net = float(entry.get("net_amount", 0))
+        prev_paid = float(entry.get("amount_paid") or 0)
+        entry_remaining = round(net - prev_paid, 2)
+        if entry_remaining <= 0 or remaining_to_apply <= 0.005:
+            continue
+        pay_here = round(min(remaining_to_apply, entry_remaining), 2)
+        remaining_to_apply = round(remaining_to_apply - pay_here, 2)
+        new_paid = round(prev_paid + pay_here, 2)
+        new_remaining = round(net - new_paid, 2)
+        if new_remaining < 0.005:
+            set_doc = {
+                "status": "paid", "paid_date": today,
+                "payment_id": payment.payment_id, "receipt_number": receipt_number,
+                "amount_paid": new_paid, "remaining_balance": 0,
+            }
+        else:
+            past_due = entry.get("due_date") and entry["due_date"] < today
+            set_doc = {
+                "status": "overdue" if past_due else "pending", "paid_date": today,
+                "payment_id": payment.payment_id, "receipt_number": receipt_number,
+                "amount_paid": new_paid, "remaining_balance": new_remaining,
+            }
+        ledger_updates.append(UpdateOne(
             {"ledger_id": lid},
-            {"$set": {
-                "status": "paid",
-                "paid_date": today,
-                "payment_id": payment.payment_id,
-                "receipt_number": receipt_number,
-                "amount_paid": entry_map.get(lid, {}).get("net_amount", 0),
-                "remaining_balance": 0,
-            }}
-        )
-        for lid in ledger_ids
-    ]
+            {"$set": set_doc,
+             "$push": {"payment_allocations": {"payment_id": payment.payment_id, "amount": pay_here}}},
+        ))
 
     try:
         async with await mongo_client.start_session() as session:
             async with session.start_transaction():
                 await db.fee_payments.insert_one(pay_dict, session=session)
-                await db.student_ledger.bulk_write(ledger_updates, session=session)
+                if ledger_updates:
+                    await db.student_ledger.bulk_write(ledger_updates, session=session)
                 await db.pos_orders.update_one(
                     {"pos_order_id": pos_order_id},
                     {"$set": {
@@ -199,7 +225,8 @@ async def _finalize_pos_payment(pos_order: dict, ezetap_resp: dict, user: dict):
     except Exception:
         # Standalone MongoDB fallback (no replica set)
         await db.fee_payments.insert_one(pay_dict)
-        await db.student_ledger.bulk_write(ledger_updates)
+        if ledger_updates:
+            await db.student_ledger.bulk_write(ledger_updates)
         await db.pos_orders.update_one(
             {"pos_order_id": pos_order_id},
             {"$set": {
