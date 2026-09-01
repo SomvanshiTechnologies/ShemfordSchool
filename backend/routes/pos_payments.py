@@ -368,6 +368,18 @@ async def initiate_pos_payment(body: POSInitiateRequest, request: Request):
                 or ezetap_raw.get("requestId")
                 or ezetap_raw.get("data", {}).get("p2pRequestId")
             )
+            # Ezetap returns HTTP 200 even when the push is REJECTED (e.g.
+            # P2P_DEVICE_NOT_FOUND, device busy, payment mode disabled) — the
+            # failure is in the body (success:false / no request id), not the
+            # HTTP status. Treat that as a hard failure: release the lock and
+            # surface the real error, instead of persisting an INITIATED order
+            # the frontend would poll forever (and which keeps the fee locked).
+            if ezetap_raw.get("success") is False or not p2p_request_id:
+                await _release_pos_locks(body.ledger_ids, pos_order_id)
+                real = (ezetap_raw.get("message") or ezetap_raw.get("errorMessage")
+                        or ezetap_raw.get("realCode") or "POS device did not accept the request.")
+                logger.warning("POS push rejected by Ezetap: %s (device=%s)", real, body.device_id)
+                raise HTTPException(status_code=502, detail=f"POS terminal error: {real}")
     except HTTPException:
         raise
     except Exception as exc:
