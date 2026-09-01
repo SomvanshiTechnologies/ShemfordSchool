@@ -22,7 +22,8 @@ from database import db
 from models import UserRole, UserBase, StudentBase, StudentCreate, CLASSES_WITH_STREAMS
 from auth_utils import (
     get_current_user, require_roles, generate_admission_number, create_audit_log,
-    hash_password, get_teacher_assigned_classes, request_session, ensure_active_session
+    hash_password, get_teacher_assigned_classes, request_session, ensure_active_session,
+    enforce_session_scope,
 )
 
 router = APIRouter()
@@ -236,8 +237,21 @@ async def get_students(
     # Default to the session the client is operating in (X-Academic-Year header)
     # when no explicit academic_year is given, so every /students consumer is
     # session-scoped. `all_sessions=true` bypasses this for cross-year flows like
-    # the Upgradation search (which promotes prior-year students forward).
-    ay = academic_year or (None if all_sessions else request_session(request))
+    # the Upgradation search (which promotes prior-year students forward) — an
+    # admin-only capability (guarded below).
+    #
+    # Enforce that only admins may view a NON-active session: a non-admin
+    # (parent/teacher) is pinned to the active session regardless of any
+    # academic_year param or X-Academic-Year header they send, matching the
+    # UI which only shows the session switcher to admins.
+    if all_sessions:
+        if user["role"] != UserRole.ADMIN:
+            # Non-admins cannot bypass session scoping; pin to their session.
+            ay = await enforce_session_scope(user, request, academic_year)
+        else:
+            ay = None  # admin cross-year search
+    else:
+        ay = await enforce_session_scope(user, request, academic_year)
     if ay:
         query["academic_year"] = ay
     if search:

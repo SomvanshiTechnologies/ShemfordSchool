@@ -277,6 +277,28 @@ def session_year_filter(request):
     return {"academic_year": ay} if ay else {}
 
 
+async def enforce_session_scope(user, request, requested=None):
+    """Resolve the academic session a request may be scoped to, enforcing that
+    ONLY admins can view a NON-active session.
+
+    The UI exposes the session switcher to admins alone (Layout.js), so a
+    non-admin should never be operating outside the active session. This is the
+    matching server-side guard: it prevents a non-admin from reaching a past
+    session by hand-crafting an `academic_year` query param or an
+    `X-Academic-Year` header. Non-admins are always pinned to the active
+    session; a missing/blank request also falls back to active.
+
+    Pass the caller's resolved `user` and the endpoint's optional
+    `academic_year` param as `requested`. Returns the YYYY-YYYY the caller
+    should scope to (or None only if there is no active session configured)."""
+    asked = (requested or request_session(request) or "").strip() or None
+    active = await active_session_name()
+    if user and user.get("role") == UserRole.ADMIN:
+        return asked or active
+    # Non-admin: ignore any requested past session — pin to the active session.
+    return active
+
+
 async def session_window(request):
     """(start, end) YYYY-MM-DD for the session the client is operating in, with
     the active session extended to today. Used to scope entities by an active
