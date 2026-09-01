@@ -10,7 +10,7 @@ from models import (
     UserRole, UserBase, EmployeeBase, EmployeeCreate
 )
 from auth_utils import (
-    hash_password, require_roles, create_audit_log, get_current_user, session_window
+    hash_password, require_roles, create_audit_log, get_current_user, session_window, session_window_for
 )
 from security import encrypt_bank_fields, decrypt_bank_fields, BANK_FIELDS, strip_pii_for_audit
 
@@ -124,7 +124,7 @@ async def get_employees(
     page: int = 1,
     limit: int = 30,
 ):
-    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     query = {}
     if department:
         query["department"] = department
@@ -133,7 +133,7 @@ async def get_employees(
 
     # Active-period scoping: an employee belongs to the session if they joined on
     # or before the session ends AND hadn't left before it starts.
-    win_start, win_end = await session_window(request)
+    win_start, win_end = await session_window_for(user, request)
     if win_start:
         query["joining_date"] = {"$lte": win_end}
         query["$or"] = [{"date_left": None}, {"date_left": {"$exists": False}}, {"date_left": {"$gte": win_start}}]

@@ -18,7 +18,7 @@ from database import db
 from models import UserRole
 from auth_utils import (
     get_current_user, require_roles, calculate_grade, create_audit_log,
-    get_teacher_assigned_classes, request_session,
+    get_teacher_assigned_classes, request_session, enforce_session_scope,
 )
 
 router = APIRouter()
@@ -38,7 +38,9 @@ async def get_dashboard_stats(request: Request, academic_year: Optional[str] = N
     user = await get_current_user(request)
     # Fall back to the X-Academic-Year header so callers that don't pass the
     # query param (e.g. mobile dashboard) still get session-scoped figures.
-    academic_year = academic_year or request_session(request)
+    # Non-admins are pinned to the active session (admin_all_sessions preserves
+    # the admin default of "no year → current-month figures" branch below).
+    academic_year = await enforce_session_scope(user, request, academic_year, admin_all_sessions=True)
     stats = {}
 
     if user["role"] in [UserRole.ADMIN, UserRole.ACCOUNTANT]:
@@ -157,8 +159,8 @@ async def get_dashboard_stats(request: Request, academic_year: Optional[str] = N
 
 @router.get("/reports/financial")
 async def get_financial_report(request: Request, start_date: Optional[str] = None, end_date: Optional[str] = None, academic_year: Optional[str] = None):
-    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
-    academic_year = academic_year or request_session(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    academic_year = await enforce_session_scope(user, request, academic_year, admin_all_sessions=True)
     import asyncio as _asyncio
 
     # Scope every figure to the selected session so each academic year shows
@@ -206,8 +208,8 @@ async def get_financial_report(request: Request, start_date: Optional[str] = Non
 
 @router.get("/reports/financial/export")
 async def export_financial_report(request: Request, format: str = "pdf", start_date: Optional[str] = None, end_date: Optional[str] = None, academic_year: Optional[str] = None):
-    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
-    academic_year = academic_year or request_session(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    academic_year = await enforce_session_scope(user, request, academic_year, admin_all_sessions=True)
 
     query = {}
     if academic_year:

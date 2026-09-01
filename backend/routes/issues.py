@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from database import db
 from models import UserRole, Issue
-from auth_utils import get_current_user, require_roles, session_year_filter, active_session_name, ensure_active_session
+from auth_utils import get_current_user, require_roles, session_year_filter, active_session_name, ensure_active_session, session_year_filter_for
 
 router = APIRouter()
 
@@ -49,7 +49,8 @@ async def get_issues(
     if category:
         query["category"] = category
     # Scope strictly by owning session (academic_year), not created_at.
-    query.update(session_year_filter(request))
+    # Non-admins are pinned to the active session (admins keep their view).
+    query.update(await session_year_filter_for(user, request))
 
     issues = await db.issues.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
     return issues

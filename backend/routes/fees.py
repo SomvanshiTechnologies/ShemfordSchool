@@ -79,7 +79,7 @@ from models import (
     UserRole, FeeComponentConfig, StudentLedgerEntry, FeePayment,
     FeeComponentType, FEE_COMPONENT_FREQUENCY
 )
-from auth_utils import get_current_user, require_roles, create_audit_log, request_session
+from auth_utils import get_current_user, require_roles, create_audit_log, request_session, enforce_session_scope
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -594,8 +594,8 @@ async def list_fee_component_configs(
     academic_year: Optional[str] = None,
     class_name: Optional[str] = None,
 ):
-    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
-    academic_year = academic_year or request_session(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    academic_year = await enforce_session_scope(user, request, academic_year, admin_all_sessions=True)
     query = {"is_active": True}
     if academic_year:
         query["academic_year"] = academic_year
@@ -908,7 +908,9 @@ async def get_student_ledger(student_id: str, request: Request):
     # remaining_balance left by the old behaviour.
     await refresh_overdue_for_student(student_id)
 
-    sess = request_session(request)
+    # Non-admins (parent/student viewing their own ledger) are pinned to the
+    # active session; admins keep their viewed session (or None = all entries).
+    sess = await enforce_session_scope(user, request, admin_all_sessions=True)
     if sess:
         # Current session: all entries. Previous sessions: only unpaid dues.
         ledger_filter = {"student_id": student_id, "$or": [
@@ -1567,8 +1569,8 @@ async def get_due_chart(
     fee_selections: Optional[str] = None,
     academic_year: Optional[str] = None,  # e.g. "2025-2026"
 ):
-    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
-    academic_year = academic_year or request_session(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    academic_year = await enforce_session_scope(user, request, academic_year, admin_all_sessions=True)
 
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -2286,8 +2288,8 @@ async def report_fees_collection(
     rollup: str = "monthly",
 ):
     """Fees Collection Report — JSON for the dashboard."""
-    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
-    academic_year = academic_year or request_session(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    academic_year = await enforce_session_scope(user, request, academic_year, admin_all_sessions=True)
     return await _collect_report_rows(
         duration=duration, start_date=start_date, end_date=end_date,
         class_name=class_name, section=section, fee_type=fee_type,
@@ -2453,8 +2455,8 @@ async def report_fees_due(
     academic_year: Optional[str] = None,
 ):
     """Due Fees Report — JSON for the dashboard."""
-    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
-    academic_year = academic_year or request_session(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    academic_year = await enforce_session_scope(user, request, academic_year, admin_all_sessions=True)
     return await _due_report_rows(
         class_name=class_name, section=section, fee_type=fee_type,
         fee_component=fee_component, fee_month=fee_month,

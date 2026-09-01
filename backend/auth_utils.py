@@ -277,7 +277,7 @@ def session_year_filter(request):
     return {"academic_year": ay} if ay else {}
 
 
-async def enforce_session_scope(user, request, requested=None):
+async def enforce_session_scope(user, request, requested=None, *, admin_all_sessions=False):
     """Resolve the academic session a request may be scoped to, enforcing that
     ONLY admins can view a NON-active session.
 
@@ -285,18 +285,50 @@ async def enforce_session_scope(user, request, requested=None):
     non-admin should never be operating outside the active session. This is the
     matching server-side guard: it prevents a non-admin from reaching a past
     session by hand-crafting an `academic_year` query param or an
-    `X-Academic-Year` header. Non-admins are always pinned to the active
-    session; a missing/blank request also falls back to active.
+    `X-Academic-Year` header.
 
-    Pass the caller's resolved `user` and the endpoint's optional
-    `academic_year` param as `requested`. Returns the YYYY-YYYY the caller
-    should scope to (or None only if there is no active session configured)."""
+    Behaviour is designed to preserve each endpoint's *existing admin*
+    resolution while only clamping non-admins:
+      - ADMIN: the requested session (param or X-Academic-Year header) passes
+        through unchanged. When an admin requests nothing, the fallback matches
+        the endpoint's original default — the active session, or None (i.e. no
+        academic_year filter → all sessions) when ``admin_all_sessions=True``.
+      - NON-ADMIN: always the active session, regardless of what was requested.
+
+    Pass the caller's resolved ``user`` and the endpoint's optional
+    ``academic_year`` param as ``requested``."""
     asked = (requested or request_session(request) or "").strip() or None
-    active = await active_session_name()
     if user and user.get("role") == UserRole.ADMIN:
-        return asked or active
+        if asked:
+            return asked
+        return None if admin_all_sessions else await active_session_name()
     # Non-admin: ignore any requested past session — pin to the active session.
-    return active
+    return await active_session_name()
+
+
+async def session_year_filter_for(user, request):
+    """Role-aware `session_year_filter`: scope a session-tagged collection by
+    `academic_year`, pinning non-admins to the active session (admins keep the
+    session they are viewing; no session selected → {} = all sessions)."""
+    ay = await enforce_session_scope(user, request, admin_all_sessions=True)
+    return {"academic_year": ay} if ay else {}
+
+
+async def session_window_for(user, request):
+    """Role-aware `session_window`: (start, end) YYYY-MM-DD for the session the
+    request scopes to, pinning non-admins to the active session. The active
+    session extends to today (its present month must show)."""
+    from datetime import datetime as _dt
+    ay = await enforce_session_scope(user, request, admin_all_sessions=True)
+    if not ay:
+        return None, None
+    start, end = session_date_bounds(ay)
+    if not start:
+        return None, None
+    today = _dt.now().strftime("%Y-%m-%d")
+    if (await active_session_name()) == ay and today > end:
+        end = today
+    return start, end
 
 
 async def session_window(request):

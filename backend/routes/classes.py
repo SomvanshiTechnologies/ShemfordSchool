@@ -5,7 +5,7 @@ import re
 
 from database import db
 from models import UserRole, ClassStructure, SHEMFORD_CLASSES, SHEMFORD_SECTIONS, CLASSES_WITH_STREAMS
-from auth_utils import get_current_user, require_roles, create_audit_log, request_session
+from auth_utils import get_current_user, require_roles, create_audit_log, request_session, enforce_session_scope
 from routes.fees import current_academic_year, active_session
 
 router = APIRouter()
@@ -111,7 +111,7 @@ async def create_class(request: Request):
 
 @router.get("/classes")
 async def get_classes(request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
 
     classes = await db.class_structures.find({"is_active": True}, {"_id": 0}).sort("sort_order", 1).to_list(100)
 
@@ -127,7 +127,7 @@ async def get_classes(request: Request):
     # Attach live student counts per section, scoped to the session the admin
     # is operating in — otherwise counts would aggregate students across every
     # session. (stream-aware for 11th/12th)
-    ay = request_session(request) or await active_session()
+    ay = await enforce_session_scope(user, request)
     ay_q = {"academic_year": ay} if ay else {}
     for cls in classes:
         for section in cls.get("sections", []):
@@ -242,13 +242,13 @@ async def assign_class_teacher(class_id: str, section_name: str, request: Reques
 @router.get("/classes/{class_id}/students")
 async def get_class_students(class_id: str, request: Request,
                               section: Optional[str] = None, stream: Optional[str] = None):
-    await require_roles(UserRole.ADMIN, UserRole.TEACHER)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.TEACHER)(request)
     cls = await db.class_structures.find_one({"class_id": class_id}, {"_id": 0})
     if not cls:
         raise HTTPException(status_code=404, detail="Class not found")
 
     query = {"class_name": cls["name"], "is_active": True}
-    ay = request_session(request) or await active_session()
+    ay = await enforce_session_scope(user, request)
     if ay:
         query["academic_year"] = ay
     if cls.get("has_streams"):
@@ -274,13 +274,13 @@ async def get_class_hierarchy(class_id: str, request: Request):
     Return full hierarchy: class → streams (if any) → sections → student list.
     Used by the admin drill-down panel.
     """
-    await require_roles(UserRole.ADMIN, UserRole.TEACHER)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.TEACHER)(request)
     cls = await db.class_structures.find_one({"class_id": class_id}, {"_id": 0})
     if not cls:
         raise HTTPException(status_code=404, detail="Class not found")
 
     # Scope the drill-down to the session the admin is operating in.
-    ay = request_session(request) or await active_session()
+    ay = await enforce_session_scope(user, request)
     ay_q = {"academic_year": ay} if ay else {}
 
     result = {

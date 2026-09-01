@@ -7,7 +7,7 @@ import uuid
 
 from database import db
 from models import UserRole, Announcement, VoiceNote
-from auth_utils import get_current_user, require_roles, create_audit_log, request_session, session_date_bounds
+from auth_utils import get_current_user, require_roles, create_audit_log, request_session, session_date_bounds, enforce_session_scope
 from routes.fees import active_session, ensure_session_writable
 
 VOICE_NOTES_DIR = Path(__file__).parent.parent / "uploads" / "voice_notes"
@@ -31,7 +31,10 @@ async def create_announcement(request: Request):
     # belongs to (and shows under) that academic year. Past (archived) years are
     # read-only — block creating data while viewing them.
     body.pop("academic_year", None)
-    academic_year = request_session(request) or await active_session()
+    # A teacher (non-admin) can only create in the active session; an admin
+    # creates in the session they are viewing. Prevents a hand-crafted header
+    # from stamping an announcement into a past session.
+    academic_year = await enforce_session_scope(user, request)
     await ensure_session_writable(academic_year)
     announcement = Announcement(**body, created_by=user["user_id"], academic_year=academic_year)
     ann_dict = announcement.model_dump()

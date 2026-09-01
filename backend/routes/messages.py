@@ -5,7 +5,7 @@ import uuid
 
 from database import db
 from models import UserRole, Message, VoiceNote
-from auth_utils import get_current_user, session_year_filter, active_session_name, ensure_active_session
+from auth_utils import get_current_user, session_year_filter, active_session_name, ensure_active_session, session_year_filter_for
 
 VOICE_NOTES_DIR = Path(__file__).parent.parent / "uploads" / "voice_notes"
 VOICE_NOTES_DIR.mkdir(parents=True, exist_ok=True)
@@ -222,7 +222,7 @@ async def get_messages(request: Request, sent: bool = False):
 
         query = {"$or": or_clauses}
 
-    query.update(session_year_filter(request))  # scope by owning session, not created_at
+    query.update(await session_year_filter_for(user, request))  # owning session; non-admins pinned to active
     messages = await db.messages.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
 
     # Enrich messages sent to specific users with the recipient's display

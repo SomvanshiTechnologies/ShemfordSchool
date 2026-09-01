@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from database import db
 from models import UserRole, AttendanceRecord, AttendanceSession, Holiday
-from auth_utils import get_current_user, require_roles, create_audit_log, get_teacher_assigned_classes, request_session, active_session_name, session_date_bounds, ensure_active_session
+from auth_utils import get_current_user, require_roles, create_audit_log, get_teacher_assigned_classes, request_session, active_session_name, session_date_bounds, ensure_active_session, enforce_session_scope
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -379,7 +379,7 @@ async def get_attendance_alerts(request: Request, threshold: float = 75.0):
     # students, and only attendance dates within the session's window (the
     # active session extends to today). Otherwise the alert is identical across
     # every session.
-    ay = request_session(request) or await active_session_name()
+    ay = await enforce_session_scope(user, request)
     student_query = {"is_active": True}
     if ay:
         student_query["academic_year"] = ay
@@ -499,7 +499,7 @@ async def get_employee_attendance(request: Request, date: Optional[str] = None, 
 
 @router.get("/holidays")
 async def get_holidays(request: Request, year: Optional[str] = None):
-    await get_current_user(request)
+    user = await get_current_user(request)
     query = {"is_active": True}
     if year:
         query["date"] = {"$regex": f"^{year}"}
@@ -507,7 +507,7 @@ async def get_holidays(request: Request, year: Optional[str] = None):
         # Scope holidays to the session being viewed (they're date-based and
         # dates don't repeat across academic years). The active session extends
         # to today.
-        ay = request_session(request) or await active_session_name()
+        ay = await enforce_session_scope(user, request)
         if ay:
             start, end = session_date_bounds(ay)
             if start:

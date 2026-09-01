@@ -23,7 +23,7 @@ from reportlab.lib.enums import TA_CENTER
 
 from database import db
 from models import UserRole, ExamDefinition, MarkRecord
-from auth_utils import get_current_user, require_roles, calculate_grade, create_audit_log, get_teacher_assigned_classes, request_session, ensure_active_session
+from auth_utils import get_current_user, require_roles, calculate_grade, create_audit_log, get_teacher_assigned_classes, request_session, ensure_active_session, enforce_session_scope
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ async def get_exams(
 ):
     """Get exam definitions. Teachers see all, parents/students see published only."""
     user = await get_current_user(request)
-    academic_year = academic_year or request_session(request)
+    academic_year = await enforce_session_scope(user, request, academic_year, admin_all_sessions=True)
     query = {}
     if class_name:
         query["class_name"] = class_name
@@ -263,7 +263,7 @@ async def get_marks(
 ):
     """Get marks. Parent/Student see only published exam marks."""
     user = await get_current_user(request)
-    academic_year = academic_year or request_session(request)
+    academic_year = await enforce_session_scope(user, request, academic_year, admin_all_sessions=True)
     query = {}
 
     if user["role"] == UserRole.STUDENT:

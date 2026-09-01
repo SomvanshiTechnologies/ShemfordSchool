@@ -24,7 +24,7 @@ def _stream_section(to_class: str, to_section: str, to_stream: Optional[str]) ->
 
 from database import db
 from models import UserRole, StudentLedgerEntry, UpgradationRecord
-from auth_utils import get_current_user, require_roles, create_audit_log, request_session
+from auth_utils import get_current_user, require_roles, create_audit_log, request_session, enforce_session_scope
 from routes.fees import (
     get_fee_config, create_admission_ledger, refresh_overdue_for_student,
     get_remaining_months, current_academic_year, get_next_receipt_number,
@@ -981,7 +981,7 @@ async def get_upgradation_history(
     status: Optional[str] = None,
     limit: int = 500,
 ):
-    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     q = {}
     if student_id:
         q["student_id"] = student_id
@@ -993,7 +993,7 @@ async def get_upgradation_history(
         # The "Recently Upgraded" view (status=approved) is intentionally NOT
         # session-scoped: it is an activity log of every completed upgrade and
         # must surface students regardless of which session is currently active.
-        sess = request_session(request)
+        sess = await enforce_session_scope(user, request, admin_all_sessions=True)
         if sess:
             q["from_academic_year"] = sess
     if status:
