@@ -32,7 +32,6 @@ import {
 } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { RazorpayCheckout } from './RazorpayCheckout';
-import { POSCheckout } from './POSCheckout';
 import FeesReports from './FeesReports';
 
 const FEE_COMPONENTS = [
@@ -2325,14 +2324,6 @@ const LedgerView = ({
                         <CreditCard className="h-3 w-3 mr-1.5" />
                         Collect Payment{payLedgerIds.length > 0 ? ` — ${fmt(selectedTotal)}` : ''}
                       </Button>
-                      <POSCheckout
-                        studentId={studentId}
-                        ledgerIds={payLedgerIds}
-                        amountPaise={Math.round(selectedTotal * 100)}
-                        onSuccess={onRazorpaySuccess}
-                        disabled={payLedgerIds.length === 0}
-                        className="h-9 text-xs"
-                      />
                     </div>
                   </div>
                   {payLedgerIds.length === 0 && (
