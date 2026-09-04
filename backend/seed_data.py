@@ -1189,7 +1189,13 @@ async def seed_fees_demo_data():
         roll_number=None,
     ):
         sid = f"STU{datetime.now().year}{uuid.uuid4().hex[:6].upper()}"
-        adm_num = f"SFS{datetime.now().year}/{random.randint(100,999)}"
+        # Unique admission number — retry until one is free. Plain random collides
+        # (22 demo students out of 900 values hit the birthday paradox), which is
+        # what produced the duplicate SFS2026/412; the uniqueness check prevents it.
+        while True:
+            adm_num = f"SFS{datetime.now().year}/{random.randint(1000, 9999)}"
+            if not await db.students.find_one({"admission_number": adm_num}, {"_id": 1}):
+                break
         p_email = parent_email or f"parent.{first.lower()}.{last.lower()}@demo.shemford.in"
         p_name  = f"Parent of {first}"
         p_phone = f"98{random.randint(10000000,99999999)}"
@@ -1209,11 +1215,32 @@ async def seed_fees_demo_data():
             u = await db.users.find_one({"email": p_email})
             p_uid = u["user_id"]
 
+        # Unique roll number within (year, class, section, stream). Honour an
+        # explicitly requested roll, but never let it (or a default) collide with
+        # a student already in that section — bump to the next free slot. This is
+        # what the demo seed lacked, causing roll clashes with real students.
+        existing_rolls = set()
+        async for _s in db.students.find(
+            {"academic_year": ay, "class_name": cls, "section": section, "stream": stream},
+            {"_id": 0, "roll_number": 1},
+        ):
+            try:
+                existing_rolls.add(int(_s.get("roll_number")))
+            except (TypeError, ValueError):
+                pass
+        try:
+            _roll = int(roll_number) if roll_number is not None else (max(existing_rolls) + 1 if existing_rolls else 1)
+        except (TypeError, ValueError):
+            _roll = (max(existing_rolls) + 1 if existing_rolls else 1)
+        while _roll in existing_rolls:
+            _roll += 1
+        roll_number = str(_roll)
+
         student = {
             "student_id": sid, "admission_number": adm_num,
             "first_name": first, "last_name": last,
             "gender": "Male", "class_name": cls, "section": section,
-            "stream": stream, "roll_number": roll_number or str(random.randint(1, 40)),
+            "stream": stream, "roll_number": roll_number,
             "parent_email": p_email, "parent_name": p_name, "parent_phone": p_phone,
             "admission_date": (now_utc - timedelta(days=random.randint(30,200))).strftime("%Y-%m-%d"),
             "academic_year": ay, "is_active": True, "fee_status": "pending",
