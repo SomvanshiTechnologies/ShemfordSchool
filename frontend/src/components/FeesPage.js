@@ -675,13 +675,11 @@ const FeesPage = () => {
     if (!payLedgerIds.length) { toast.error('Select at least one fee entry'); return; }
     if (!posForm.device_id.trim()) { toast.error('Enter POS device ID'); return; }
 
-    // Ezetap device IDs are "<serial>|ezetap_android". The serial printed on the
-    // back of the machine is just the number, so accept the bare serial and add
-    // the suffix automatically — otherwise the whitelist check and the Ezetap
-    // push both reject it. Idempotent if the user already typed the full form.
-    const normalizedDeviceId = posForm.device_id.trim().includes('|')
-      ? posForm.device_id.trim()
-      : `${posForm.device_id.trim()}|ezetap_android`;
+    // Ezetap production requests use the DSN itself. Accept either a bare DSN
+    // or a previously stored qualified value, but always send only the DSN.
+    const normalizedDeviceId = posForm.device_id
+      .trim()
+      .split('|')[0];
 
     // Calculate total due for selected ledger entries
     const allEntries = [
@@ -1903,7 +1901,7 @@ const FeesPage = () => {
                     onChange={e => setPosForm(f => ({ ...f, device_id: e.target.value }))}
                     placeholder="e.g. 1494493509"
                   />
-                  <p className="text-xs text-slate-500 mt-1">The serial (S/N) printed on the back of the Ezetap device — just the number. We add the “|ezetap_android” suffix automatically.</p>
+                  <p className="text-xs text-slate-500 mt-1">Enter the Ezetap production DSN provided by Axis/Ezetap.</p>
                 </div>
                 <div>
                   <Label className="text-xs font-bold uppercase tracking-wider">Payment Mode</Label>
