@@ -712,8 +712,8 @@ const FeesPage = () => {
     const totalPaise = Math.round(chargeRupees * 100);
     if (totalPaise < 100) { toast.error('Amount must be at least Rs.1.'); return; }
 
-    // Save the normalized device_id to localStorage for next time
-    localStorage.setItem('pos_device_id', normalizedDeviceId);
+    // Remember the bare DSN (without the |ezetap_android suffix) for next time.
+    localStorage.setItem('pos_device_id', posForm.device_id.trim().split('|')[0]);
 
     setPosStatus('polling');
     setPosMessage('Sending payment request to POS terminal...');
@@ -783,7 +783,9 @@ const FeesPage = () => {
   };
 
   const openPosDialog = () => {
-    const savedDevice = localStorage.getItem('pos_device_id') || '';
+    // Default to the production DSN provided by Axis (1494493509); strip any
+    // stored |ezetap_android suffix so the field shows just the number.
+    const savedDevice = (localStorage.getItem('pos_device_id') || '1494493509').split('|')[0];
     setPosForm(f => ({ ...f, device_id: savedDevice }));
     setPosOrderId(null);
     setPosStatus('idle');
