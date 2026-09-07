@@ -675,11 +675,14 @@ const FeesPage = () => {
     if (!payLedgerIds.length) { toast.error('Select at least one fee entry'); return; }
     if (!posForm.device_id.trim()) { toast.error('Enter POS device ID'); return; }
 
-    // Ezetap production requests use the DSN itself. Accept either a bare DSN
-    // or a previously stored qualified value, but always send only the DSN.
-    const normalizedDeviceId = posForm.device_id
-      .trim()
-      .split('|')[0];
+    // Ezetap's P2P adapter expects the deviceId as "<DSN>|ezetap_android".
+    // Every push that ever succeeded (demo) used this suffixed form; sending the
+    // bare DSN returns "DeviceId not found". The operator types just the DSN
+    // (S/N printed on the terminal), so append the suffix automatically.
+    // Idempotent if a fully-qualified value was already stored/entered.
+    const normalizedDeviceId = posForm.device_id.trim().includes('|')
+      ? posForm.device_id.trim()
+      : `${posForm.device_id.trim()}|ezetap_android`;
 
     // Calculate total due for selected ledger entries
     const allEntries = [
@@ -1901,7 +1904,7 @@ const FeesPage = () => {
                     onChange={e => setPosForm(f => ({ ...f, device_id: e.target.value }))}
                     placeholder="e.g. 1494493509"
                   />
-                  <p className="text-xs text-slate-500 mt-1">Enter the Ezetap production DSN provided by Axis/Ezetap.</p>
+                  <p className="text-xs text-slate-500 mt-1">Enter the DSN / serial (S/N) printed on the back of the Ezetap terminal — just the number. The “|ezetap_android” suffix is added automatically.</p>
                 </div>
                 <div>
                   <Label className="text-xs font-bold uppercase tracking-wider">Payment Mode</Label>
