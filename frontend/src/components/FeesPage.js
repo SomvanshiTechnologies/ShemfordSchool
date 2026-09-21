@@ -305,11 +305,15 @@ const FeesPage = () => {
       setLoading(false);
     };
     init();
+    // Run once on mount only. The fetch callbacks change with selectedYear /
+    // viewSession, but re-running this init on those changes would re-trigger the
+    // full loading spinner — the dedicated effects below handle those updates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (isAdmin) fetchConfigs();
-  }, [selectedYear]);
+  }, [selectedYear, isAdmin, fetchConfigs]);
 
   useEffect(() => {
     if (!selectedStudentId) return;
@@ -783,9 +787,12 @@ const FeesPage = () => {
   };
 
   const openPosDialog = () => {
-    // Default to the production DSN provided by Axis (1494493509); strip any
-    // stored |ezetap_android suffix so the field shows just the number.
-    const savedDevice = (localStorage.getItem('pos_device_id') || '1494493509').split('|')[0];
+    // Default to the Axis-mapped production DSN 1494931339 (matches the physical
+    // A910 S/N printed on the terminal). Migrate the retired 1494493509 default to
+    // it, and strip any stored |ezetap_android suffix so the field shows just the number.
+    const PROD_DSN = '1494931339';
+    let savedDevice = (localStorage.getItem('pos_device_id') || PROD_DSN).split('|')[0];
+    if (savedDevice === '1494493509') savedDevice = PROD_DSN;
     setPosForm(f => ({ ...f, device_id: savedDevice }));
     setPosOrderId(null);
     setPosStatus('idle');
@@ -1904,7 +1911,7 @@ const FeesPage = () => {
                     className="mt-1 h-9 text-sm font-mono"
                     value={posForm.device_id}
                     onChange={e => setPosForm(f => ({ ...f, device_id: e.target.value }))}
-                    placeholder="e.g. 1494493509"
+                    placeholder="e.g. 1494931339"
                   />
                   <p className="text-xs text-slate-500 mt-1">Enter the DSN / serial (S/N) printed on the back of the Ezetap terminal — just the number. The “|ezetap_android” suffix is added automatically.</p>
                 </div>
