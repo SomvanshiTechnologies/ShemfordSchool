@@ -258,7 +258,13 @@
       "Bash(npx eslint *)",
       "mcp__ide__getDiagnostics",
       "Bash(dir C:\\\\Users\\\\psbho\\\\ShemfordSchool\\\\frontend\\\\src\\\\components)",
-      "Bash(dir C:\\\\Users\\\\psbho\\\\ShemfordSchool\\\\backend *)"
+      "Bash(dir C:\\\\Users\\\\psbho\\\\ShemfordSchool\\\\backend *)",
+      "Bash(git *)",
+      "PowerShell($b8001 = Test-NetConnection 127.0.0.1 -Port 8001 -InformationLevel Quiet -WarningAction SilentlyContinue; $b8000 = Test-NetConnection 127.0.0.1 -Port 8000 -InformationLevel Quiet -WarningAction SilentlyContinue; $f = Test-NetConnection 127.0.0.1 -Port 3000 -InformationLevel Quiet -WarningAction SilentlyContinue; \"backend 8001: $b8001 | port 8000: $b8000 | frontend 3000: $f\")",
+      "Bash(ssh *)",
+      "WebFetch(domain:demo.ezetap.com)",
+      "WebFetch(domain:corp.ezetap.com)",
+      "WebFetch(domain:razorpay.com)"
     ]
   }
 }
