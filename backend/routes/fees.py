@@ -2267,6 +2267,144 @@ async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Opt
     )
 
 
+# ─── Receipt (in-app view) ─────────────────────────────────────────────────────
+
+_ONES = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+         "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen",
+         "Eighteen", "Nineteen"]
+_TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"]
+
+
+def _two_digit_words(n: int) -> str:
+    if n < 20:
+        return _ONES[n]
+    return (_TENS[n // 10] + (f" {_ONES[n % 10]}" if n % 10 else "")).strip()
+
+
+def _three_digit_words(n: int) -> str:
+    parts = []
+    if n >= 100:
+        parts.append(f"{_ONES[n // 100]} Hundred")
+        n %= 100
+    if n:
+        parts.append(_two_digit_words(n))
+    return " ".join(parts)
+
+
+def _amount_in_words(amount: float) -> str:
+    """Rupee amount to words, Indian numbering (crore/lakh/thousand)."""
+    rupees = int(round(amount))
+    if rupees <= 0:
+        return "Zero Only"
+    crore, rupees = divmod(rupees, 10_000_000)
+    lakh, rupees = divmod(rupees, 100_000)
+    thousand, rupees = divmod(rupees, 1000)
+    hundred = rupees
+
+    parts = []
+    if crore:
+        parts.append(f"{_three_digit_words(crore)} Crore")
+    if lakh:
+        parts.append(f"{_three_digit_words(lakh)} Lakh")
+    if thousand:
+        parts.append(f"{_three_digit_words(thousand)} Thousand")
+    if hundred:
+        parts.append(_three_digit_words(hundred))
+    return " ".join(parts) + " Only"
+
+
+def _month_code(month_str: Optional[str], fee_component: str) -> str:
+    """'2025-09' -> 'Sep'; falls back to the fee component name."""
+    if month_str and re.match(r"^\d{4}-\d{2}$", month_str):
+        try:
+            return datetime.strptime(month_str, "%Y-%m").strftime("%b")
+        except Exception:
+            pass
+    return (fee_component or "").replace("_", " ").title()
+
+
+@router.get("/fees/receipt/{payment_id}/details")
+async def get_receipt_details(payment_id: str, request: Request):
+    """Structured data for the in-app fee receipt screen — same underlying
+    payment/ledger data as the printable PDF (download_receipt_pdf above),
+    shaped as JSON instead of rendered into a document."""
+    await get_current_user(request)
+
+    payment = await db.fee_payments.find_one({"payment_id": payment_id}, {"_id": 0})
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found")
+
+    student = await db.students.find_one({"student_id": payment["student_id"]}, {"_id": 0})
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    ledger_ids = payment.get("installment_ids", [])
+    entries = await db.student_ledger.find(
+        {"ledger_id": {"$in": ledger_ids}}, {"_id": 0}
+    ).to_list(100)
+
+    school = await db.school_settings.find_one({"_id": "profile"}, {"_id": 0}) or {}
+    school_name = school.get("school_name") or "Shemford Futuristic School"
+    address_line = ", ".join(
+        b for b in [school.get("address"), school.get("city"), school.get("state"), school.get("pincode")] if b
+    )
+
+    collected_by_name = ""
+    collected_by_code = ""
+    cb_id = payment.get("collected_by")
+    if cb_id:
+        cb_user = await db.users.find_one({"user_id": cb_id}, {"_id": 0, "name": 1})
+        collected_by_name = (cb_user or {}).get("name", "")
+        cb_employee = await db.employees.find_one({"user_id": cb_id}, {"_id": 0, "employee_id": 1})
+        collected_by_code = (cb_employee or {}).get("employee_id", "")
+
+    total_paid = round(float(payment.get("amount", 0)), 2)
+    n_entries = len(entries)
+    items = []
+    for e in entries:
+        net = float(e.get("net_amount", 0))
+        bal = 0.0 if e.get("status") == "paid" else float(e.get("remaining_balance", 0) or 0)
+        paid_here = total_paid if n_entries == 1 else (round(net - bal, 2) if bal > 0 else net)
+        items.append({
+            "fees_type": e.get("description", ""),
+            "fees_code": _month_code(e.get("month"), e.get("fee_component", "")),
+            "amount": paid_here,
+            "fine": round(float(e.get("late_fee_applied", 0) or 0), 2),
+            "discount": round(float(e.get("concession_amount", 0) or 0), 2),
+            "total": paid_here,
+        })
+    if not items:
+        items.append({
+            "fees_type": "Fee Payment", "fees_code": "", "amount": total_paid,
+            "fine": 0.0, "discount": 0.0, "total": total_paid,
+        })
+
+    return {
+        "payment_id": payment.get("payment_id"),
+        "receipt_number": payment.get("receipt_number", ""),
+        "generated_date": date.today().isoformat(),
+        "school_name": school_name,
+        "school_address": address_line,
+        "school_phone": school.get("phone") or "",
+        "student_name": f"{student.get('first_name','')} {student.get('last_name','')}".strip(),
+        "father_name": student.get("parent_name") or "",
+        "class_name": student.get("class_name", ""),
+        "section": student.get("section", ""),
+        "session": student.get("academic_year", ""),
+        "admission_number": student.get("admission_number", ""),
+        "items": items,
+        "payment_date": payment.get("payment_date", ""),
+        "collected_by": collected_by_name,
+        "collected_by_code": collected_by_code,
+        "grand_total": total_paid,
+        "paid": total_paid,
+        "in_words": _amount_in_words(total_paid),
+        "payment_mode": (payment.get("payment_method", "") or "").replace("_", " ").title(),
+        "status": "Paid",
+        "remarks": payment.get("remarks") or "",
+    }
+
+
 # ─── Payment history ──────────────────────────────────────────────────────────
 
 @router.get("/fees/payments")
