@@ -167,6 +167,9 @@ class StudentBase(BaseModel):
     is_active: bool = True
     fee_status: str = "pending"
     app_locked: bool = False
+    # Students are app-only unless an admin ticks the box on the Students page.
+    # Login checks "not exactly True", so an absent field is app-only too.
+    web_login_enabled: bool = False
     is_sibling: bool = False
     sibling_student_id: Optional[str] = None
     blood_group: Optional[str] = None

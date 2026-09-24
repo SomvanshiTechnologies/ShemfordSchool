@@ -233,8 +233,11 @@ async def login_user(credentials: UserLogin):
     # record find_one happens to return — look for ANY of this user's student
     # records that has web login turned off (matches login by email OR Student ID).
     if credentials.platform == "web" and user.get("role") == "student":
+        # Match the UI, which treats anything that is not exactly True as
+        # unchecked/app-only. Testing for False alone missed every student whose
+        # record predates the flag, so the restriction never actually applied.
         disabled = await db.students.find_one(
-            {"user_id": user["user_id"], "web_login_enabled": False},
+            {"user_id": user["user_id"], "web_login_enabled": {"$ne": True}},
             {"_id": 0, "student_id": 1},
         )
         if disabled:
