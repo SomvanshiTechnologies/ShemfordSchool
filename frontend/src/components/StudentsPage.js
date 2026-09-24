@@ -1036,19 +1036,25 @@ const StudentsPage = () => {
             <div className="overflow-x-auto">
             <Table>
               <TableHeader><TableRow>
-                <TableHead className="w-[52px] text-center">
+                <TableHead className="w-[68px] text-center">
                   {(() => {
                     const active = filteredStudents.filter(s => s.is_active !== false);
                     const allEnabled = active.length > 0 && active.every(s => s.web_login_enabled === true);
                     const noneEnabled = active.length > 0 && active.every(s => s.web_login_enabled !== true);
                     return (
-                      <div className="flex justify-center">
+                      <div
+                        className="flex flex-col items-center gap-0.5"
+                        title="Web login — ticked: the student can sign in to this web portal; unticked: mobile app only. This box changes every student listed."
+                      >
                         <Checkbox
                           checked={allEnabled ? true : noneEnabled ? false : 'indeterminate'}
                           onCheckedChange={() => handleToggleAllWebLogin(!allEnabled)}
-                          title={allEnabled ? 'Disable portal login for all' : 'Enable portal login for all'}
+                          aria-label="Enable or disable web portal login for all listed students"
                           className="data-[state=checked]:bg-orange-500 data-[state=checked]:border-orange-500 data-[state=indeterminate]:bg-orange-300 data-[state=indeterminate]:border-orange-300"
                         />
+                        <span className="text-[9px] font-medium leading-none text-muted-foreground">
+                          WEB
+                        </span>
                       </div>
                     );
                   })()}
@@ -1062,7 +1068,10 @@ const StudentsPage = () => {
                         <Checkbox
                           checked={student.web_login_enabled === true}
                           onCheckedChange={() => handleToggleWebLogin(student.student_id, student.web_login_enabled === true)}
-                          title={student.web_login_enabled === true ? 'Portal login enabled — uncheck to restrict to app only' : 'App only — check to enable portal login'}
+                          title={student.web_login_enabled === true
+                            ? 'Web login ON — this student can sign in to the web portal. Untick to restrict them to the mobile app.'
+                            : 'Web login OFF — this student can only sign in on the mobile app. Tick to allow the web portal.'}
+                          aria-label={`Web portal login for ${student.first_name} ${student.last_name}`}
                           disabled={!student.is_active}
                           className="data-[state=checked]:bg-orange-500 data-[state=checked]:border-orange-500"
                         />

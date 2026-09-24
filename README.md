@@ -350,6 +350,31 @@ the stored choice. The admin's selection now persists across refreshes:
 The choice lives in `localStorage` under `view_session` and drives the
 `X-Academic-Year` header on every request.
 
+### 8. Student web-portal login restriction  *(server-side — affects app users)*
+
+The checkbox in the first column of the Students page controls **where a student
+may log in**. It has nothing to do with fees (that is `app_locked`, set
+automatically on overdue fees).
+
+| Checkbox | Web portal | Mobile app |
+|---|---|---|
+| Ticked | allowed | allowed |
+| Unticked (default) | **blocked** — `403 APP_ONLY_LOGIN` | allowed |
+
+This never actually worked before: login tested `web_login_enabled == False`
+while the UI renders anything that is not exactly `True` as unticked, and the
+field was missing from the Student model, so no student record carried it. All
+students appeared unticked yet could still use the web portal. Login now tests
+"not exactly `True`", and the model defaults the field to `False`.
+
+**The mobile app is never blocked.** The check only fires for `role=student`
+logins sent with `platform: "web"`, which only the web client sends. If the app
+ever starts sending `platform: "web"`, its students will be locked out — send
+the app's own platform value instead.
+
+Toggle per student, or in bulk via the column-header checkbox
+(`PATCH /students/web-login/bulk`).
+
 ### 7. Ezetap POS (PushToPay) — production status
 
 Production config lives in `backend/.env` (see `.env.example` for the
