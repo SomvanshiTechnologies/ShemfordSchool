@@ -2,6 +2,7 @@
 import { useAuth } from '../../contexts/AuthContext';
 import { useSession } from '../../contexts/SessionContext';
 import api from '../../lib/api';
+import { downloadBlobResponse } from '../../lib/download';
 import { getCached, setCached, invalidatePrefix } from '../../lib/pageCache';
 import { previewReportInTab } from '../../lib/preview';
 import { fetchPaymentMethods, PAYMENT_METHODS, fmtPaymentMethod } from '../../lib/paymentMethods';
@@ -172,15 +173,7 @@ const downloadReceipt = async (paymentId) => {
   if (!paymentId) return;
   try {
     const r = await api.get(`/fees/receipt/${paymentId}/pdf`, { responseType: 'blob' });
-    const blob = r.data instanceof Blob ? r.data : new Blob([r.data], { type: 'application/pdf' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `receipt-${paymentId}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    downloadBlobResponse(r, 'FeesReceipt.pdf');
   } catch {
     toast.error('Failed to download receipt');
   }

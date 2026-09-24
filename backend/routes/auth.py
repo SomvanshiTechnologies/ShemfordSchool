@@ -828,7 +828,26 @@ async def admin_reset_user_password(user_id: str, request: Request):
     if not target:
         raise HTTPException(status_code=404, detail="User not found.")
 
-    new_password = (body.get("password") or "").strip() or secrets.token_urlsafe(8)
+    # Generated passwords are the person's own identifier — admission number for
+    # a student, employee id for staff — so the office can hand over credentials
+    # without a lookup. An explicit password in the body always wins, and anyone
+    # who is neither (e.g. a parent) still gets a random one.
+    new_password = (body.get("password") or "").strip()
+    if not new_password:
+        _stu = await db.students.find_one(
+            {"user_id": user_id}, {"_id": 0, "admission_number": 1}
+        )
+        if _stu and str(_stu.get("admission_number") or "").strip():
+            new_password = str(_stu["admission_number"]).strip()
+        else:
+            _emp = await db.employees.find_one(
+                {"user_id": user_id}, {"_id": 0, "employee_id": 1}
+            )
+            if _emp and str(_emp.get("employee_id") or "").strip():
+                new_password = str(_emp["employee_id"]).strip()
+    if not new_password:
+        new_password = secrets.token_urlsafe(8)
+
     if len(new_password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
 

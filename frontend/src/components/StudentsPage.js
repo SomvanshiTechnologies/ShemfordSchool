@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../lib/api';
+import { downloadBlobResponse } from '../lib/download';
 import { getCached, setCached } from '../lib/pageCache';
 import { copyText } from '../lib/clipboard';
 import { useSession } from '../contexts/SessionContext';
@@ -44,7 +45,7 @@ import {
   TableRow,
 } from './ui/table';
 import { toast } from 'sonner';
-import { Plus, Search, Upload, Eye, Edit, GraduationCap, Filter, FileUp, Download, CheckCircle, XCircle, ArrowRight, ArrowLeft, CreditCard, User, BookOpen, KeyRound, RefreshCw, Copy, EyeOff, Loader2, UserX, UserCheck, AlertCircle, ChevronLeft, ChevronRight, MoreVertical } from 'lucide-react';
+import { Plus, Search, Upload, Eye, ExternalLink, Edit, GraduationCap, Filter, FileUp, Download, CheckCircle, XCircle, ArrowRight, ArrowLeft, CreditCard, User, BookOpen, KeyRound, RefreshCw, Copy, EyeOff, Loader2, UserX, UserCheck, AlertCircle, ChevronLeft, ChevronRight, MoreVertical } from 'lucide-react';
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
 } from './ui/dropdown-menu';
@@ -483,9 +484,8 @@ const StudentsPage = () => {
     if (!paymentId) return;
     try {
       const res = await api.get(`/fees/receipt/${paymentId}/pdf`, { responseType: 'blob' });
-      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
-      window.open(url, '_blank');
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      // Explicit Download action — preview stays on openReceiptPreview above.
+      downloadBlobResponse(res, 'FeesReceipt.pdf');
     } catch {
       toast.error('Failed to open receipt');
     }
@@ -1851,8 +1851,12 @@ const StudentsPage = () => {
             )}
           </div>
           <DialogFooter className="p-3 border-t gap-2">
+            <Button variant="outline" size="sm"
+                    onClick={() => receiptPreview?.url && window.open(receiptPreview.url, '_blank')}>
+              <ExternalLink className="h-4 w-4 mr-2" /> Open in new tab
+            </Button>
             <Button variant="outline" size="sm" onClick={() => downloadReceipt(receiptPreview?.paymentId)}>
-              <Download className="h-4 w-4 mr-2" /> Open in new tab
+              <Download className="h-4 w-4 mr-2" /> Download
             </Button>
             <Button size="sm" onClick={closeReceiptPreview}>Done</Button>
           </DialogFooter>
