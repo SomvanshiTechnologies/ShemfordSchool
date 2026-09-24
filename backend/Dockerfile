@@ -2,10 +2,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system deps needed by some packages (reportlab, bcrypt, etc.)
+# Install system deps needed by some packages (reportlab, bcrypt, etc.).
+# fonts-dejavu-core carries the Unicode glyphs ReportLab needs for the rupee
+# sign — python:3.11-slim ships no TTF at all, so without it fees.py falls back
+# to core Helvetica and every receipt prints "Rs." instead of "₹".
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libffi-dev \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies first (layer cache)

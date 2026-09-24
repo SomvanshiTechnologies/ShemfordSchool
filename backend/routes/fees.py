@@ -1942,6 +1942,32 @@ def _money(v) -> str:
         return f"{_RUPEE}0.00"
 
 
+def _payment_mode_label(method) -> str:
+    """Human label for a stored payment_method.
+
+    POS collections store "pos_<mode>" (pos_all / pos_card / pos_upi), which
+    would otherwise print as "Pos All" on a receipt a parent keeps.
+    """
+    m = (method or "").strip().lower()
+    if not m:
+        return "—"
+    known = {
+        "pos_all":       "POS (Card/UPI)",
+        "pos_card":      "POS - Card",
+        "pos_upi":       "POS - UPI",
+        "pos_cash":      "POS - Cash",
+        "bank_transfer": "Bank Transfer",
+        "upi":           "UPI",
+        "neft":          "NEFT",
+        "rtgs":          "RTGS",
+    }
+    if m in known:
+        return known[m]
+    if m.startswith("pos_"):
+        return "POS - " + m[4:].replace("_", " ").title()
+    return m.replace("_", " ").title()
+
+
 def _draw_receipt_copy(c, x, y, w, h, d, copy_label):
     """Draw one receipt copy inside the box whose bottom-left corner is (x, y).
 
@@ -2206,7 +2232,7 @@ async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Opt
         "grand_total":  grand_total,
         "paid":         paid,
         "in_words":     _amount_in_words(paid),
-        "payment_mode": (payment.get("payment_method", "") or "").replace("_", " ").title() or "—",
+        "payment_mode": _payment_mode_label(payment.get("payment_method")),
         "status":       "Paid" if paid >= grand_total - 0.01 else "Partial",
     }
 
@@ -2359,7 +2385,7 @@ async def get_receipt_details(payment_id: str, request: Request):
         "grand_total": total_paid,
         "paid": total_paid,
         "in_words": _amount_in_words(total_paid),
-        "payment_mode": (payment.get("payment_method", "") or "").replace("_", " ").title(),
+        "payment_mode": _payment_mode_label(payment.get("payment_method")),
         "status": "Paid",
         "remarks": payment.get("remarks") or "",
     }
