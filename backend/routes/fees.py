@@ -2153,9 +2153,9 @@ def _amount_in_words(amount: float) -> str:
     return " ".join(parts) + " Only"
 
 
-def _month_code(month_str: Optional[str], fee_component: str) -> str:
+def _month_code(month_str, fee_component: str) -> str:
     """'2025-09' -> 'Sep'; falls back to the fee component name."""
-    if month_str and re.match(r"^\d{4}-\d{2}$", month_str):
+    if month_str and isinstance(month_str, str) and re.match(r"^\d{4}-\d{2}$", month_str):
         try:
             return datetime.strptime(month_str, "%Y-%m").strftime("%b")
         except Exception:
