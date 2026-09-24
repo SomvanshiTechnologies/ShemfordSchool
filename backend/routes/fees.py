@@ -2269,49 +2269,9 @@ async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Opt
 
 # ─── Receipt (in-app view) ─────────────────────────────────────────────────────
 
-_ONES = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
-         "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen",
-         "Eighteen", "Nineteen"]
-_TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"]
-
-
-def _two_digit_words(n: int) -> str:
-    if n < 20:
-        return _ONES[n]
-    return (_TENS[n // 10] + (f" {_ONES[n % 10]}" if n % 10 else "")).strip()
-
-
-def _three_digit_words(n: int) -> str:
-    parts = []
-    if n >= 100:
-        parts.append(f"{_ONES[n // 100]} Hundred")
-        n %= 100
-    if n:
-        parts.append(_two_digit_words(n))
-    return " ".join(parts)
-
-
-def _amount_in_words(amount: float) -> str:
-    """Rupee amount to words, Indian numbering (crore/lakh/thousand)."""
-    rupees = int(round(amount))
-    if rupees <= 0:
-        return "Zero Only"
-    crore, rupees = divmod(rupees, 10_000_000)
-    lakh, rupees = divmod(rupees, 100_000)
-    thousand, rupees = divmod(rupees, 1000)
-    hundred = rupees
-
-    parts = []
-    if crore:
-        parts.append(f"{_three_digit_words(crore)} Crore")
-    if lakh:
-        parts.append(f"{_three_digit_words(lakh)} Lakh")
-    if thousand:
-        parts.append(f"{_three_digit_words(thousand)} Thousand")
-    if hundred:
-        parts.append(_three_digit_words(hundred))
-    return " ".join(parts) + " Only"
-
+# Amount-in-words lives with the receipt layout above (_amount_in_words):
+# the in-app details endpoint and the PDF must read the same wording, and
+# that implementation also spells out paise.
 
 def _month_code(month_str: Optional[str], fee_component: str) -> str:
     """'2025-09' -> 'Sep'; falls back to the fee component name."""
