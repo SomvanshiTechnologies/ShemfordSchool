@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TextInput, StyleSheet } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, Text, ScrollView, TextInput, TouchableOpacity, RefreshControl, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import client from '../api/client';
 import { COLORS, RADIUS, SHADOW } from '../theme/colors';
@@ -8,13 +9,22 @@ import { Avatar, Badge, EmptyState } from '../components/UI';
 import { ScreenLoader } from '../components/LoadingSkeleton';
 
 const StudentsScreen = () => {
+  const navigation = useNavigation();
   const [students, setStudents] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    client.get('/students').then(r => setStudents(r.data)).finally(() => setLoading(false));
-  }, []);
+  const load = useCallback(() =>
+    client.get('/students', { params: { app_visible: true } })
+      .then(r => setStudents(Array.isArray(r.data) ? r.data : []))
+      .catch(() => {}), []);
+
+  // Tabs stay mounted, so refetch whenever this tab regains focus — otherwise
+  // visibility changes made on the web dashboard don't show until app restart.
+  useFocusEffect(useCallback(() => { load().finally(() => setLoading(false)); }, [load]));
+
+  const onRefresh = () => { setRefreshing(true); load().finally(() => setRefreshing(false)); };
 
   const filtered = students.filter(s =>
     `${s.first_name} ${s.last_name} ${s.admission_number}`.toLowerCase().includes(search.toLowerCase())
@@ -24,7 +34,11 @@ const StudentsScreen = () => {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} colors={[COLORS.primary]} />}
+      >
         <View style={styles.header}>
           <Text style={styles.h1}>Students</Text>
           <Text style={styles.sub}>{students.length} enrolled</Text>
@@ -43,7 +57,12 @@ const StudentsScreen = () => {
 
         <View style={styles.list}>
           {filtered.map(s => (
-            <View key={s.student_id} style={styles.listItem}>
+            <TouchableOpacity
+              key={s.student_id}
+              style={styles.listItem}
+              activeOpacity={0.6}
+              onPress={() => navigation.navigate('StudentDetail', { student: s })}
+            >
               <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center', flex: 1 }}>
                 <Avatar letter={s.first_name?.charAt(0)} bg={COLORS.lightBg} color={COLORS.black} size={36} />
                 <View>
@@ -52,7 +71,8 @@ const StudentsScreen = () => {
                 </View>
               </View>
               <Badge text={s.fee_status || 'pending'} variant={s.fee_status === 'paid' ? 'dark' : s.fee_status === 'overdue' ? 'orange' : 'muted'} />
-            </View>
+              <Ionicons name="chevron-forward" size={16} color={COLORS.lightMuted} style={{ marginLeft: 8 }} />
+            </TouchableOpacity>
           ))}
           {filtered.length === 0 && <EmptyState icon={<Ionicons name="people-outline" size={48} color="#DDD" />} text="No students found" />}
         </View>

@@ -9,6 +9,9 @@ import NoticesScreen from '../screens/NoticesScreen';
 import MessagesScreen from '../screens/MessagesScreen';
 import IssuesScreen from '../screens/IssuesScreen';
 import SyllabusScreen from '../screens/SyllabusScreen';
+import StudentDetailScreen from '../screens/StudentDetailScreen';
+import SettingsScreen from '../screens/SettingsScreen';
+import ReceiptScreen from '../screens/ReceiptScreen';
 import { ScreenLoader } from '../components/LoadingSkeleton';
 import { View } from 'react-native';
 import { COLORS } from '../theme/colors';
@@ -49,6 +52,9 @@ const AppNavigator = () => {
             <Stack.Screen name="Messages" component={MessagesScreen} options={detailHeader('Messages')} />
             <Stack.Screen name="Issues"   component={IssuesScreen}   options={detailHeader('Issues')} />
             <Stack.Screen name="Syllabus" component={SyllabusScreen} options={detailHeader('Syllabus')} />
+            <Stack.Screen name="StudentDetail" component={StudentDetailScreen} options={detailHeader('Student Details')} />
+            <Stack.Screen name="Settings" component={SettingsScreen} options={detailHeader('Settings')} />
+            <Stack.Screen name="Receipt" component={ReceiptScreen} options={detailHeader('Fee Receipt')} />
           </>
         ) : (
           <Stack.Screen name="Login" component={LoginScreen} />

@@ -2187,7 +2187,8 @@ async def get_receipt_details(payment_id: str, request: Request):
     school_name = school.get("school_name") or "Shemford Futuristic School"
     address_line = ", ".join(
         b for b in [school.get("address"), school.get("city"), school.get("state"), school.get("pincode")] if b
-    )
+    ) or "Tikarkhanji, Sudpur, Katwa, Purba Bardhaman, West Bengal, India, 713150"
+    school_phone = school.get("phone") or "+91 8649844075 / +91 8649818465"
 
     collected_by_name = ""
     collected_by_code = ""
@@ -2225,7 +2226,7 @@ async def get_receipt_details(payment_id: str, request: Request):
         "generated_date": date.today().isoformat(),
         "school_name": school_name,
         "school_address": address_line,
-        "school_phone": school.get("phone") or "",
+        "school_phone": school_phone,
         "student_name": f"{student.get('first_name','')} {student.get('last_name','')}".strip(),
         "father_name": student.get("parent_name") or "",
         "class_name": student.get("class_name", ""),
