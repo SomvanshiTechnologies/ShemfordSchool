@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../lib/api';
+import { downloadBlobResponse } from '../lib/download';
 import { getCached, setCached } from '../lib/pageCache';
 import { copyText } from '../lib/clipboard';
 import { useSession } from '../contexts/SessionContext';
@@ -44,7 +45,7 @@ import {
   TableRow,
 } from './ui/table';
 import { toast } from 'sonner';
-import { Plus, Search, Upload, Eye, Edit, GraduationCap, Filter, FileUp, Download, CheckCircle, XCircle, ArrowRight, ArrowLeft, CreditCard, User, BookOpen, KeyRound, RefreshCw, Copy, EyeOff, Loader2, UserX, UserCheck, AlertCircle, ChevronLeft, ChevronRight, MoreVertical } from 'lucide-react';
+import { Plus, Search, Upload, Eye, ExternalLink, Edit, GraduationCap, Filter, FileUp, Download, CheckCircle, XCircle, ArrowRight, ArrowLeft, CreditCard, User, BookOpen, KeyRound, RefreshCw, Copy, EyeOff, Loader2, UserX, UserCheck, AlertCircle, ChevronLeft, ChevronRight, MoreVertical } from 'lucide-react';
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
 } from './ui/dropdown-menu';
@@ -483,9 +484,8 @@ const StudentsPage = () => {
     if (!paymentId) return;
     try {
       const res = await api.get(`/fees/receipt/${paymentId}/pdf`, { responseType: 'blob' });
-      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
-      window.open(url, '_blank');
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      // Explicit Download action — preview stays on openReceiptPreview above.
+      downloadBlobResponse(res, 'FeesReceipt.pdf');
     } catch {
       toast.error('Failed to open receipt');
     }
@@ -1036,19 +1036,26 @@ const StudentsPage = () => {
             <div className="overflow-x-auto">
             <Table>
               <TableHeader><TableRow>
-                <TableHead className="w-[52px] text-center">
+                <TableHead className="w-[68px] text-center">
                   {(() => {
                     const active = filteredStudents.filter(s => s.is_active !== false);
                     const allEnabled = active.length > 0 && active.every(s => s.web_login_enabled === true);
                     const noneEnabled = active.length > 0 && active.every(s => s.web_login_enabled !== true);
                     return (
-                      <div className="flex justify-center">
+                      <div
+                        className="flex flex-col items-center gap-0.5"
+                        title="Web login — ticked: the student can sign in to this web portal; unticked: mobile app only. This box changes every student listed."
+                      >
                         <Checkbox
                           checked={allEnabled ? true : noneEnabled ? false : 'indeterminate'}
                           onCheckedChange={() => handleToggleAllWebLogin(!allEnabled)}
                           title={allEnabled ? 'Hide all from the mobile app' : 'Show all in the mobile app'}
+                          aria-label="Enable or disable app visibility and login for all listed students"
                           className="data-[state=checked]:bg-orange-500 data-[state=checked]:border-orange-500 data-[state=indeterminate]:bg-orange-300 data-[state=indeterminate]:border-orange-300"
                         />
+                        <span className="text-[9px] font-medium leading-none text-muted-foreground">
+                          WEB
+                        </span>
                       </div>
                     );
                   })()}
@@ -1063,6 +1070,7 @@ const StudentsPage = () => {
                           checked={student.web_login_enabled === true}
                           onCheckedChange={() => handleToggleWebLogin(student.student_id, student.web_login_enabled === true)}
                           title={student.web_login_enabled === true ? 'Visible in the mobile app — uncheck to hide' : 'Hidden from the mobile app — check to show'}
+                          aria-label={`App visibility and login for ${student.first_name} ${student.last_name}`}
                           disabled={!student.is_active}
                           className="data-[state=checked]:bg-orange-500 data-[state=checked]:border-orange-500"
                         />
@@ -1851,8 +1859,12 @@ const StudentsPage = () => {
             )}
           </div>
           <DialogFooter className="p-3 border-t gap-2">
+            <Button variant="outline" size="sm"
+                    onClick={() => receiptPreview?.url && window.open(receiptPreview.url, '_blank')}>
+              <ExternalLink className="h-4 w-4 mr-2" /> Open in new tab
+            </Button>
             <Button variant="outline" size="sm" onClick={() => downloadReceipt(receiptPreview?.paymentId)}>
-              <Download className="h-4 w-4 mr-2" /> Open in new tab
+              <Download className="h-4 w-4 mr-2" /> Download
             </Button>
             <Button size="sm" onClick={closeReceiptPreview}>Done</Button>
           </DialogFooter>

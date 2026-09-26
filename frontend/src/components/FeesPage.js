@@ -2,6 +2,7 @@
 import { useAuth } from '../contexts/AuthContext';
 import { useSession } from '../contexts/SessionContext';
 import api from '../lib/api';
+import { downloadBlobResponse } from '../lib/download';
 import { getCached, setCached, invalidatePrefix } from '../lib/pageCache';
 import { PAYMENT_METHODS_WITH_POS, fetchPaymentMethods, fmtPaymentMethod } from '../lib/paymentMethods';
 import { clampISODate } from '../lib/dateBounds';
@@ -27,7 +28,7 @@ import { toast } from 'sonner';
 import {
   Search, CreditCard, FileText, AlertTriangle, Loader2, Mail,
   Settings, TrendingUp, ChevronDown, ChevronRight, CheckCircle2,
-  Clock, XCircle, Download, Plus, Edit2, RefreshCw, BookOpen,
+  Clock, XCircle, Download, ExternalLink, Plus, Edit2, RefreshCw, BookOpen,
   Smartphone, Wifi, WifiOff, X, Trash2
 } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
@@ -531,9 +532,10 @@ const FeesPage = () => {
     try {
       const qs = ledgerId ? `?ledger_id=${encodeURIComponent(ledgerId)}` : '';
       const res = await api.get(`/fees/receipt/${paymentId}/pdf${qs}`, { responseType: 'blob' });
-      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
-      window.open(url, '_blank');
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      // Reached only from an explicit "Download" click — the preview modal
+      // (openReceiptPreview) is what opens on a receipt click. Saves as
+      // FeesReceipt_StudentName.pdf, the name the backend sets.
+      downloadBlobResponse(res, 'FeesReceipt.pdf');
     } catch {
       toast.error('Failed to load receipt');
     }
@@ -542,13 +544,13 @@ const FeesPage = () => {
   // Receipt for a ledger entry — always scoped to that entry so the PDF matches
   // the fee row the admin clicked. Uses the stamped payment_id when present,
   // otherwise looks up the payment that covers this entry.
-  const downloadEntryReceipt = async (entry, studentId) => {
-    if (entry?.payment_id) return downloadReceipt(entry.payment_id, entry.ledger_id);
+  const previewEntryReceipt = async (entry, studentId) => {
+    if (entry?.payment_id) return openReceiptPreview(entry.payment_id, entry.receipt_number, entry.ledger_id);
     try {
       const res = await api.get('/fees/payments', { params: { student_id: studentId } });
       const all = Array.isArray(res.data) ? res.data : [];
       const p = all.find(x => (x.installment_ids || []).includes(entry.ledger_id));
-      if (p?.payment_id) return downloadReceipt(p.payment_id, entry.ledger_id);
+      if (p?.payment_id) return openReceiptPreview(p.payment_id, p.receipt_number, entry.ledger_id);
       toast.error('No receipt on record for this partial payment.');
     } catch {
       toast.error('Could not load receipt.');
@@ -557,12 +559,13 @@ const FeesPage = () => {
 
   // Fetch the receipt PDF and surface it in an inline preview modal —
   // called right after Collect Fee / Admission Payment succeed.
-  const openReceiptPreview = async (paymentId, receiptNumber) => {
+  const openReceiptPreview = async (paymentId, receiptNumber, ledgerId) => {
     if (!paymentId) return;
     try {
-      const res = await api.get(`/fees/receipt/${paymentId}/pdf`, { responseType: 'blob' });
+      const qs = ledgerId ? `?ledger_id=${encodeURIComponent(ledgerId)}` : '';
+      const res = await api.get(`/fees/receipt/${paymentId}/pdf${qs}`, { responseType: 'blob' });
       const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
-      setReceiptPreview({ url, paymentId, receiptNumber });
+      setReceiptPreview({ url, paymentId, receiptNumber, ledgerId });
     } catch {
       toast.error('Receipt generated but preview failed — use the Download button in History.');
     }
@@ -1165,8 +1168,8 @@ const FeesPage = () => {
                   setPayLedgerIds={setPayLedgerIds}
                   onPaySelected={() => { setPayForm(f => ({ ...f, partial_amount: '', split_cash: '', split_online: '' })); setShowPayDialog(true); }}
                   onPayAdmission={() => setShowAdmissionPayDialog(true)}
-                  onDownloadReceipt={downloadReceipt}
-                  onDownloadEntryReceipt={downloadEntryReceipt}
+                  onDownloadReceipt={openReceiptPreview}
+                  onDownloadEntryReceipt={previewEntryReceipt}
                   onRazorpaySuccess={handleRazorpaySuccess}
                 />
               </>
@@ -1526,8 +1529,8 @@ const FeesPage = () => {
                 setPayLedgerIds={setPayLedgerIds}
                 onPaySelected={() => setShowPayDialog(true)}
                 onPayAdmission={() => setShowAdmissionPayDialog(true)}
-                onDownloadReceipt={downloadReceipt}
-                onDownloadEntryReceipt={downloadEntryReceipt}
+                onDownloadReceipt={openReceiptPreview}
+                onDownloadEntryReceipt={previewEntryReceipt}
                 onRazorpaySuccess={handleRazorpaySuccess}
                 readOnly={isParent || isStudent}
               />
@@ -1962,7 +1965,7 @@ const FeesPage = () => {
                     size="sm"
                     variant="outline"
                     className="text-xs"
-                    onClick={() => downloadReceipt(posPaymentId)}
+                    onClick={() => openReceiptPreview(posPaymentId)}
                   >
                     <Download className="h-3 w-3 mr-1.5" />
                     Download Receipt
@@ -2113,8 +2116,13 @@ const FeesPage = () => {
             )}
           </div>
           <DialogFooter className="p-3 border-t gap-2">
-            <Button variant="outline" size="sm" onClick={() => downloadReceipt(receiptPreview?.paymentId)}>
-              <Download className="h-4 w-4 mr-2" /> Open in new tab
+            <Button variant="outline" size="sm"
+                    onClick={() => receiptPreview?.url && window.open(receiptPreview.url, '_blank')}>
+              <ExternalLink className="h-4 w-4 mr-2" /> Open in new tab
+            </Button>
+            <Button variant="outline" size="sm"
+                    onClick={() => downloadReceipt(receiptPreview?.paymentId, receiptPreview?.ledgerId)}>
+              <Download className="h-4 w-4 mr-2" /> Download
             </Button>
             <Button size="sm" onClick={closeReceiptPreview}>Done</Button>
           </DialogFooter>

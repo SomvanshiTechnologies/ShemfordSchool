@@ -576,7 +576,11 @@ async def reset_student_password(student_id: str, request: Request):
 
     new_password = body.get("password")
     if not new_password:
-        # Generate a secure random 10-char password
+        # Admin-generated passwords are the student's admission number, so the
+        # office can hand over credentials without looking anything else up.
+        new_password = str(student.get("admission_number") or "").strip()
+    if not new_password:
+        # Only reached if the student has no admission number on record.
         alphabet = string.ascii_letters + string.digits
         new_password = ''.join(secrets.choice(alphabet) for _ in range(10))
 

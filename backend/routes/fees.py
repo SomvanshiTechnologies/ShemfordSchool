@@ -1866,6 +1866,249 @@ async def list_concessions(request: Request):
     return out
 
 
+from reportlab.pdfgen import canvas as _pdfcanvas
+
+# ─── Fee receipt layout (two copies per A4: Office + Student) ─────────────────
+# Mirrors the school's reference receipt: same field order, same wording, same
+# table columns. Two copies are stamped on one A4 sheet — Office on the top
+# half, Student on the bottom half — with a dashed cut line between them.
+
+# The rupee glyph only exists in the TTF we register above; core Helvetica
+# would draw a black box, so fall back to "Rs." when no TTF was found.
+_RUPEE = "₹" if _PDF_FONT_REG != "Helvetica" else "Rs."
+
+_SCHOOL_NAME = "Shemford Futuristic School Katwa"
+_SCHOOL_ADDR = ["Tikarkhanji, Sudpur, Katwa, Purba Bardhaman, West",
+                "Bengal, India, 713150"]
+_SCHOOL_CALL = "Call : +91 8649844075 / +91 8649818465"
+
+_W_ONES = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight",
+           "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen",
+           "Sixteen", "Seventeen", "Eighteen", "Nineteen"]
+_W_TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy",
+           "Eighty", "Ninety"]
+
+
+def _words_under_100(n: int) -> str:
+    if n < 20:
+        return _W_ONES[n]
+    return (_W_TENS[n // 10] + (" " + _W_ONES[n % 10] if n % 10 else "")).strip()
+
+
+def _words_under_1000(n: int) -> str:
+    if n < 100:
+        return _words_under_100(n)
+    head = _W_ONES[n // 100] + " Hundred"
+    return (head + (" " + _words_under_100(n % 100) if n % 100 else "")).strip()
+
+
+def _amount_in_words(amount) -> str:
+    """Rupee amount to words on the Indian system (crore / lakh / thousand).
+
+    1900 -> "One Thousand Nine Hundred Only"
+    Paise are only spelled out when non-zero, matching the reference receipt.
+    """
+    try:
+        amount = float(amount or 0)
+    except (TypeError, ValueError):
+        return "Zero Only"
+    whole = int(amount)
+    paise = int(round((amount - whole) * 100))
+    if paise == 100:          # 12.999 -> 13.00, never "Hundred Paise"
+        whole += 1
+        paise = 0
+    if whole == 0 and paise == 0:
+        return "Zero Only"
+
+    parts = []
+    for div, label in ((10000000, "Crore"), (100000, "Lakh"), (1000, "Thousand")):
+        if whole >= div:
+            parts.append(f"{_words_under_1000(whole // div)} {label}")
+            whole %= div
+    if whole:
+        parts.append(_words_under_1000(whole))
+
+    words = " ".join(parts)
+    if paise:
+        words = f"{words} and {_words_under_100(paise)} Paise" if words else f"{_words_under_100(paise)} Paise"
+    return f"{words} Only"
+
+
+def _money(v) -> str:
+    """Amount formatted the way the reference prints it: Rs.1900.00"""
+    try:
+        return f"{_RUPEE}{float(v or 0):,.2f}"
+    except (TypeError, ValueError):
+        return f"{_RUPEE}0.00"
+
+
+def _payment_mode_label(method) -> str:
+    """Human label for a stored payment_method.
+
+    POS collections store "pos_<mode>" (pos_all / pos_card / pos_upi), which
+    would otherwise print as "Pos All" on a receipt a parent keeps.
+    """
+    m = (method or "").strip().lower()
+    if not m:
+        return "—"
+    known = {
+        "pos_all":       "POS (Card/UPI)",
+        "pos_card":      "POS - Card",
+        "pos_upi":       "POS - UPI",
+        "pos_cash":      "POS - Cash",
+        "bank_transfer": "Bank Transfer",
+        "upi":           "UPI",
+        "neft":          "NEFT",
+        "rtgs":          "RTGS",
+    }
+    if m in known:
+        return known[m]
+    if m.startswith("pos_"):
+        return "POS - " + m[4:].replace("_", " ").title()
+    return m.replace("_", " ").title()
+
+
+def _draw_receipt_copy(c, x, y, w, h, d, copy_label):
+    """Draw one receipt copy inside the box whose bottom-left corner is (x, y).
+
+    Font sizes and vertical rhythm are taken from the school's reference
+    receipt (measured off the supplied PDF), so a printed copy matches it:
+    9pt payment line, 10pt school block, 7.5pt details, 6pt fee table.
+    `copy_label` is "Office Copy" or "Student Copy"; the caller does every
+    database lookup, so both copies always render identical content.
+    """
+    pad = 11
+    ix = x + pad                 # inner left edge
+    iw = w - 2 * pad             # inner width
+    rx = x + w - pad             # inner right edge
+    cx = x + w / 2               # centre line
+    grey = colors.HexColor("#555555")
+    line_col = colors.HexColor("#999999")
+
+    c.setStrokeColor(colors.HexColor("#333333"))
+    c.setLineWidth(0.8)
+    c.rect(x, y, w, h)
+
+    top = y + h - 12
+    c.setFillColor(colors.black)
+
+    # ── Payment id + print date (reference: 9pt, baseline at the block top) ───
+    c.setFont(_PDF_FONT_REG, 9)
+    c.drawString(ix, top, f"Payment ID:{d['payment_id']}")
+    c.drawRightString(rx, top, f"Date: {d['print_date']}")
+
+    # ── School identity: 10pt, name bold, then two address lines and phones ──
+    c.setFont(_PDF_FONT_BOLD, 10)
+    c.drawCentredString(cx, top - 21.7, _SCHOOL_NAME)
+    c.setFont(_PDF_FONT_REG, 10)
+    c.setFillColor(grey)
+    for i, ln in enumerate(_SCHOOL_ADDR):
+        c.drawCentredString(cx, top - 36.0 - i * 14.2, ln)
+    c.drawCentredString(cx, top - 64.5, _SCHOOL_CALL)
+    c.setFillColor(colors.black)
+
+    # ── "Fee Receipt" / copy label band ───────────────────────────────────────
+    band_y = top - 88.0
+    c.setFillColor(colors.HexColor("#f1f1f1"))
+    c.setStrokeColor(line_col)
+    c.setLineWidth(0.5)
+    c.rect(ix, band_y, iw, 14, stroke=1, fill=1)
+    c.setFillColor(colors.black)
+    c.setFont(_PDF_FONT_BOLD, 9)
+    c.drawString(ix + 4, band_y + 4, "Fee Receipt")
+    c.drawRightString(rx - 4, band_y + 4, copy_label)
+
+    # ── Student details: label left, second field right-aligned ───────────────
+    c.setFont(_PDF_FONT_REG, 7.5)
+    for i, (left, right) in enumerate((
+        (f"Student Name: {d['student_name']}", f"Sec: {d['section']}"),
+        (f"Father Name: {d['father_name']}",   f"Session: {d['session']}"),
+        (f"Class: {d['class_name']}",          f"Admission No: {d['admission_no']}"),
+    )):
+        ly = top - 105.0 - i * 11.0
+        c.drawString(ix, ly, left)
+        c.drawRightString(rx, ly, right)
+
+    # ── Fee table: 6pt, left-aligned columns as in the reference ──────────────
+    cols = [0.015, 0.29, 0.47, 0.63, 0.73, 0.865]
+    xs = [ix + f * iw for f in cols]
+    headers = ["Fees Type", "Fees Code", "Amount", "Fine", "Discount", "Total"]
+    row_h = 13.5
+    hdr_top = top - 148.0
+
+    def _clip(text, limit):
+        text = str(text)
+        while text and c.stringWidth(text, _PDF_FONT_REG, 6) > limit:
+            text = text[:-1]
+        return text
+
+    # header
+    c.setFillColor(colors.HexColor("#f1f1f1"))
+    c.rect(ix, hdr_top, iw, row_h, stroke=1, fill=1)
+    c.setFillColor(colors.black)
+    c.setFont(_PDF_FONT_BOLD, 6)
+    for i, htxt in enumerate(headers):
+        c.drawString(xs[i], hdr_top + 4.5, htxt)
+
+    # rows — capped to what fits above the totals block
+    reserved = 58
+    max_rows = max(1, int((hdr_top - (y + pad + reserved)) // row_h))
+    visible = d["rows"][:max_rows]
+    overflow = len(d["rows"]) - len(visible)
+    if overflow > 0:
+        visible = visible[:-1]
+        overflow += 1
+
+    body_top = hdr_top
+    c.setFont(_PDF_FONT_REG, 6)
+    for row in visible:
+        body_top -= row_h
+        c.setFillColor(colors.white)
+        c.rect(ix, body_top, iw, row_h, stroke=1, fill=1)
+        c.setFillColor(colors.black)
+        cells = [_clip(row["fees_type"], (cols[1] - cols[0]) * iw - 4),
+                 _clip(row["fees_code"], (cols[2] - cols[1]) * iw - 4),
+                 _money(row["amount"]), _money(row["fine"]),
+                 _money(row["discount"]), _money(row["total"])]
+        for i, cell in enumerate(cells):
+            c.drawString(xs[i], body_top + 4.5, cell)
+
+    if overflow > 0:
+        body_top -= row_h
+        c.setFillColor(colors.white)
+        c.rect(ix, body_top, iw, row_h, stroke=1, fill=1)
+        c.setFillColor(colors.black)
+        rest = d["rows"][len(visible):]
+        c.drawString(xs[0], body_top + 4.5, _clip(f"+ {overflow} more fee line(s)",
+                                                  (cols[2] - cols[0]) * iw - 4))
+        for i, key in ((2, "amount"), (3, "fine"), (4, "discount"), (5, "total")):
+            c.drawString(xs[i], body_top + 4.5,
+                         _money(sum(float(r[key] or 0) for r in rest)))
+
+    c.setStrokeColor(line_col)
+    c.setLineWidth(0.5)
+    for xe in xs[1:]:
+        c.line(xe - 2, body_top, xe - 2, hdr_top + row_h)
+
+    # ── Payment meta (left) and totals (right) ────────────────────────────────
+    meta_top = body_top - 17
+    c.setFont(_PDF_FONT_REG, 7.5)
+    c.drawString(ix, meta_top, f"Payment Date: {d['payment_date']}")
+    c.setFont(_PDF_FONT_BOLD, 9)
+    c.drawRightString(rx, meta_top - 1.5, f"Grand Total : {_money(d['grand_total'])}")
+    c.setFont(_PDF_FONT_REG, 7.5)
+    c.drawString(ix, meta_top - 11.3, f"Collected By: {d['collected_by']}")
+    c.setFont(_PDF_FONT_BOLD, 9)
+    c.drawRightString(rx, meta_top - 14.3, f"Paid : {_money(d['paid'])}")
+
+    # ── Words / mode / status ─────────────────────────────────────────────────
+    c.setFont(_PDF_FONT_REG, 7.5)
+    c.drawCentredString(cx, meta_top - 30.0, f"In Words : {d['in_words']}")
+    c.drawString(ix, meta_top - 47.3, f"Payment Mode : {d['payment_mode']}")
+    c.drawRightString(rx, meta_top - 47.3, f"Status: {d['status']}")
+
+
+
 # ─── Receipt PDF ──────────────────────────────────────────────────────────────
 
 @router.get("/fees/receipt/{payment_id}/pdf")
@@ -1916,242 +2159,145 @@ async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Opt
             {"ledger_id": {"$in": ledger_ids}}, {"_id": 0}
         ).to_list(100)
 
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4,
-                            topMargin=0.5 * inch, bottomMargin=0.5 * inch,
-                            leftMargin=0.7 * inch, rightMargin=0.7 * inch)
-    elements = []
-    styles = getSampleStyleSheet()
+    # ── Build the data both copies share ──────────────────────────────────────
+    # Nothing below changes what was paid or recorded — it only shapes the
+    # existing payment/ledger data into the reference receipt's field order.
+    def _dmy(s):
+        return _iso_to_dmy(s).replace("/", "-")
 
-    orange = colors.HexColor("#E88A1A")
-    title_style = ParagraphStyle("Title", parent=styles["Heading1"],
-                                 fontSize=16, alignment=TA_CENTER, textColor=orange)
-    sub_style = ParagraphStyle("Sub", parent=styles["Normal"],
-                                fontSize=9, alignment=TA_CENTER, textColor=colors.grey)
-    normal_bold = ParagraphStyle("NB", parent=styles["Normal"], fontName=_PDF_FONT_BOLD, fontSize=9)
+    def _fee_code(e):
+        m = e.get("month")
+        if m:
+            try:
+                return datetime.strptime(str(m)[:7], "%Y-%m").strftime("%b")
+            except (ValueError, TypeError):
+                pass
+        return (e.get("fee_component", "") or "").replace("_", " ").title()
 
-    elements.append(Paragraph("SHEMFORD FUTURISTIC SCHOOL", title_style))
-    elements.append(Paragraph("Katwa, West Bengal | CBSE Affiliated | Empowering Futures", sub_style))
-    elements.append(Spacer(1, 10))
+    rows = []
+    for e in entries:
+        rows.append({
+            "fees_type": e.get("description", "") or "—",
+            "fees_code": _fee_code(e),
+            "amount":    e.get("gross_amount", 0),
+            "fine":      e.get("late_fee_applied", 0),
+            "discount":  e.get("concession_amount", 0),
+            "total":     e.get("net_amount", 0),
+        })
+    if not rows:   # defensive: never print an empty table
+        rows = [{"fees_type": "Fee Payment", "fees_code": "—",
+                 "amount": payment.get("amount", 0), "fine": 0,
+                 "discount": 0, "total": payment.get("amount", 0)}]
 
-    # Divider
-    div_table = Table([["FEE RECEIPT"]], colWidths=[7 * inch])
-    div_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), orange),
-        ("TEXTCOLOR", (0, 0), (-1, -1), colors.white),
-        ("FONTNAME", (0, 0), (-1, -1), _PDF_FONT_BOLD),
-        ("FONTSIZE", (0, 0), (-1, -1), 11),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("PADDING", (0, 0), (-1, -1), 6),
-    ]))
-    elements.append(div_table)
-    elements.append(Spacer(1, 10))
+    grand_total = round(sum(float(r["total"] or 0) for r in rows), 2)
+    paid = round(float(payment.get("amount", 0) or 0), 2)
 
-    # For senior classes (11th/12th) the section IS the stream, so show the
-    # class alone in Class and the stream/section in Stream — not combined.
-    _cls = student.get("class_name", "") or ""
-    _section = student.get("section", "") or ""
-    _stream = student.get("stream", "") or ""
-    _STREAM_CLASSES = {"11th", "12th", "11", "12", "Class 11", "Class 12"}
-    if _cls in _STREAM_CLASSES:
-        class_label = _cls
-        stream_src = _stream or _section
-        class_extra_label = "Stream"
-        class_extra_value = stream_src.title() if stream_src else "—"
-    else:
-        class_label = f"{_cls} – {_section}" if _section else _cls
-        class_extra_label = "Academic Year"
-        class_extra_value = student.get("academic_year", "—") or "—"
-
-    _method_label = (payment.get("payment_method", "") or "").replace("_", " ").upper()
-    _info_val_style = ParagraphStyle("InfoVal", parent=styles["Normal"], fontSize=9, leading=11)
-    _method_cell = Paragraph(_method_label, _info_val_style)
-
-    info_data = [
-        ["Receipt No.", payment.get("receipt_number", ""), "Date", _iso_to_dmy(payment.get("payment_date", ""))],
-        ["Student Name", f"{student['first_name']} {student['last_name']}",
-         "Admission No.", student.get("admission_number", "")],
-        ["Class", class_label, class_extra_label, class_extra_value],
-        ["Payment Method", _method_cell,
-         "Txn ID", payment.get("transaction_id", "—") or "—"],
-    ]
-    info_table = Table(info_data, colWidths=[1.4 * inch, 2.1 * inch, 1.4 * inch, 2.1 * inch])
-    info_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f5f5f5")),
-        ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#f5f5f5")),
-        ("FONTNAME", (0, 0), (-1, -1), _PDF_FONT_REG), ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("FONTNAME", (0, 0), (0, -1), _PDF_FONT_BOLD),
-        ("FONTNAME", (2, 0), (2, -1), _PDF_FONT_BOLD),
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey), ("PADDING", (0, 0), (-1, -1), 6),
-    ]))
-    elements.append(info_table)
-    elements.append(Spacer(1, 12))
-
-    if scoped_entry:
-        # Per-fee receipt: list the part-payment(s) toward this fee (each with
-        # its date), then TOTAL PAID. Payments are capped to the amount actually
-        # paid on this fee so unrelated/mis-linked payments can't inflate the
-        # total (some legacy payments wrongly reference another fee's ledger id).
-        e = scoped_entry
-        net = round(float(e.get("net_amount", 0)), 2)
-        # Amount actually paid on this fee — status-aware so legacy stale fields
-        # (older paid entries with amount_paid=0) don't understate it.
-        if e.get("status") == "paid":
-            paid_total = net
+    # "Collected By" stores the collector's user_id — resolve it to a readable
+    # name plus employee code ("Raju Ghosh(SFE003)"), as the reference prints it.
+    # An id we can't resolve (deleted user) is shown as an em dash rather than
+    # leaking an internal identifier onto a receipt the parent keeps.
+    _collector = payment.get("collected_by") or ""
+    collected_label = "—"
+    if _collector:
+        # The field is not one kind of id: staff-collected payments store an
+        # employee_id, a few admin-collected ones store a user_id, and old seed
+        # rows store free text. Try employee first — it carries the code the
+        # reference receipt prints — then fall back to the user record.
+        _emp = await db.employees.find_one(
+            {"$or": [{"employee_id": _collector}, {"user_id": _collector}]},
+            {"_id": 0, "employee_id": 1, "first_name": 1, "last_name": 1},
+        )
+        if _emp:
+            _nm = f"{_emp.get('first_name', '')} {_emp.get('last_name', '')}".strip()
+            collected_label = f"{_nm}({_emp['employee_id']})" if _nm else _emp["employee_id"]
         else:
-            paid_total = round(float(e.get("amount_paid") or 0), 2)
+            _u = await db.users.find_one({"user_id": _collector}, {"_id": 0, "name": 1})
+            if _u and _u.get("name"):
+                collected_label = _u["name"]
+            elif not _collector.startswith("user_"):
+                collected_label = _collector   # legacy free text, e.g. "seed_script"
 
-        elements.append(Paragraph(
-            f"<b>Fee:</b> {e.get('description','')} "
-            f"({e.get('fee_type','').replace('_',' ').title()}) &nbsp;—&nbsp; "
-            f"Total billed: Rs.{net:,.2f}",
-            ParagraphStyle("FeeLine", parent=styles["Normal"], fontSize=10)))
-        elements.append(Spacer(1, 6))
+    receipt_data = {
+        "payment_id":   payment.get("receipt_number", "") or payment_id,
+        "print_date":   datetime.now(timezone.utc).strftime("%d-%m-%Y"),
+        "student_name": f"{student.get('first_name','')} {student.get('last_name','')}".strip() or "—",
+        "father_name":  student.get("parent_name") or "—",
+        "class_name":   student.get("class_name", "") or "—",
+        "section":      student.get("section", "") or "—",
+        "session":      student.get("academic_year") or payment.get("academic_year") or "—",
+        "admission_no": student.get("admission_number", "") or "—",
+        "rows":         rows,
+        "payment_date": _dmy(payment.get("payment_date", "")),
+        "collected_by": collected_label,
+        "grand_total":  grand_total,
+        "paid":         paid,
+        "in_words":     _amount_in_words(paid),
+        "payment_mode": _payment_mode_label(payment.get("payment_method")),
+        "status":       "Paid" if paid >= grand_total - 0.01 else "Partial",
+    }
 
-        hist_method_style = ParagraphStyle("HistMethod2", parent=styles["Normal"], fontSize=8, leading=9)
-        hist = [["#", "Date", "Method", "Amount (Rs.)"]]
-        idx = 0
-        remaining = paid_total   # budget = what was actually paid on THIS fee
-        for p in entry_payments:   # every payment toward this fee, oldest-first
-            if remaining <= 0:
-                break
-            full_amt = round(float(p.get("amount", 0)), 2)
-            if full_amt <= 0:
-                continue
-            # A payment may cover several fees; take only the portion that
-            # applies to this fee (never exceed what's left of paid_total).
-            row_amt = round(min(full_amt, remaining), 2)
-            remaining = round(remaining - row_amt, 2)
-            method_label = (p.get("payment_method", "") or "").replace("_", " ").upper()
-            idx += 1
-            hist.append([
-                str(idx),
-                _iso_to_dmy(p.get("payment_date") or p.get("created_at", "")),
-                Paragraph(method_label, hist_method_style),
-                f"{row_amt:,.2f}",
-            ])
-        if idx == 0:   # no linked payment rows — fall back to the entry's paid total
-            hist.append(["1", _iso_to_dmy(payment.get("payment_date") or ""), "—", f"{paid_total:,.2f}"])
-        hist.append(["", "", "TOTAL PAID", f"{paid_total:,.2f}"])
+    # ── One student per half-sheet; the two copies sit side by side ──────
+    # An A4 therefore carries two students: this receipt occupies the TOP half,
+    # and the horizontal cut line marks where the next student's half begins.
+    # Copy height still grows with the fee lines, capped to stay inside the half.
+    buffer = io.BytesIO()
+    page_w, page_h = A4
+    c = _pdfcanvas.Canvas(buffer, pagesize=A4)
+    c.setTitle(f"Fee Receipt {receipt_data['payment_id']}")
 
-        htbl = Table(hist, colWidths=[0.4 * inch, 1.5 * inch, 3.0 * inch, 1.6 * inch])
-        htbl.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), orange),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), _PDF_FONT_BOLD),
-            ("FONTNAME", (0, 1), (-1, -1), _PDF_FONT_REG),
-            ("FONTSIZE", (0, 0), (-1, -1), 8),
-            ("ALIGN", (3, 0), (3, -1), "RIGHT"),
-            ("ALIGN", (2, -1), (2, -1), "RIGHT"),
-            ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
-            ("PADDING", (0, 0), (-1, -1), 5),
-            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f5f5f5")),
-            ("FONTNAME", (0, -1), (-1, -1), _PDF_FONT_BOLD),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#fafafa")]),
-        ]))
-        elements.append(htbl)
-        elements.append(Spacer(1, 18))
-    else:
-        # Itemise each fee with the amount PAID in this transaction, then the
-        # TOTAL PAID. (No balance column — the receipt records what was paid.)
-        total_paid = round(float(payment.get("amount", 0)), 2)
-        n_entries = len(entries)
-        fee_data = [["Description", "Fee Type", "Amount Paid (Rs.)"]]
-        for e in entries:
-            net = float(e.get("net_amount", 0))
-            bal = 0.0 if e.get("status") == "paid" else float(e.get("remaining_balance", 0) or 0)
-            if n_entries == 1:
-                paid_here = total_paid          # whole payment applies to this fee
-            else:
-                paid_here = round(net - bal, 2) if bal > 0 else net
-            fee_data.append([
-                e.get("description", ""),
-                e.get("fee_type", "").replace("_", " ").title(),
-                f"{paid_here:,.2f}",
-            ])
-        fee_data.append(["", "TOTAL PAID", f"{total_paid:,.2f}"])
-        col_w = [3.8 * inch, 1.4 * inch, 1.3 * inch]
-        fee_table = Table(fee_data, colWidths=col_w)
-        fee_table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), orange),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), _PDF_FONT_BOLD),
-            ("FONTNAME", (0, 1), (-1, -1), _PDF_FONT_REG),
-            ("FONTSIZE", (0, 0), (-1, -1), 8),
-            ("ALIGN", (2, 0), (2, -1), "RIGHT"),
-            ("ALIGN", (1, -1), (1, -1), "RIGHT"),
-            ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
-            ("PADDING", (0, 0), (-1, -1), 5),
-            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f5f5f5")),
-            ("FONTNAME", (0, -1), (-1, -1), _PDF_FONT_BOLD),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#fafafa")]),
-        ]))
-        elements.append(fee_table)
-        elements.append(Spacer(1, 24))
+    half = page_h / 2
+    margin, gutter = 18, 10
+    copy_w = (page_w - 2 * margin - gutter) / 2
+    copy_h = min(252 + max(0, len(rows) - 1) * 13.5, half - 34)
+    copy_y = page_h - 22 - copy_h
 
-    if payment.get("remarks"):
-        elements.append(Paragraph(f"Remarks: {payment['remarks']}", styles["Normal"]))
-        elements.append(Spacer(1, 10))
+    _draw_receipt_copy(c, margin, copy_y, copy_w, copy_h, receipt_data, "Office Copy")
+    _draw_receipt_copy(c, margin + copy_w + gutter, copy_y, copy_w, copy_h,
+                       receipt_data, "Student Copy")
 
-    elements.append(Paragraph(
-        "This is a computer-generated receipt and is valid without a physical signature.",
-        sub_style
-    ))
+    c.setStrokeColor(colors.HexColor("#999999"))
+    c.setLineWidth(0.6)
 
-    doc.build(elements)
+    # Vertical cut: separates Office from Student copy
+    mid_x = margin + copy_w + gutter / 2
+    c.setDash(4, 3)
+    c.line(mid_x, copy_y - 8, mid_x, copy_y + copy_h + 8)
+    c.setDash()
+
+    c.setFont(_PDF_FONT_REG, 6.5)
+    label = "CUT HERE"
+    lw = c.stringWidth(label, _PDF_FONT_REG, 6.5)
+    # vertical label
+    c.saveState()
+    c.translate(mid_x, copy_y + copy_h / 2)
+    c.rotate(90)
+    c.setFillColor(colors.white)
+    c.rect(-lw / 2 - 4, -3.2, lw + 8, 7.5, stroke=0, fill=1)
+    c.setFillColor(colors.HexColor("#999999"))
+    c.setFont(_PDF_FONT_REG, 6.5)
+    c.drawCentredString(0, -2, label)
+    c.restoreState()
+
+    c.showPage()
+    c.save()
     buffer.seek(0)
-    filename = f"receipt_{payment.get('receipt_number', payment_id).replace('/', '_')}.pdf"
+    # FeesReceipt_StudentName.pdf — strip anything that isn't alphanumeric so the
+    # name is safe in a Content-Disposition header and on every filesystem.
+    _safe_name = "".join(
+        ch for ch in receipt_data["student_name"].title() if ch.isalnum()
+    ) or "Student"
+    filename = f"FeesReceipt_{_safe_name}.pdf"
     return StreamingResponse(
         buffer, media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
 
 # ─── Receipt (in-app view) ─────────────────────────────────────────────────────
 
-_ONES = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
-         "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen",
-         "Eighteen", "Nineteen"]
-_TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"]
-
-
-def _two_digit_words(n: int) -> str:
-    if n < 20:
-        return _ONES[n]
-    return (_TENS[n // 10] + (f" {_ONES[n % 10]}" if n % 10 else "")).strip()
-
-
-def _three_digit_words(n: int) -> str:
-    parts = []
-    if n >= 100:
-        parts.append(f"{_ONES[n // 100]} Hundred")
-        n %= 100
-    if n:
-        parts.append(_two_digit_words(n))
-    return " ".join(parts)
-
-
-def _amount_in_words(amount: float) -> str:
-    """Rupee amount to words, Indian numbering (crore/lakh/thousand)."""
-    rupees = int(round(amount))
-    if rupees <= 0:
-        return "Zero Only"
-    crore, rupees = divmod(rupees, 10_000_000)
-    lakh, rupees = divmod(rupees, 100_000)
-    thousand, rupees = divmod(rupees, 1000)
-    hundred = rupees
-
-    parts = []
-    if crore:
-        parts.append(f"{_three_digit_words(crore)} Crore")
-    if lakh:
-        parts.append(f"{_three_digit_words(lakh)} Lakh")
-    if thousand:
-        parts.append(f"{_three_digit_words(thousand)} Thousand")
-    if hundred:
-        parts.append(_three_digit_words(hundred))
-    return " ".join(parts) + " Only"
-
+# Amount-in-words lives with the receipt layout above (_amount_in_words):
+# the in-app details endpoint and the PDF must read the same wording, and
+# that implementation also spells out paise.
 
 def _month_code(month_str, fee_component: str) -> str:
     """'2025-09' -> 'Sep'; falls back to the fee component name."""
@@ -2240,7 +2386,7 @@ async def get_receipt_details(payment_id: str, request: Request):
         "grand_total": total_paid,
         "paid": total_paid,
         "in_words": _amount_in_words(total_paid),
-        "payment_mode": (payment.get("payment_method", "") or "").replace("_", " ").title(),
+        "payment_mode": _payment_mode_label(payment.get("payment_method")),
         "status": "Paid",
         "remarks": payment.get("remarks") or "",
     }

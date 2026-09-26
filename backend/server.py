@@ -197,7 +197,10 @@ app.add_middleware(
     allow_origin_regex=_cors_origin_regex or None,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-Request-ID", "X-Academic-Year"],
-    expose_headers=["X-Total-Count", "X-Total-Pages", "X-Page", "X-Request-ID"],
+    # Content-Disposition must be exposed or the browser hides it from JS and
+    # downloaded files (e.g. fee receipts) fall back to a blob-uuid filename.
+    expose_headers=["X-Total-Count", "X-Total-Pages", "X-Page", "X-Request-ID",
+                    "Content-Disposition"],
 )
 
 

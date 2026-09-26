@@ -8,8 +8,8 @@ import { useAuth } from './AuthContext';
 //   stored server-side). Shown to everyone.
 // - viewSession: the session the current user is *browsing*. Admins can switch
 //   it (to inspect previous years) without changing the global active session;
-//   the choice persists in localStorage. Non-admins are always pinned to
-//   activeSession.
+//   the choice persists in localStorage and survives a page refresh. Non-admins
+//   are always pinned to activeSession.
 //
 // Pages read `viewSession` and pass it as the `academic_year` param so data is
 // scoped to the session being viewed.
@@ -24,7 +24,7 @@ export const useSession = () => {
 const VIEW_KEY = 'view_session';
 
 export const SessionProvider = ({ children }) => {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const [activeSession, setActiveSession] = useState('');
   const [available, setAvailable] = useState([]);
   const [sessions, setSessions] = useState([]); // full session objects (status, dates)
@@ -39,19 +39,23 @@ export const SessionProvider = ({ children }) => {
       setActiveSession(active);
       setAvailable(avail);
       setSessions(Array.isArray(res.data?.sessions) ? res.data.sessions : []);
-      // Always open into the CURRENT (active) session — the live operational
-      // workspace. Reviewing a previous year is an explicit switch each session,
-      // not a sticky default, so the admin never lands in a stale past year.
+      // An admin who switched to a past year stays there across refreshes —
+      // otherwise every reload would yank them back mid-review. Non-admins are
+      // always pinned to the active session, and a stored session that no
+      // longer exists falls back to active so nobody is stranded in a year that
+      // was deleted or archived.
       if (active) {
-        setViewSessionState(active);
-        localStorage.setItem(VIEW_KEY, active);
+        const stored = localStorage.getItem(VIEW_KEY);
+        const next = isAdmin && stored && avail.includes(stored) ? stored : active;
+        setViewSessionState(next);
+        localStorage.setItem(VIEW_KEY, next);
       }
     } catch {
       /* not logged in yet / endpoint unavailable — stay empty */
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isAdmin]);
 
   // (Re)load the session whenever auth state changes. On the login page there is
   // no user yet and /settings/session 401s, leaving the session empty. The moment

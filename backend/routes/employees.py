@@ -181,6 +181,10 @@ async def reset_employee_password(employee_id: str, request: Request):
 
     new_password = body.get("password")
     if not new_password:
+        # Admin-generated passwords are the employee's ID, matching the
+        # student reset which uses the admission number.
+        new_password = str(employee.get("employee_id") or employee_id or "").strip()
+    if not new_password:
         alphabet = string.ascii_letters + string.digits
         new_password = "".join(secrets.choice(alphabet) for _ in range(10))
 
