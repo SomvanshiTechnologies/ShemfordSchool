@@ -18,6 +18,20 @@ const dmy = (iso) => {
 
 const money = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+// Mirrors frontend/src/lib/download.js — the server names the file via
+// Content-Disposition (FeesReceipt_<StudentName>.pdf); construct our own only
+// as a last resort so the shared file matches what the dashboard produces.
+const filenameFromHeaders = (headers, fallback) => {
+  const cd = headers?.['Content-Disposition'] || headers?.['content-disposition'] || '';
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+  if (!match?.[1]) return fallback;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1] || fallback;
+  }
+};
+
 const Row = ({ label, value, style }) => (
   <View style={[styles.infoRow, style]}>
     <Text style={styles.infoLabel}>{label}</Text>
@@ -46,13 +60,27 @@ const ReceiptScreen = ({ route }) => {
     try {
       const token = await SecureStore.getItemAsync('auth_token');
       const url = `${API_URL}/fees/receipt/${paymentId}/pdf`;
-      const target = `${FileSystem.cacheDirectory}receipt_${paymentId}.pdf`;
-      const res = await FileSystem.downloadAsync(url, target, { headers: { Authorization: `Bearer ${token}` } });
+      const tempTarget = `${FileSystem.cacheDirectory}_receipt_${paymentId}.pdf`;
+      const res = await FileSystem.downloadAsync(url, tempTarget, { headers: { Authorization: `Bearer ${token}` } });
       if (res.status !== 200) throw new Error(`Server returned ${res.status}`);
+
+      // Rename to the server's real filename (FeesReceipt_<StudentName>.pdf) so
+      // the share sheet / saved file matches the dashboard's download exactly.
+      const filename = filenameFromHeaders(res.headers, `FeesReceipt_${paymentId}.pdf`);
+      const finalUri = `${FileSystem.cacheDirectory}${filename}`;
+      let shareUri = res.uri;
+      try {
+        await FileSystem.deleteAsync(finalUri, { idempotent: true });
+        await FileSystem.moveAsync({ from: res.uri, to: finalUri });
+        shareUri = finalUri;
+      } catch (_) {
+        // Renaming is a nicety — sharing the temp file is still correct.
+      }
+
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(res.uri, { mimeType: 'application/pdf', dialogTitle: 'Fee Receipt', UTI: 'com.adobe.pdf' });
+        await Sharing.shareAsync(shareUri, { mimeType: 'application/pdf', dialogTitle: 'Fee Receipt', UTI: 'com.adobe.pdf' });
       } else {
-        Alert.alert('Downloaded', `Saved to ${res.uri}`);
+        Alert.alert('Downloaded', `Saved to ${shareUri}`);
       }
     } catch (e) {
       Alert.alert('Download failed', e?.message || 'Could not download receipt.');
