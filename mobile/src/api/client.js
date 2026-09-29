@@ -13,6 +13,12 @@ client.interceptors.request.use(async (config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  // Mirrors frontend/src/lib/api.js — an admin viewing a past academic year
+  // (SessionContext) drives every request via this header.
+  const viewSession = await SecureStore.getItemAsync('view_session');
+  if (viewSession) {
+    config.headers['X-Academic-Year'] = viewSession;
+  }
   return config;
 });
 

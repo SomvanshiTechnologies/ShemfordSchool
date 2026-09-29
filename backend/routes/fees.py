@@ -2299,9 +2299,9 @@ async def download_receipt_pdf(payment_id: str, request: Request, ledger_id: Opt
 # the in-app details endpoint and the PDF must read the same wording, and
 # that implementation also spells out paise.
 
-def _month_code(month_str: Optional[str], fee_component: str) -> str:
+def _month_code(month_str, fee_component: str) -> str:
     """'2025-09' -> 'Sep'; falls back to the fee component name."""
-    if month_str and re.match(r"^\d{4}-\d{2}$", month_str):
+    if month_str and isinstance(month_str, str) and re.match(r"^\d{4}-\d{2}$", month_str):
         try:
             return datetime.strptime(month_str, "%Y-%m").strftime("%b")
         except Exception:
@@ -2333,16 +2333,30 @@ async def get_receipt_details(payment_id: str, request: Request):
     school_name = school.get("school_name") or "Shemford Futuristic School"
     address_line = ", ".join(
         b for b in [school.get("address"), school.get("city"), school.get("state"), school.get("pincode")] if b
-    )
+    ) or "Tikarkhanji, Sudpur, Katwa, Purba Bardhaman, West Bengal, India, 713150"
+    school_phone = school.get("phone") or "+91 8649844075 / +91 8649818465"
 
+    # Same resolution as the PDF receipt: `collected_by` is not one kind of id —
+    # staff-collected payments store an employee_id, some admin-collected ones
+    # store a user_id, and old seed rows store free text. Try employee first
+    # (it carries the printable code), then the user record, then legacy text.
     collected_by_name = ""
     collected_by_code = ""
-    cb_id = payment.get("collected_by")
+    cb_id = payment.get("collected_by") or ""
     if cb_id:
-        cb_user = await db.users.find_one({"user_id": cb_id}, {"_id": 0, "name": 1})
-        collected_by_name = (cb_user or {}).get("name", "")
-        cb_employee = await db.employees.find_one({"user_id": cb_id}, {"_id": 0, "employee_id": 1})
-        collected_by_code = (cb_employee or {}).get("employee_id", "")
+        cb_employee = await db.employees.find_one(
+            {"$or": [{"employee_id": cb_id}, {"user_id": cb_id}]},
+            {"_id": 0, "employee_id": 1, "first_name": 1, "last_name": 1},
+        )
+        if cb_employee:
+            collected_by_name = f"{cb_employee.get('first_name','')} {cb_employee.get('last_name','')}".strip()
+            collected_by_code = cb_employee.get("employee_id", "")
+        else:
+            cb_user = await db.users.find_one({"user_id": cb_id}, {"_id": 0, "name": 1})
+            if cb_user and cb_user.get("name"):
+                collected_by_name = cb_user["name"]
+            elif not cb_id.startswith("user_"):
+                collected_by_name = cb_id  # legacy free text, e.g. "seed_script"
 
     total_paid = round(float(payment.get("amount", 0)), 2)
     n_entries = len(entries)
@@ -2371,7 +2385,7 @@ async def get_receipt_details(payment_id: str, request: Request):
         "generated_date": date.today().isoformat(),
         "school_name": school_name,
         "school_address": address_line,
-        "school_phone": school.get("phone") or "",
+        "school_phone": school_phone,
         "student_name": f"{student.get('first_name','')} {student.get('last_name','')}".strip(),
         "father_name": student.get("parent_name") or "",
         "class_name": student.get("class_name", ""),

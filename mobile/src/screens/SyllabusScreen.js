@@ -44,13 +44,30 @@ const SyllabusScreen = () => {
   const role = user?.role;
   const canUpload = role === 'admin' || role === 'teacher';
   const isParent = role === 'parent';
+  const isStudent = role === 'student';
 
   const [items, setItems] = useState([]);
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filterClass, setFilterClass] = useState('');
+  const [filterSubject, setFilterSubject] = useState('');
+  const [pickerOpen, setPickerOpen] = useState(null); // 'class' | 'subject' | null
   const [expanded, setExpanded] = useState({});
+  // Students are pinned to their own class (resolved from their student record).
+  const [myClass, setMyClass] = useState(isStudent ? undefined : null);
+
+  useEffect(() => {
+    if (!isStudent) return;
+    client.get('/students', { params: { app_visible: true } })
+      .then(r => {
+        const list = Array.isArray(r.data) ? r.data : (r.data?.students || []);
+        const cls = list[0]?.class_name || null;
+        setMyClass(cls);
+        if (cls) setFilterClass(cls);
+      })
+      .catch(() => setMyClass(null));
+  }, [isStudent]);
 
   const [uploadVisible, setUploadVisible] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -62,6 +79,8 @@ const SyllabusScreen = () => {
   const [viewing, setViewing] = useState(null);
 
   const load = useCallback(() => {
+    // Wait until the student's class is known so we never flash every class's syllabus.
+    if (isStudent && myClass === undefined) return;
     setLoading(true);
     const params = filterClass ? `?class_name=${encodeURIComponent(filterClass)}` : '';
     Promise.all([
@@ -71,9 +90,11 @@ const SyllabusScreen = () => {
       setItems(syl);
       setClasses(cls);
     }).finally(() => setLoading(false));
-  }, [filterClass]);
+  }, [filterClass, isStudent, myClass]);
 
   useEffect(() => { load(); }, [load]);
+
+  const subjectOptions = [...new Set(items.map(i => i.subject || 'General'))].sort();
 
   const openUpload = () => {
     setForm({
@@ -112,6 +133,7 @@ const SyllabusScreen = () => {
   };
 
   const filtered = items.filter(item => {
+    if (filterSubject && (item.subject || 'General') !== filterSubject) return false;
     const t = search.toLowerCase();
     if (!t) return true;
     return (item.title || '').toLowerCase().includes(t)
@@ -157,6 +179,14 @@ const SyllabusScreen = () => {
           <Text style={s.parentNoticeText}>Showing syllabus for your children's classes only.</Text>
         </View>
       )}
+      {isStudent && myClass && filterClass === myClass && (
+        <View style={s.parentNotice}>
+          <Ionicons name="book-outline" size={14} color="#1E40AF" />
+          <Text style={s.parentNoticeText}>
+            Showing your class ({displayClassName(myClass)}) — use the filters to browse other classes.
+          </Text>
+        </View>
+      )}
 
       <View style={s.searchWrap}>
         <Ionicons name="search" size={16} color={COLORS.muted} style={s.searchIcon} />
@@ -169,23 +199,50 @@ const SyllabusScreen = () => {
         />
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filterRow} contentContainerStyle={{ paddingHorizontal: 16 }}>
-        <TouchableOpacity
-          style={[s.chip, filterClass === '' && s.chipActive]}
-          onPress={() => setFilterClass('')}
-        >
-          <Text style={[s.chipText, filterClass === '' && s.chipTextActive]}>All</Text>
+      <View style={s.dropdownRow}>
+        <TouchableOpacity style={s.dropdownBtn} onPress={() => setPickerOpen('class')} activeOpacity={0.8}>
+          <Text style={s.dropdownBtnText} numberOfLines={1}>
+            {filterClass ? displayClassName(filterClass) : 'All Classes'}
+          </Text>
+          <Ionicons name="chevron-down" size={15} color={COLORS.muted} />
         </TouchableOpacity>
-        {[...classes].sort((a, b) => sortClasses(a.name, b.name)).map(c => (
-          <TouchableOpacity
-            key={c.name}
-            style={[s.chip, filterClass === c.name && s.chipActive]}
-            onPress={() => setFilterClass(c.name)}
-          >
-            <Text style={[s.chipText, filterClass === c.name && s.chipTextActive]}>{displayClassName(c.name)}</Text>
+        <TouchableOpacity style={s.dropdownBtn} onPress={() => setPickerOpen('subject')} activeOpacity={0.8}>
+          <Text style={s.dropdownBtnText} numberOfLines={1}>
+            {filterSubject || 'All Subjects'}
+          </Text>
+          <Ionicons name="chevron-down" size={15} color={COLORS.muted} />
+        </TouchableOpacity>
+      </View>
+
+      <Modal visible={!!pickerOpen} transparent animationType="fade" onRequestClose={() => setPickerOpen(null)}>
+        <TouchableOpacity style={s.pickerBackdrop} activeOpacity={1} onPress={() => setPickerOpen(null)}>
+          <TouchableOpacity activeOpacity={1} style={s.pickerCard} onPress={() => {}}>
+            <Text style={s.pickerTitle}>{pickerOpen === 'class' ? 'Class' : 'Subject'}</Text>
+            <ScrollView style={{ maxHeight: 420 }}>
+              {(pickerOpen === 'class'
+                ? [{ value: '', label: 'All Classes' }, ...[...classes].sort((a, b) => sortClasses(a.name, b.name)).map(c => ({ value: c.name, label: displayClassName(c.name) }))]
+                : [{ value: '', label: 'All Subjects' }, ...subjectOptions.map(sub => ({ value: sub, label: sub }))]
+              ).map(o => {
+                const selected = (pickerOpen === 'class' ? filterClass : filterSubject) === o.value;
+                return (
+                  <TouchableOpacity
+                    key={o.value || '__all__'}
+                    style={s.pickerRow}
+                    onPress={() => {
+                      if (pickerOpen === 'class') setFilterClass(o.value);
+                      else setFilterSubject(o.value);
+                      setPickerOpen(null);
+                    }}
+                  >
+                    <Text style={[s.pickerRowText, selected && { fontWeight: '800' }]}>{o.label}</Text>
+                    {selected && <Ionicons name="checkmark" size={17} color={COLORS.black} />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
           </TouchableOpacity>
-        ))}
-      </ScrollView>
+        </TouchableOpacity>
+      </Modal>
 
       <ScrollView style={s.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
         {classKeys.length === 0 ? (
@@ -438,6 +495,18 @@ const s = StyleSheet.create({
   },
 
   filterRow: { flexGrow: 0, marginBottom: 12 },
+  dropdownRow: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, marginBottom: 12 },
+  dropdownBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: COLORS.white, borderWidth: 1.5, borderColor: COLORS.border,
+    borderRadius: RADIUS.md, paddingHorizontal: 12, paddingVertical: 11, ...SHADOW.sm,
+  },
+  dropdownBtnText: { fontSize: 13, fontWeight: '600', color: COLORS.black, flex: 1, marginRight: 6 },
+  pickerBackdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.35)', justifyContent: 'center', padding: 28 },
+  pickerCard: { backgroundColor: COLORS.white, borderRadius: RADIUS.xl, padding: 12, ...SHADOW.md },
+  pickerTitle: { fontSize: 13, fontWeight: '700', color: COLORS.muted, textTransform: 'uppercase', letterSpacing: 0.6, paddingHorizontal: 8, paddingVertical: 8 },
+  pickerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 12, borderRadius: RADIUS.md },
+  pickerRowText: { fontSize: 14, fontWeight: '600', color: COLORS.black },
   chip: {
     paddingHorizontal: 14, paddingVertical: 7, borderRadius: 999,
     borderWidth: 1.5, borderColor: COLORS.border, backgroundColor: COLORS.white, marginRight: 8,

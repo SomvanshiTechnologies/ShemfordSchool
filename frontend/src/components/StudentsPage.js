@@ -450,7 +450,7 @@ const StudentsPage = () => {
     try {
       await api.patch(`/students/${studentId}/web-login`, { web_login_enabled: newVal });
       setStudents(prev => prev.map(s => s.student_id === studentId ? { ...s, web_login_enabled: newVal } : s));
-      toast.success(newVal ? 'Login enabled' : 'Login restricted to app only');
+      toast.success(newVal ? 'Student enabled — visible in app and can log in' : 'Student disabled — hidden from app and cannot log in');
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Failed to update');
     }
@@ -460,7 +460,7 @@ const StudentsPage = () => {
     try {
       await api.patch('/students/web-login/bulk', { web_login_enabled: enableAll });
       setStudents(prev => prev.map(s => ({ ...s, web_login_enabled: enableAll })));
-      toast.success(enableAll ? 'Login enabled for all students' : 'Login restricted to app for all students');
+      toast.success(enableAll ? 'All students enabled — visible in app and can log in' : 'All students disabled — hidden from app and cannot log in');
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Failed to update');
     }
@@ -1049,7 +1049,8 @@ const StudentsPage = () => {
                         <Checkbox
                           checked={allEnabled ? true : noneEnabled ? false : 'indeterminate'}
                           onCheckedChange={() => handleToggleAllWebLogin(!allEnabled)}
-                          aria-label="Enable or disable web portal login for all listed students"
+                          title={allEnabled ? 'Hide all from the mobile app' : 'Show all in the mobile app'}
+                          aria-label="Enable or disable app visibility and login for all listed students"
                           className="data-[state=checked]:bg-orange-500 data-[state=checked]:border-orange-500 data-[state=indeterminate]:bg-orange-300 data-[state=indeterminate]:border-orange-300"
                         />
                         <span className="text-[9px] font-medium leading-none text-muted-foreground">
@@ -1068,10 +1069,8 @@ const StudentsPage = () => {
                         <Checkbox
                           checked={student.web_login_enabled === true}
                           onCheckedChange={() => handleToggleWebLogin(student.student_id, student.web_login_enabled === true)}
-                          title={student.web_login_enabled === true
-                            ? 'Web login ON — this student can sign in to the web portal. Untick to restrict them to the mobile app.'
-                            : 'Web login OFF — this student can only sign in on the mobile app. Tick to allow the web portal.'}
-                          aria-label={`Web portal login for ${student.first_name} ${student.last_name}`}
+                          title={student.web_login_enabled === true ? 'Visible in the mobile app — uncheck to hide' : 'Hidden from the mobile app — check to show'}
+                          aria-label={`App visibility and login for ${student.first_name} ${student.last_name}`}
                           disabled={!student.is_active}
                           className="data-[state=checked]:bg-orange-500 data-[state=checked]:border-orange-500"
                         />

@@ -196,6 +196,7 @@ async def get_students(
     name_only: bool = False,  # search only student name/admission, not parent fields
     status: Optional[str] = "active",  # active | inactive | all
     sort_by: Optional[str] = None,      # "last_upgraded" → recently upgraded first
+    app_visible: bool = False,  # mobile app: only students ticked in the web students table
     page: int = 1,
     limit: int = 50,
 ):
@@ -206,6 +207,8 @@ async def get_students(
         query = {}
     else:
         query = {"is_active": True}
+    if app_visible:
+        query["web_login_enabled"] = True
 
     # Role-scoped filtering
     if user["role"] == UserRole.STUDENT:
@@ -470,7 +473,7 @@ async def update_student(student_id: str, request: Request):
 
 @router.patch("/students/{student_id}/web-login")
 async def toggle_web_login(student_id: str, request: Request):
-    """Enable or disable web (browser) login for a student. App login is unaffected."""
+    """Enable/disable a student: ticked = visible in the app and able to log in."""
     user = await require_roles(UserRole.ADMIN)(request)
     body = await request.json()
     enabled = body.get("web_login_enabled")
@@ -484,7 +487,7 @@ async def toggle_web_login(student_id: str, request: Request):
 
 @router.patch("/students/web-login/bulk")
 async def bulk_toggle_web_login(request: Request):
-    """Set web_login_enabled for all students or a specific list of student IDs."""
+    """Enable/disable all students (or a given list): app visibility + login."""
     user = await require_roles(UserRole.ADMIN)(request)
     body = await request.json()
     enabled = body.get("web_login_enabled")
