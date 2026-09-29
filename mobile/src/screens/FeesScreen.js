@@ -2,16 +2,19 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Modal, StyleSheet, ActivityIndicator, Alert, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import client from '../api/client';
 import { COLORS, RADIUS, SHADOW } from '../theme/colors';
 import { API_ORIGIN } from '../config';
 import { useAuth } from '../contexts/AuthContext';
 import { CardDark, CardOrange, SectionTitle, Badge, Card } from '../components/UI';
 import { ScreenLoader } from '../components/LoadingSkeleton';
+import POSCheckoutModal from '../components/POSCheckoutModal';
 
 const BACKEND_URL = API_ORIGIN; // same host as API but without /api
 
 const FeesScreen = () => {
+  const navigation = useNavigation();
   const { user } = useAuth();
   const isParent = user?.role === 'parent';
   const isStudent = user?.role === 'student';
@@ -25,12 +28,13 @@ const FeesScreen = () => {
   const [paying, setPaying] = useState(false);
   const [payMonths, setPayMonths] = useState(1);
   const [showPay, setShowPay] = useState(false);
+  const [showPos, setShowPos] = useState(false);
   const [selectedLedgerIds, setSelectedLedgerIds] = useState([]);
   const pollRef = useRef(null);
 
   useEffect(() => {
     if (isParent || isStudent) {
-      client.get('/students').then(r => {
+      client.get('/students', { params: { app_visible: true } }).then(r => {
         const list = Array.isArray(r.data) ? r.data : [];
         setChildren(list);
         if (list.length > 0) {
@@ -253,6 +257,12 @@ const FeesScreen = () => {
                     <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.white }}>Pay Online</Text>
                   </TouchableOpacity>
                 )}
+                {isAdminAcc && (
+                  <TouchableOpacity style={styles.payBtn} onPress={() => setShowPos(true)}>
+                    <Ionicons name="card" size={14} color={COLORS.white} />
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.white }}>Collect via POS</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             </CardOrange>
           ) : (
@@ -313,13 +323,20 @@ const FeesScreen = () => {
             <SectionTitle>Payment History</SectionTitle>
             <View style={styles.list}>
               {feeData.payments.map(p => (
-                <View key={p.payment_id} style={styles.listItem}>
+                <TouchableOpacity
+                  key={p.payment_id}
+                  style={styles.listItem}
+                  onPress={() => navigation.navigate('Receipt', { paymentId: p.payment_id })}
+                >
                   <View>
                     <Text style={{ fontWeight: '600', fontSize: 13, color: COLORS.black }}>{p.receipt_number}</Text>
                     <Text style={{ fontSize: 11, color: COLORS.muted }}>{p.payment_date} | {p.payment_method}</Text>
                   </View>
-                  <Text style={{ fontWeight: '700', fontSize: 14, color: COLORS.black }}>₹{p.amount.toLocaleString()}</Text>
-                </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={{ fontWeight: '700', fontSize: 14, color: COLORS.black }}>₹{p.amount.toLocaleString()}</Text>
+                    <Ionicons name="chevron-forward" size={16} color={COLORS.lightMuted} />
+                  </View>
+                </TouchableOpacity>
               ))}
             </View>
           </>
@@ -355,6 +372,14 @@ const FeesScreen = () => {
           </View>
         </View>
       </Modal>
+
+      <POSCheckoutModal
+        visible={showPos}
+        onClose={() => setShowPos(false)}
+        studentId={selectedChild?.student_id}
+        pendingEntries={pending}
+        onSuccess={() => { setShowPos(false); if (selectedChild) loadFees(selectedChild.student_id); }}
+      />
     </SafeAreaView>
   );
 };

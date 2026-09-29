@@ -30,7 +30,9 @@ export const AuthProvider = ({ children }) => {
   };
 
   const login = async (email, password) => {
-    const res = await client.post('/auth/login', { email, password });
+    // Explicit platform so a student's web-only login restriction can never
+    // apply here — the backend only gates platform === "web".
+    const res = await client.post('/auth/login', { email, password, platform: 'app' });
     const { token, user: userData } = res.data;
     await SecureStore.setItemAsync('auth_token', token);
     setUser(userData);
