@@ -18,18 +18,27 @@ const MoreScreen = ({ navigation }) => {
   // Items that can actually be navigated to. Items without a screen fall back to
   // a "Coming Soon" alert. Keys in `screen` are resolved either to a tab in the
   // current role's tabs OR a root-stack screen (see AppNavigator).
+  // Notices/Messages are tabs for some roles; only list them here when they aren't.
   const items = [
     ...(isAdmin ? [
+      { icon: 'school-outline',       tint: 'violet',  title: 'Marks',    desc: 'Exams, entry & marksheets', screen: 'Marks' },
+      { icon: 'grid-outline',         tint: 'emerald', title: 'Classes',  desc: 'Sections & teachers',   screen: 'Classes' },
+      { icon: 'people-outline',       tint: 'blue',    title: 'Employees', desc: 'Staff records & accounts', screen: 'Employees' },
+      { icon: 'person-circle-outline', tint: 'amber',  title: 'Users',    desc: 'Accounts & roles',      screen: 'Users' },
+      { icon: 'arrow-up-circle-outline', tint: 'orange', title: 'Upgradation', desc: 'Promote students',  screen: 'Upgradation' },
+      { icon: 'time-outline',         tint: 'slate',   title: 'Audit Trails', desc: 'Deletion log & restore', screen: 'AuditTrail' },
+      { icon: 'trash-outline',        tint: 'red',     title: 'Deletions', desc: 'Account deletion requests', screen: 'DeletionRequests' },
       { icon: 'bar-chart-outline',    tint: 'purple',  title: 'Reports',  desc: 'Analytics & exports',   screen: 'Reports' },
     ] : []),
-    ...((isParent || isStudent) ? [] : [
+    ...(isParent ? [] : [
       { icon: 'notifications-outline', tint: 'amber',  title: 'Notices',  desc: 'School announcements',  screen: 'Notices' },
     ]),
-    ...((isStudent) ? [] : [
-      { icon: 'chatbubble-outline',   tint: 'blue',    title: 'Messages', desc: 'Parent communication',  screen: 'Messages' },
+    ...((isTeacher || isParent) ? [] : [
+      { icon: 'chatbubble-outline',   tint: 'blue',    title: 'Messages', desc: isStudent ? 'Contact your teachers' : 'Parent communication', screen: 'Messages' },
     ]),
     { icon: 'book-outline',           tint: 'cyan',    title: 'Syllabus', desc: 'Study materials',       screen: 'Syllabus' },
     { icon: 'alert-circle-outline',   tint: 'red',     title: 'Issues',   desc: 'Report a concern',      screen: 'Issues' },
+    { icon: 'settings-outline',       tint: 'slate',   title: 'Settings', desc: 'Profile & password',    screen: 'Settings' },
   ];
 
   const handleLogout = () => {

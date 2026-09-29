@@ -9,6 +9,7 @@ import { API_ORIGIN } from '../config';
 import { useAuth } from '../contexts/AuthContext';
 import { CardDark, CardOrange, SectionTitle, Badge, Card } from '../components/UI';
 import { ScreenLoader } from '../components/LoadingSkeleton';
+import POSCheckoutModal from '../components/POSCheckoutModal';
 
 const BACKEND_URL = API_ORIGIN; // same host as API but without /api
 
@@ -27,6 +28,7 @@ const FeesScreen = () => {
   const [paying, setPaying] = useState(false);
   const [payMonths, setPayMonths] = useState(1);
   const [showPay, setShowPay] = useState(false);
+  const [showPos, setShowPos] = useState(false);
   const [selectedLedgerIds, setSelectedLedgerIds] = useState([]);
   const pollRef = useRef(null);
 
@@ -255,6 +257,12 @@ const FeesScreen = () => {
                     <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.white }}>Pay Online</Text>
                   </TouchableOpacity>
                 )}
+                {isAdminAcc && (
+                  <TouchableOpacity style={styles.payBtn} onPress={() => setShowPos(true)}>
+                    <Ionicons name="card" size={14} color={COLORS.white} />
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.white }}>Collect via POS</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             </CardOrange>
           ) : (
@@ -364,6 +372,14 @@ const FeesScreen = () => {
           </View>
         </View>
       </Modal>
+
+      <POSCheckoutModal
+        visible={showPos}
+        onClose={() => setShowPos(false)}
+        studentId={selectedChild?.student_id}
+        pendingEntries={pending}
+        onSuccess={() => { setShowPos(false); if (selectedChild) loadFees(selectedChild.student_id); }}
+      />
     </SafeAreaView>
   );
 };

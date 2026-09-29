@@ -12,6 +12,14 @@ import SyllabusScreen from '../screens/SyllabusScreen';
 import StudentDetailScreen from '../screens/StudentDetailScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import ReceiptScreen from '../screens/ReceiptScreen';
+import NewAdmissionScreen from '../screens/NewAdmissionScreen';
+import MarksScreen from '../screens/MarksScreen';
+import ClassesScreen from '../screens/ClassesScreen';
+import EmployeesScreen from '../screens/EmployeesScreen';
+import UsersScreen from '../screens/UsersScreen';
+import UpgradationScreen from '../screens/UpgradationScreen';
+import AuditTrailScreen from '../screens/AuditTrailScreen';
+import DeletionRequestsScreen from '../screens/DeletionRequestsScreen';
 import { ScreenLoader } from '../components/LoadingSkeleton';
 import { View } from 'react-native';
 import { COLORS } from '../theme/colors';
@@ -55,6 +63,16 @@ const AppNavigator = () => {
             <Stack.Screen name="StudentDetail" component={StudentDetailScreen} options={detailHeader('Student Details')} />
             <Stack.Screen name="Settings" component={SettingsScreen} options={detailHeader('Settings')} />
             <Stack.Screen name="Receipt" component={ReceiptScreen} options={detailHeader('Fee Receipt')} />
+            <Stack.Screen name="NewAdmission" component={NewAdmissionScreen} options={detailHeader('New Admission')} />
+            {/* Marks is a bottom tab for teacher/student; admin reaches it from More
+                via this stack screen (nearest navigator wins, so tabs are unaffected). */}
+            <Stack.Screen name="Marks" component={MarksScreen} options={detailHeader('Marks & Grades')} />
+            <Stack.Screen name="Classes" component={ClassesScreen} options={detailHeader('Class Structure')} />
+            <Stack.Screen name="Employees" component={EmployeesScreen} options={detailHeader('Employees')} />
+            <Stack.Screen name="Users" component={UsersScreen} options={detailHeader('User Management')} />
+            <Stack.Screen name="Upgradation" component={UpgradationScreen} options={detailHeader('Class Upgradation')} />
+            <Stack.Screen name="AuditTrail" component={AuditTrailScreen} options={detailHeader('Audit Trails')} />
+            <Stack.Screen name="DeletionRequests" component={DeletionRequestsScreen} options={detailHeader('Deletion Requests')} />
           </>
         ) : (
           <Stack.Screen name="Login" component={LoginScreen} />
