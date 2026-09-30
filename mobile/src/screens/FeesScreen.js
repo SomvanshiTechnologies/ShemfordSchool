@@ -10,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { CardDark, CardOrange, SectionTitle, Badge, Card } from '../components/UI';
 import { ScreenLoader } from '../components/LoadingSkeleton';
 import POSCheckoutModal from '../components/POSCheckoutModal';
+import CollectPaymentModal from '../components/CollectPaymentModal';
 
 const BACKEND_URL = API_ORIGIN; // same host as API but without /api
 
@@ -29,6 +30,8 @@ const FeesScreen = () => {
   const [payMonths, setPayMonths] = useState(1);
   const [showPay, setShowPay] = useState(false);
   const [showPos, setShowPos] = useState(false);
+  const [posEntries, setPosEntries] = useState([]);
+  const [collectEntry, setCollectEntry] = useState(null);
   const [selectedLedgerIds, setSelectedLedgerIds] = useState([]);
   const pollRef = useRef(null);
 
@@ -258,7 +261,7 @@ const FeesScreen = () => {
                   </TouchableOpacity>
                 )}
                 {isAdminAcc && (
-                  <TouchableOpacity style={styles.payBtn} onPress={() => setShowPos(true)}>
+                  <TouchableOpacity style={styles.payBtn} onPress={() => { setPosEntries(pending); setShowPos(true); }}>
                     <Ionicons name="card" size={14} color={COLORS.white} />
                     <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.white }}>Collect via POS</Text>
                   </TouchableOpacity>
@@ -307,6 +310,12 @@ const FeesScreen = () => {
                     text={inst.status}
                     variant={inst.status === 'paid' ? 'success' : inst.status === 'overdue' ? 'danger' : 'muted'}
                   />
+                  {isAdminAcc && inst.status !== 'paid' && (
+                    <TouchableOpacity style={styles.collectBtn} onPress={() => setCollectEntry(inst)}>
+                      <Ionicons name="card-outline" size={12} color={COLORS.white} />
+                      <Text style={styles.collectBtnText}>Collect</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               </View>
             );
@@ -377,8 +386,17 @@ const FeesScreen = () => {
         visible={showPos}
         onClose={() => setShowPos(false)}
         studentId={selectedChild?.student_id}
-        pendingEntries={pending}
+        pendingEntries={posEntries}
         onSuccess={() => { setShowPos(false); if (selectedChild) loadFees(selectedChild.student_id); }}
+      />
+
+      <CollectPaymentModal
+        visible={!!collectEntry}
+        onClose={() => setCollectEntry(null)}
+        studentId={selectedChild?.student_id}
+        entry={collectEntry}
+        onSuccess={() => { if (selectedChild) loadFees(selectedChild.student_id); }}
+        onOpenPos={(entry) => { setPosEntries([entry]); setShowPos(true); }}
       />
     </SafeAreaView>
   );
@@ -396,6 +414,8 @@ const styles = StyleSheet.create({
   whiteValue: { fontSize: 28, fontWeight: '800', color: COLORS.white, marginTop: 4 },
   whiteSub: { fontSize: 12, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
   payBtn: { backgroundColor: COLORS.black, borderRadius: RADIUS.md, paddingVertical: 11, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  collectBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: COLORS.primary, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, marginTop: 6 },
+  collectBtnText: { fontSize: 10, fontWeight: '700', color: COLORS.white },
   list: { backgroundColor: COLORS.white, borderRadius: RADIUS.xl, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border, marginBottom: 16, ...SHADOW.sm },
   listItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: COLORS.lightBg },
   empty: { alignItems: 'center', paddingVertical: 40 },
