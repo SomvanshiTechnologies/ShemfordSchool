@@ -5,7 +5,7 @@ import api from '../../lib/api';
 import { downloadBlobResponse } from '../../lib/download';
 import { getCached, setCached, invalidatePrefix } from '../../lib/pageCache';
 import { previewReportInTab } from '../../lib/preview';
-import { fetchPaymentMethods, PAYMENT_METHODS, fmtPaymentMethod } from '../../lib/paymentMethods';
+import { fetchPaymentMethods, PAYMENT_METHODS, PAYMENT_METHODS_WITH_POS, fmtPaymentMethod } from '../../lib/paymentMethods';
 import { toast } from 'sonner';
 import {
   CreditCard, Search, X, Loader2, AlertTriangle, CheckCircle2, Clock,
@@ -671,15 +671,43 @@ const LedgerRow = ({ entry, checked, onToggle, disabled }) => {
 const PaymentSheet = ({ studentId, ledger, payIds, onClose, onSuccess }) => {
   const [method, setMethod] = useState('cash');
   // Payment methods are admin-configurable in the DB (same source desktop uses).
-  // POS terminal is excluded here as the mobile collect flow has no Ezetap step.
-  const [payMethods, setPayMethods] = useState(PAYMENT_METHODS);
-  useEffect(() => { fetchPaymentMethods({ withPos: false }).then(setPayMethods).catch(() => {}); }, []);
+  const [payMethods, setPayMethods] = useState(PAYMENT_METHODS_WITH_POS);
+  useEffect(() => { fetchPaymentMethods({ withPos: true }).then(setPayMethods).catch(() => {}); }, []);
   const [transactionId, setTransactionId] = useState('');
   const [remarks, setRemarks] = useState('');
   const [paymentDate, setPaymentDate] = useState(todayDDMMYYYY());
   const [splitCash, setSplitCash] = useState('');
   const [splitOnline, setSplitOnline] = useState('');
   const [processing, setProcessing] = useState(false);
+
+  // POS terminal (Ezetap) — same flow as the desktop Fees page.
+  const [posDevice, setPosDevice] = useState(() => {
+    // Default to the Axis-mapped production DSN; migrate the retired one.
+    const PROD_DSN = '1494931339';
+    let saved = (localStorage.getItem('pos_device_id') || PROD_DSN).split('|')[0];
+    if (saved === '1494493509') saved = PROD_DSN;
+    return saved;
+  });
+  const [posMode, setPosMode] = useState('ALL');
+  const [posStatus, setPosStatus] = useState('idle'); // idle|polling|success|failed|cancelled
+  const [posMessage, setPosMessage] = useState('');
+  const [posReceipt, setPosReceipt] = useState(null);
+  const posOrderRef = useRef(null);
+  const posPollingRef = useRef(null);
+  const isPos = method === 'pos_terminal';
+
+  const stopPosPolling = () => {
+    if (posPollingRef.current) { clearInterval(posPollingRef.current); posPollingRef.current = null; }
+  };
+
+  // Cancel an in-flight POS order if the sheet closes mid-payment.
+  useEffect(() => () => {
+    stopPosPolling();
+    if (posOrderRef.current) {
+      api.post('/payments/pos/cancel', { pos_order_id: posOrderRef.current, reason: 'Cancelled by operator' }).catch(() => {});
+      posOrderRef.current = null;
+    }
+  }, []);
 
   const allEntries = [
     ...(ledger?.ledger?.one_time || []),
@@ -690,13 +718,88 @@ const PaymentSheet = ({ studentId, ledger, payIds, onClose, onSuccess }) => {
     .filter(e => payIds.includes(e.ledger_id))
     .reduce((s, e) => s + (e.remaining_balance > 0 ? e.remaining_balance : e.net_amount), 0);
 
+  // After a successful POS payment, closing the sheet must still refresh the ledger.
+  const close = posStatus === 'success' ? onSuccess : onClose;
+
   useEffect(() => {
-    const h = (e) => { if (e.key === 'Escape') onClose(); };
+    const h = (e) => { if (e.key === 'Escape') close(); };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
-  }, [onClose]);
+  }, [close]);
+
+  const initiatePos = async () => {
+    const dsn = posDevice.trim();
+    if (!dsn) { toast.error('Enter POS device ID'); return; }
+    const totalPaise = Math.round(total * 100);
+    if (totalPaise < 100) { toast.error('Amount must be at least Rs.1.'); return; }
+    // Ezetap's P2P adapter expects "<DSN>|ezetap_android"; the operator types just the DSN.
+    const deviceId = dsn.includes('|') ? dsn : `${dsn}|ezetap_android`;
+    localStorage.setItem('pos_device_id', dsn.split('|')[0]);
+
+    setPosStatus('polling');
+    setPosMessage('Sending payment request to POS terminal...');
+    setPosReceipt(null);
+    try {
+      const res = await api.post('/payments/pos/initiate', {
+        student_id: studentId,
+        ledger_ids: payIds,
+        amount_paise: totalPaise,
+        device_id: deviceId,
+        mode: posMode,
+      });
+      const orderId = res.data.pos_order_id;
+      posOrderRef.current = orderId;
+      setPosMessage('Waiting for payment on POS terminal...');
+
+      // Poll every 3 seconds, timeout after 90 seconds
+      let elapsed = 0;
+      posPollingRef.current = setInterval(async () => {
+        elapsed += 3;
+        if (elapsed >= 90) {
+          stopPosPolling();
+          setPosStatus('failed');
+          setPosMessage('Payment timed out. Please retry or cancel.');
+          return;
+        }
+        try {
+          const st = await api.post('/payments/pos/status', { pos_order_id: orderId });
+          const s = st.data.status;
+          if (s === 'SUCCESS') {
+            stopPosPolling();
+            posOrderRef.current = null;
+            setPosStatus('success');
+            setPosReceipt(st.data.receipt_number);
+            setPosMessage('Payment successful!');
+            toast.success(`POS payment successful — ${st.data.receipt_number}`);
+            invalidatePrefix('m-fees:');
+          } else if (s === 'FAILED' || s === 'CANCELLED') {
+            stopPosPolling();
+            posOrderRef.current = null;
+            setPosStatus('failed');
+            setPosMessage(st.data.message || 'Payment failed on POS device.');
+          }
+        } catch { /* ignore transient network errors during polling */ }
+      }, 3000);
+    } catch (e) {
+      stopPosPolling();
+      setPosStatus('failed');
+      setPosMessage(e.response?.data?.detail || 'Failed to send payment to POS device.');
+    }
+  };
+
+  const cancelPos = async () => {
+    stopPosPolling();
+    const orderId = posOrderRef.current;
+    posOrderRef.current = null;
+    if (orderId) {
+      try { await api.post('/payments/pos/cancel', { pos_order_id: orderId, reason: 'Cancelled by operator' }); } catch { /* best-effort */ }
+    }
+    setPosStatus('cancelled');
+    setPosMessage('POS payment cancelled.');
+  };
 
   const submit = async () => {
+    if (isPos) { initiatePos(); return; }
     const iso = paymentDate ? ddmmyyyyToIso(paymentDate) : '';
     if (paymentDate && !iso) { toast.error('Payment date must be DD/MM/YYYY'); return; }
     if (iso && iso > new Date().toISOString().slice(0, 10)) { toast.error('Payment date cannot be in the future'); return; }
@@ -729,16 +832,36 @@ const PaymentSheet = ({ studentId, ledger, payIds, onClose, onSuccess }) => {
   };
 
   return (
-    <div onClick={onClose} style={overlay} data-testid="m-pay-sheet">
+    <div onClick={close} style={overlay} data-testid="m-pay-sheet">
       <div onClick={(e) => e.stopPropagation()} style={panel}>
         <Handle />
-        <Header title={`Collect ${fmt(total)}`} onClose={onClose} sub={`${payIds.length} ${payIds.length === 1 ? 'entry' : 'entries'} selected`} />
+        <Header title={`Collect ${fmt(total)}`} onClose={close} sub={`${payIds.length} ${payIds.length === 1 ? 'entry' : 'entries'} selected`} />
 
         <div style={body}>
+          {isPos && posStatus !== 'idle' ? (
+            <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:10,padding:'24px 8px',textAlign:'center'}} data-testid="m-pos-status">
+              {posStatus === 'polling' && <Loader2 size={36} className="animate-spin" style={{color:'#4f46e5'}} />}
+              {posStatus === 'success' && <CheckCircle2 size={40} style={{color:'#15803d'}} />}
+              {(posStatus === 'failed' || posStatus === 'cancelled') && <AlertTriangle size={36} style={{color:'#dc2626'}} />}
+              <p style={{fontSize:14,fontWeight:700,color: posStatus === 'success' ? '#15803d' : posStatus === 'polling' ? '#1A1A1A' : '#dc2626'}}>{posMessage}</p>
+              {posStatus === 'polling' && <p style={{fontSize:11,color:'#888'}}>Complete the payment of {fmt(total)} on the terminal.</p>}
+              {posReceipt && <p style={{fontSize:12,color:'#666'}}>Receipt: <strong>{posReceipt}</strong></p>}
+            </div>
+          ) : (
+          <>
           <FormSelect label="Payment Method" value={method} onChange={setMethod}
             options={payMethods.map(m => [m.value, m.label])}
           />
-          {method !== 'cash' && method !== 'split' && (
+          {isPos && (
+            <>
+              <FormInput label="POS Device ID (DSN)" value={posDevice} onChange={setPosDevice} placeholder="e.g. 1494931339" />
+              <p style={{fontSize:10,color:'#888',marginTop:-6,marginBottom:10}}>The S/N printed on the back of the Ezetap terminal — just the number.</p>
+              <FormSelect label="POS Payment Mode" value={posMode} onChange={setPosMode}
+                options={[['ALL','All modes'],['CARD','Card only'],['UPI','UPI only'],['BHARATQR','BharatQR'],['CASH','Cash (via POS)'],['CHEQUE','Cheque (via POS)']]}
+              />
+            </>
+          )}
+          {method !== 'cash' && method !== 'split' && !isPos && (
             <FormInput label={method === 'cheque' ? 'Cheque Number' : 'Transaction / UTR'} value={transactionId} onChange={setTransactionId} placeholder={method === 'cheque' ? 'e.g. 123456' : 'UTR / Ref'} />
           )}
           {method === 'split' && (
@@ -754,20 +877,45 @@ const PaymentSheet = ({ studentId, ledger, payIds, onClose, onSuccess }) => {
               </div>
             </>
           )}
-          <FormInput label="Payment Date (DD/MM/YYYY)" value={paymentDate} onChange={setPaymentDate} placeholder="DD/MM/YYYY" />
-          <FormInput label="Remarks (optional)" value={remarks} onChange={setRemarks} placeholder="e.g. Cash receipt #..." />
+          {!isPos && (
+            <>
+              <FormInput label="Payment Date (DD/MM/YYYY)" value={paymentDate} onChange={setPaymentDate} placeholder="DD/MM/YYYY" />
+              <FormInput label="Remarks (optional)" value={remarks} onChange={setRemarks} placeholder="e.g. Cash receipt #..." />
+            </>
+          )}
 
           <div style={{padding:10,background:'#F8F8F8',borderRadius:10,fontSize:11,color:'#666'}}>
-            A receipt will be generated and emailed/SMS'd to the parent on success.
+            {isPos
+              ? 'Sends a payment request to the Ezetap card/UPI terminal. The receipt is generated once the terminal confirms.'
+              : "A receipt will be generated and emailed/SMS'd to the parent on success."}
           </div>
+          </>
+          )}
         </div>
 
         <Footer>
-          <button onClick={onClose} style={{...actionBtn('outline'), flex:1}}>Cancel</button>
-          <button onClick={submit} disabled={processing} style={{...actionBtn('dark'), flex:1}} data-testid="m-pay-submit">
-            {processing ? <Loader2 size={14} className="animate-spin" /> : <CreditCard size={14} />}
-            Collect {fmt(method === 'split' ? ((parseFloat(splitCash) || 0) + (parseFloat(splitOnline) || 0)) : total)}
-          </button>
+          {isPos && posStatus === 'polling' ? (
+            <button onClick={cancelPos} style={{...actionBtn('outline'), flex:1, color:'#dc2626', borderColor:'#fecaca'}} data-testid="m-pos-cancel">
+              <X size={14} /> Cancel POS Payment
+            </button>
+          ) : isPos && posStatus === 'success' ? (
+            <button onClick={onSuccess} style={{...actionBtn('dark'), flex:1}}>Done</button>
+          ) : isPos && (posStatus === 'failed' || posStatus === 'cancelled') ? (
+            <>
+              <button onClick={onClose} style={{...actionBtn('outline'), flex:1}}>Close</button>
+              <button onClick={() => { setPosStatus('idle'); setPosMessage(''); }} style={{...actionBtn('dark'), flex:1}}>Retry</button>
+            </>
+          ) : (
+            <>
+              <button onClick={onClose} style={{...actionBtn('outline'), flex:1}}>Cancel</button>
+              <button onClick={submit} disabled={processing} style={{...actionBtn('dark'), flex:1}} data-testid="m-pay-submit">
+                {processing ? <Loader2 size={14} className="animate-spin" /> : <CreditCard size={14} />}
+                {isPos
+                  ? `Send ${fmt(total)} to POS`
+                  : `Collect ${fmt(method === 'split' ? ((parseFloat(splitCash) || 0) + (parseFloat(splitOnline) || 0)) : total)}`}
+              </button>
+            </>
+          )}
         </Footer>
       </div>
     </div>

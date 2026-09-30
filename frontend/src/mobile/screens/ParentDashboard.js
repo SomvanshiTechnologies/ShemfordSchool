@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../lib/api';
 import { CreditCard, Calendar, GraduationCap, Bell, ChevronRight, BookOpen } from 'lucide-react';
+import AnnouncementSheet from '../AnnouncementSheet';
 
 const ParentDashboard = () => {
   const navigate = useNavigate();
@@ -10,6 +11,7 @@ const ParentDashboard = () => {
   const [children, setChildren] = useState([]);
   const [feeSummary, setFeeSummary] = useState(null);
   const [announcements, setAnnouncements] = useState([]);
+  const [openAnnouncement, setOpenAnnouncement] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -119,14 +121,18 @@ const ParentDashboard = () => {
           <p className="m-section">Announcements</p>
           <div className="m-list">
             {announcements.map((a, i) => (
-              <div key={i} className="m-list-item">
-                <div><p style={{fontWeight:600,fontSize:13,color:'#1A1A1A'}}>{a.title}</p><p style={{fontSize:11,color:'#888',marginTop:2}}>{a.content?.slice(0, 80)}</p></div>
-                <ChevronRight size={16} color="#CCC" />
+              <div key={a.announcement_id || i} className="m-list-item" role="button" tabIndex={0}
+                onClick={() => setOpenAnnouncement(a)}
+                onKeyDown={(e) => { if (e.key === 'Enter') setOpenAnnouncement(a); }}
+                style={{cursor:'pointer'}}>
+                <div style={{minWidth:0}}><p style={{fontWeight:600,fontSize:13,color:'#1A1A1A'}}>{a.title}</p><p style={{fontSize:11,color:'#888',marginTop:2}}>{a.content?.length > 80 ? `${a.content.slice(0, 80)}…` : a.content}</p></div>
+                <ChevronRight size={16} color="#CCC" style={{flexShrink:0}} />
               </div>
             ))}
           </div>
         </>
       )}
+      {openAnnouncement && <AnnouncementSheet announcement={openAnnouncement} onClose={() => setOpenAnnouncement(null)} />}
     </div>
   );
 };
