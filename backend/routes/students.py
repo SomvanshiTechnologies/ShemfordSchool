@@ -22,7 +22,7 @@ from database import db
 from models import UserRole, UserBase, StudentBase, StudentCreate, CLASSES_WITH_STREAMS
 from auth_utils import (
     get_current_user, require_roles, generate_admission_number, create_audit_log,
-    hash_password, get_teacher_assigned_classes, request_session, ensure_active_session,
+    hash_password, student_default_password, get_teacher_assigned_classes, request_session, ensure_active_session,
     enforce_session_scope,
 )
 
@@ -576,11 +576,11 @@ async def reset_student_password(student_id: str, request: Request):
 
     new_password = body.get("password")
     if not new_password:
-        # Admin-generated passwords are the student's admission number, so the
-        # office can hand over credentials without looking anything else up.
-        new_password = str(student.get("admission_number") or "").strip()
+        # Admin-generated passwords are the student's date of birth (DDMMYYYY),
+        # so the office can hand over credentials without looking anything up.
+        new_password = student_default_password(student.get("date_of_birth"))
     if not new_password:
-        # Only reached if the student has no admission number on record.
+        # Only reached if the student has no usable date of birth on record.
         alphabet = string.ascii_letters + string.digits
         new_password = ''.join(secrets.choice(alphabet) for _ in range(10))
 

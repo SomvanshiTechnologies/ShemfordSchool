@@ -13,7 +13,7 @@ from models import (
     UserRole, UserBase, UserCreate, UserLogin, UserResponse, PasswordReset
 )
 from auth_utils import (
-    hash_password, verify_password, create_jwt_token, decode_jwt_token,
+    hash_password, verify_password, student_default_password, create_jwt_token, decode_jwt_token,
     get_current_user, require_roles, create_audit_log,
     create_refresh_token_db, verify_refresh_token,
     revoke_refresh_token, revoke_all_refresh_tokens, revoke_jti, session_window,
@@ -831,17 +831,17 @@ async def admin_reset_user_password(user_id: str, request: Request):
     if not target:
         raise HTTPException(status_code=404, detail="User not found.")
 
-    # Generated passwords are the person's own identifier — admission number for
-    # a student, employee id for staff — so the office can hand over credentials
+    # Generated passwords are predictable for the office — date of birth
+    # (DDMMYYYY) for a student, employee id for staff — so the office can hand over credentials
     # without a lookup. An explicit password in the body always wins, and anyone
     # who is neither (e.g. a parent) still gets a random one.
     new_password = (body.get("password") or "").strip()
     if not new_password:
         _stu = await db.students.find_one(
-            {"user_id": user_id}, {"_id": 0, "admission_number": 1}
+            {"user_id": user_id}, {"_id": 0, "date_of_birth": 1}
         )
-        if _stu and str(_stu.get("admission_number") or "").strip():
-            new_password = str(_stu["admission_number"]).strip()
+        if _stu:
+            new_password = student_default_password(_stu.get("date_of_birth"))
         else:
             _emp = await db.employees.find_one(
                 {"user_id": user_id}, {"_id": 0, "employee_id": 1}

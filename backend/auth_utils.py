@@ -39,6 +39,19 @@ def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
+def student_default_password(date_of_birth) -> str:
+    """A student's default password: their date of birth as DDMMYYYY.
+    Returns "" when the DOB is missing or unparseable so callers can fall back.
+    """
+    raw = str(date_of_birth or "").strip()[:10]
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%d%m%Y")
+        except ValueError:
+            pass
+    return ""
+
+
 def verify_password(password: str, hashed: str) -> bool:
     """Verify a password against its bcrypt hash."""
     try:

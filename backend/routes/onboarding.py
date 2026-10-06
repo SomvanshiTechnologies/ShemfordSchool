@@ -25,7 +25,7 @@ from models import (
     UserRole, UserBase, StudentBase, OnboardingApplication, StudentDocument,
     REQUIRED_DOCUMENTS, CLASSES_WITH_STREAMS
 )
-from auth_utils import hash_password, require_roles, generate_admission_number, create_audit_log, request_session
+from auth_utils import hash_password, student_default_password, require_roles, generate_admission_number, create_audit_log, request_session
 from routes.fees import get_fee_config, create_admission_ledger, build_admission_fee_breakdown, current_academic_year, active_session, ensure_session_writable
 from routes.students import get_next_roll_number
 
@@ -547,7 +547,9 @@ async def complete_onboarding(onboarding_id: str, request: Request):
     student_email = real_email or f"{student_obj.student_id.lower()}@student.shemford.in"
     existing_student_user = await db.users.find_one({"email": student_email}, {"_id": 0})
     if not existing_student_user:
-        student_temp_password = secrets.token_urlsafe(8)
+        # Students log in with their admission number + DOB (DDMMYYYY).
+        student_temp_password = (student_default_password(app.get("date_of_birth"))
+                                 or secrets.token_urlsafe(8))
         student_user = UserBase(
             email=student_email,
             name=f"{app['first_name']} {app.get('last_name', '')}".strip(),
