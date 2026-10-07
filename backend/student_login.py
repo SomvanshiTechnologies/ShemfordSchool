@@ -1,23 +1,13 @@
-from datetime import datetime
-from typing import Optional
-
 from database import db
 from models import UserBase, UserRole
-from auth_utils import hash_password
+from auth_utils import hash_password, student_default_password
 
-_DOB_FORMATS = ["%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y", "%d%m%Y"]
-
-
-def dob_password(dob) -> Optional[str]:
+# Reuse the single definition of "DOB -> login password" from auth_utils
+# (also used by the admin reset-password endpoints) so every code path
+# agrees on the format, instead of keeping a second copy here.
+def dob_password(dob):
     """Date of birth as ddmmyyyy (12.04.2008 -> 12042008), or None if unparseable."""
-    if not dob:
-        return None
-    for fmt in _DOB_FORMATS:
-        try:
-            return datetime.strptime(str(dob).strip(), fmt).strftime("%d%m%Y")
-        except ValueError:
-            pass
-    return None
+    return student_default_password(dob) or None
 
 
 async def ensure_student_login(student: dict) -> bool:
