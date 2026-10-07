@@ -19,6 +19,7 @@ import string
 logger = logging.getLogger(__name__)
 
 from database import db
+from student_login import dob_password, ensure_student_login
 from models import UserRole, UserBase, StudentBase, StudentCreate, CLASSES_WITH_STREAMS
 from auth_utils import (
     get_current_user, require_roles, generate_admission_number, create_audit_log,
@@ -173,6 +174,7 @@ async def create_student(student: StudentCreate, request: Request):
 
     await db.students.insert_one(student_dict)
     student_dict.pop("_id", None)
+    await ensure_student_login(student_dict)
 
     # Attempt fee ledger creation (non-blocking)
     await _try_create_fee_ledger(student_dict)
@@ -662,12 +664,15 @@ async def bulk_upload_students(request: Request):
 
     for idx, s in enumerate(students_data):
         try:
+            if not dob_password(s.get("date_of_birth")):
+                raise ValueError("Date of birth is required (it becomes the student's login password)")
             admission_number = await generate_admission_number()
             student_obj = StudentBase(**s, admission_number=admission_number, academic_year=_ay)
             student_dict = student_obj.model_dump()
             student_dict["created_at"] = student_dict["created_at"].isoformat()
             await db.students.insert_one(student_dict)
             student_dict.pop("_id", None)
+            await ensure_student_login(student_dict)
             await _try_create_fee_ledger(student_dict)
             results["success"] += 1
             results["admission_numbers"].append(admission_number)
@@ -723,6 +728,8 @@ async def upload_students_csv(request: Request, file: UploadFile = File(...)):
 
             if not student_data["first_name"] or not student_data["class_name"] or not student_data["section"]:
                 raise ValueError("Missing required: first_name, class_name, section")
+            if not dob_password(student_data["date_of_birth"]):
+                raise ValueError("Date of birth is required (it becomes the student's login password)")
 
             admission_number = await generate_admission_number()
             student_obj = StudentBase(**student_data, admission_number=admission_number, academic_year=current_academic_year())
@@ -730,6 +737,7 @@ async def upload_students_csv(request: Request, file: UploadFile = File(...)):
             student_dict["created_at"] = student_dict["created_at"].isoformat()
             await db.students.insert_one(student_dict)
             student_dict.pop("_id", None)
+            await ensure_student_login(student_dict)
             await _try_create_fee_ledger(student_dict)
             results["success"] += 1
             results["admission_numbers"].append(admission_number)
@@ -1136,6 +1144,8 @@ async def csv_import(request: Request):
             adm_no_override = data.pop("_admission_no_override", None)
             roll_override   = data.pop("_roll_no_override", None)
             extended        = data.pop("_extended", {})
+            if not dob_password(data.get("date_of_birth")):
+                raise ValueError("Date of birth is required (it becomes the student's login password)")
 
             if adm_no_override:
                 # Validate uniqueness at write time (race-condition safe via find_one)
@@ -1179,6 +1189,7 @@ async def csv_import(request: Request):
 
             await db.students.insert_one(student_dict)
             student_dict.pop("_id", None)
+            await ensure_student_login(student_dict)
 
             # ── Attempt fee ledger creation ──────────────────────────────────
             await _try_create_fee_ledger(student_dict)

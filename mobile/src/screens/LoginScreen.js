@@ -19,7 +19,7 @@ const LoginScreen = () => {
     const cleanEmail = (email || '').trim().toLowerCase();
     const cleanPw = password || '';
     if (!cleanEmail || !cleanPw) {
-      Alert.alert('Missing fields', 'Please enter your email and password.');
+      Alert.alert('Missing fields', 'Please enter your email or ID, and your password.');
       return;
     }
     setLoading(true);
@@ -34,9 +34,11 @@ const LoginScreen = () => {
           'The app could not reach the backend. Check that your phone and PC are on the same Wi-Fi, and that port 8000 is allowed through the firewall.'
         );
       } else if (e.response.status === 401) {
-        Alert.alert('Invalid email or password', 'Please check your credentials and try again.');
+        Alert.alert('Invalid login', 'Check your email / admission ID and password, then try again.');
       } else if (e.response.status === 429) {
         Alert.alert('Too many attempts', 'Please wait a minute and try again.');
+      } else if (e.response.status === 403 && e.response.data?.detail === 'ACCOUNT_DISABLED') {
+        Alert.alert('Account disabled', 'Your account has been turned off by the school admin. Please contact the school office.');
       } else {
         Alert.alert('Login failed', e.response?.data?.detail || `Server returned ${e.response.status}`);
       }
@@ -60,16 +62,15 @@ const LoginScreen = () => {
         </View>
 
         <View style={styles.form}>
-          <Text style={styles.label}>EMAIL</Text>
+          <Text style={styles.label}>EMAIL OR ADMISSION / EMPLOYEE ID</Text>
           <View style={styles.inputWrap}>
-            <Ionicons name="mail-outline" size={18} color={COLORS.lightMuted} style={styles.inputIcon} />
+            <Ionicons name="person-outline" size={18} color={COLORS.lightMuted} style={styles.inputIcon} />
             <TextInput
               style={styles.input}
-              placeholder="you@shemford.edu"
+              placeholder="Email or ID"
               placeholderTextColor={COLORS.lightMuted}
               value={email}
               onChangeText={setEmail}
-              keyboardType="email-address"
               autoCapitalize="none"
               autoCorrect={false}
             />

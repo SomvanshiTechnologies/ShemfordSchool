@@ -1,25 +1,24 @@
 import React from 'react';
 import { TouchableOpacity, View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { COLORS, TINTS, RADIUS, SHADOW } from '../theme/colors';
+import { TINTS, RADIUS, SHADOW, COLORS } from '../theme/colors';
 
 /**
- * Web-style action row: [icon tile] [title / desc] [chevron]
- * Pass `icon` (Ionicons name), `title`, optional `desc`, optional `tint`.
+ * Small square tile: icon above label, no description/chevron — used on the
+ * Quick Actions/Management sections of every dashboard and the More menu's
+ * Quick Access list, so they all share one compact grid look.
+ * Pass `icon` (Ionicons name), `title`, optional `tint`. `desc` is accepted
+ * but not shown, so existing callers don't need to change.
  */
-export const ActionButton = ({ icon, title, desc, tint = 'orange', onPress, label }) => {
+export const ActionButton = ({ icon, title, tint = 'orange', onPress, label }) => {
   const t = TINTS[tint] || TINTS.orange;
   const displayTitle = title || label;
   return (
-    <TouchableOpacity style={styles.btn} onPress={onPress} activeOpacity={0.7}>
+    <TouchableOpacity style={styles.tile} onPress={onPress} activeOpacity={0.75}>
       <View style={[styles.iconWrap, { backgroundColor: t.bg }]}>
         <Ionicons name={icon} size={18} color={t.fg} />
       </View>
-      <View style={styles.textWrap}>
-        <Text style={styles.title}>{displayTitle}</Text>
-        {desc ? <Text style={styles.desc} numberOfLines={1}>{desc}</Text> : null}
-      </View>
-      <Ionicons name="chevron-forward" size={16} color={COLORS.lightMuted} />
+      <Text style={styles.title} numberOfLines={2}>{displayTitle}</Text>
     </TouchableOpacity>
   );
 };
@@ -29,24 +28,25 @@ export const ActionGrid = ({ children }) => (
 );
 
 const styles = StyleSheet.create({
-  grid: { gap: 10, marginBottom: 20 },
-  btn: {
-    flexDirection: 'row',
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
+  tile: {
+    width: '30%',
+    flexGrow: 1,
+    minWidth: 92,
     alignItems: 'center',
-    gap: 14,
+    justifyContent: 'center',
+    gap: 8,
     paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderRadius: RADIUS.xl,
+    paddingHorizontal: 6,
+    borderRadius: RADIUS.lg,
     backgroundColor: COLORS.white,
     borderWidth: 1,
     borderColor: COLORS.border,
     ...SHADOW.sm,
   },
   iconWrap: {
-    width: 40, height: 40, borderRadius: RADIUS.md,
+    width: 36, height: 36, borderRadius: RADIUS.md,
     alignItems: 'center', justifyContent: 'center',
   },
-  textWrap: { flex: 1 },
-  title: { fontSize: 14, fontWeight: '700', color: COLORS.black },
-  desc:  { fontSize: 12, color: COLORS.muted, marginTop: 2 },
+  title: { fontSize: 11, fontWeight: '700', color: COLORS.black, textAlign: 'center' },
 });
