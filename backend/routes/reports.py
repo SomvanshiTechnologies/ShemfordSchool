@@ -1,9 +1,20 @@
 ﻿from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+import asyncio
+import hashlib
+import hmac
+import html
 import io
+import json
 import logging
+import os
+import re
+
+import httpx
+from pymongo.errors import DuplicateKeyError
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, letter
@@ -16,6 +27,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 from database import db
 from models import UserRole
+from job_queue import enqueue_job, register_handler
 from auth_utils import (
     get_current_user, require_roles, calculate_grade, create_audit_log,
     get_teacher_assigned_classes, request_session, enforce_session_scope,
@@ -765,6 +777,280 @@ def _academic_excel(student_results, class_name, section, academic_year):
     return StreamingResponse(buffer,
                              media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": "attachment; filename=academic_report.xlsx"})
+
+
+# ==================== DAILY COLLECTION REPORT ====================
+#
+# Pull: GET /api/reports/daily-collection[?date=YYYY-MM-DD]   (JWT, admin/accountant)
+# Push: a job queued at DAILY_REPORT_TIME (default 23:59) emails the report and,
+#       if configured, POSTs it to an external webhook. Both are optional/env-driven.
+#
+# Source of truth is `fee_payments`, which only ever holds *successful*
+# collections: Razorpay/POS/Stripe rows are inserted after verification, and
+# failed/cancelled orders never reach it. Refunds are not removed from
+# `fee_payments`, so they are read from `razorpay_orders` (refund_id set) and
+# reported as a deduction on the day the refund was initiated.
+
+REPORT_TZ = ZoneInfo(os.environ.get("REPORT_TIMEZONE", "Asia/Kolkata"))
+BASE_MODES = ("cash", "cheque", "dd", "card", "upi")
+_MODE_ALIASES = {
+    "pos_card": "card", "debit_card": "card", "credit_card": "card",
+    "pos_upi": "upi",
+    "pos_cash": "cash",
+    "demand_draft": "dd",
+}
+
+
+def _normalize_mode(method) -> str:
+    m = str(method or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if not m:
+        return "unknown"
+    return _MODE_ALIASES.get(m, m)
+
+
+def _parse_report_date(value: Optional[str]) -> str:
+    today = datetime.now(REPORT_TZ).date()
+    if not value:
+        return today.isoformat()
+    try:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError(value)
+        d = datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="date must be in YYYY-MM-DD format")
+    if d > today:
+        raise HTTPException(status_code=400, detail="date cannot be in the future")
+    return d.isoformat()
+
+
+async def build_daily_collection_report(report_date: str) -> dict:
+    day = datetime.strptime(report_date, "%Y-%m-%d").date()
+    next_day = (day + timedelta(days=1)).isoformat()
+
+    # payment_date is stored as YYYY-MM-DD (or an ISO datetime on some paths),
+    # so a half-open string range matches both.
+    payments = await db.fee_payments.find(
+        {"payment_date": {"$gte": report_date, "$lt": next_day}},
+        {"_id": 0, "amount": 1, "payment_method": 1, "split_payments": 1},
+    ).to_list(None)
+
+    collections = {m: 0.0 for m in BASE_MODES}
+    for p in payments:
+        split = p.get("split_payments")
+        if isinstance(split, dict) and split:
+            parts = list(split.items())
+        else:
+            parts = [(p.get("payment_method"), p.get("amount"))]
+        for mode, amt in parts:
+            try:
+                amt = float(amt or 0)
+            except (TypeError, ValueError):
+                logger.warning("daily-collection: skipping non-numeric amount %r", amt)
+                continue
+            key = _normalize_mode(mode)
+            collections[key] = collections.get(key, 0.0) + amt
+    collections = {k: round(v, 2) for k, v in collections.items()}
+    total = round(sum(collections.values()), 2)
+
+    # Refunds are timestamped in UTC; take the report-timezone day's bounds.
+    start_utc = datetime(day.year, day.month, day.day, tzinfo=REPORT_TZ).astimezone(timezone.utc)
+    end_utc = start_utc + timedelta(days=1)
+    refunds = await db.razorpay_orders.find(
+        {
+            "refund_id": {"$nin": [None, ""]},
+            "refund_initiated_at": {"$gte": start_utc.isoformat(), "$lt": end_utc.isoformat()},
+        },
+        {"_id": 0, "refund_amount": 1, "refund_status": 1},
+    ).to_list(None)
+    refunds = [r for r in refunds if str(r.get("refund_status") or "").lower() != "failed"]
+    refund_total = round(sum(float(r.get("refund_amount") or 0) for r in refunds), 2)
+
+    return {
+        "report_date": report_date,
+        "currency": "INR",
+        "collections": collections,
+        "total_collection": total,
+        "refunds": {"total": refund_total, "count": len(refunds)},
+        "net_collection": round(total - refund_total, 2),
+        "transaction_count": len(payments),
+    }
+
+
+@router.get("/reports/daily-collection")
+async def get_daily_collection_report(request: Request, date: Optional[str] = None):
+    """Collections for one day grouped by payment mode. Defaults to today (REPORT_TIMEZONE)."""
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    report_date = _parse_report_date(date)
+    try:
+        report = await build_daily_collection_report(report_date)
+    except Exception:
+        logger.exception("daily-collection: failed to build report for %s", report_date)
+        raise HTTPException(status_code=500, detail="Could not generate the collection report")
+    report["generated_at"] = datetime.now(timezone.utc).isoformat()
+    return report
+
+
+# ── Scheduled push ────────────────────────────────────────────────────────────
+
+def _report_email_html(report: dict) -> str:
+    cell = "padding:6px 12px;border:1px solid #ddd"
+    rows = "".join(
+        f"<tr><td style='{cell}'>{html.escape(k.replace('_', ' ').upper())}</td>"
+        f"<td style='{cell};text-align:right'>Rs.{v:,.2f}</td></tr>"
+        for k, v in report["collections"].items()
+    )
+    return f"""
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background:#E88A1A;padding:20px;text-align:center">
+            <h1 style="color:white;margin:0">Shemford Futuristic School</h1>
+        </div>
+        <div style="padding:24px;background:#f9f9f9">
+            <h2>Daily Collection Report - {report['report_date']}</h2>
+            <table style="border-collapse:collapse;width:100%;background:white">{rows}
+                <tr><td style='{cell}'><b>Total Collection</b></td>
+                    <td style='{cell};text-align:right'><b>Rs.{report['total_collection']:,.2f}</b></td></tr>
+                <tr><td style='{cell}'>Refunds ({report['refunds']['count']})</td>
+                    <td style='{cell};text-align:right'>- Rs.{report['refunds']['total']:,.2f}</td></tr>
+                <tr><td style='{cell}'><b>Net Collection</b></td>
+                    <td style='{cell};text-align:right'><b>Rs.{report['net_collection']:,.2f}</b></td></tr>
+            </table>
+            <p style="color:#666">{report['transaction_count']} transaction(s).</p>
+        </div>
+    </div>"""
+
+
+async def _push_webhook(report: dict) -> None:
+    url = os.environ.get("DAILY_REPORT_WEBHOOK_URL", "").strip()
+    body = json.dumps(report, separators=(",", ":")).encode()
+    headers = {
+        "Content-Type": "application/json",
+        # Receiver can use this to drop duplicate deliveries.
+        "Idempotency-Key": f"daily-collection-{report['report_date']}",
+    }
+    secret = os.environ.get("DAILY_REPORT_WEBHOOK_SECRET", "")
+    if secret:
+        headers["X-Signature-SHA256"] = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    token = os.environ.get("DAILY_REPORT_WEBHOOK_TOKEN", "")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.post(url, content=body, headers=headers)
+    resp.raise_for_status()
+
+
+async def _claim_report(report_date: str) -> Optional[dict]:
+    """Claim the right to deliver `report_date`. Returns the log doc, or None if
+    it is already delivered / being delivered by another worker or process."""
+    now = datetime.now(timezone.utc)
+    doc = {"_id": report_date, "status": "sending", "claimed_at": now.isoformat(),
+           "channels": {}, "attempts": 1}
+    try:
+        await db.daily_collection_reports.insert_one(doc)
+        return doc
+    except DuplicateKeyError:
+        pass
+    stale = (now - timedelta(minutes=15)).isoformat()
+    return await db.daily_collection_reports.find_one_and_update(
+        {"_id": report_date, "$or": [
+            {"status": "failed"},
+            {"status": "sending", "claimed_at": {"$lt": stale}},
+        ]},
+        {"$set": {"status": "sending", "claimed_at": now.isoformat()}, "$inc": {"attempts": 1}},
+        return_document=True,
+    )
+
+
+async def send_daily_collection_report(report_date: Optional[str] = None) -> None:
+    """Job handler. Safe to run more than once for a date: delivered channels are
+    never re-sent, and concurrent runs are excluded by `_claim_report`."""
+    report_date = report_date or datetime.now(REPORT_TZ).date().isoformat()
+    log = await _claim_report(report_date)
+    if log is None:
+        logger.info("daily-collection: %s already sent or in progress — skipping", report_date)
+        return
+
+    done = dict(log.get("channels") or {})
+    recipients = [e.strip() for e in os.environ.get("DAILY_REPORT_EMAILS", "").split(",") if e.strip()]
+    webhook = os.environ.get("DAILY_REPORT_WEBHOOK_URL", "").strip()
+    errors = []
+    try:
+        report = await build_daily_collection_report(report_date)
+
+        if recipients and not done.get("email"):
+            from routes.payments import send_email  # lazy: pulls in Stripe/Resend setup
+            subject = f"Daily Collection Report - {report_date}"
+            results = await asyncio.gather(
+                *(send_email(r, subject, _report_email_html(report)) for r in recipients)
+            )
+            if all(results):
+                done["email"] = True
+            else:
+                errors.append("email delivery failed for one or more recipients")
+        if webhook and not done.get("webhook"):
+            try:
+                await _push_webhook(report)
+                done["webhook"] = True
+            except Exception as exc:
+                errors.append(f"webhook: {exc}")
+        if not recipients and not webhook:
+            logger.warning("daily-collection: no DAILY_REPORT_EMAILS or DAILY_REPORT_WEBHOOK_URL configured — nothing sent")
+    except Exception as exc:
+        logger.exception("daily-collection: failed building/sending report for %s", report_date)
+        errors.append(str(exc))
+
+    await db.daily_collection_reports.update_one(
+        {"_id": report_date},
+        {"$set": {"status": "failed" if errors else ("sent" if done else "skipped"), "channels": done,
+                  "error": "; ".join(errors) or None,
+                  "finished_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if errors:
+        # Re-raise so job_queue retries with back-off; delivered channels stay marked.
+        raise RuntimeError("; ".join(errors))
+    if done:
+        logger.info("daily-collection: report for %s sent via %s", report_date, sorted(done))
+    else:
+        logger.info("daily-collection: report for %s built; no delivery channel configured (skipped)", report_date)
+
+
+register_handler("daily_collection_report", send_daily_collection_report)
+
+
+def _seconds_until_next_run(now: datetime, hhmm: str) -> float:
+    hh, mm = (int(x) for x in hhmm.split(":"))
+    target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
+
+
+async def run_daily_report_scheduler():
+    """Sleep until DAILY_REPORT_TIME (REPORT_TIMEZONE), then enqueue the job.
+    The idempotency key + `_claim_report` make duplicate triggers harmless."""
+    if os.environ.get("DAILY_REPORT_ENABLED", "true").lower() != "true":
+        logger.info("daily-collection scheduler disabled (DAILY_REPORT_ENABLED!=true)")
+        return
+    hhmm = os.environ.get("DAILY_REPORT_TIME", "23:59")
+    try:
+        _seconds_until_next_run(datetime.now(REPORT_TZ), hhmm)
+    except ValueError:
+        logger.error("daily-collection scheduler not started: invalid DAILY_REPORT_TIME=%r (want HH:MM)", hhmm)
+        return
+    logger.info("daily-collection scheduler started (%s %s)", hhmm, REPORT_TZ.key)
+    while True:
+        try:
+            await asyncio.sleep(_seconds_until_next_run(datetime.now(REPORT_TZ), hhmm))
+            run_date = datetime.now(REPORT_TZ).date().isoformat()
+            await enqueue_job(
+                "daily_collection_report", {"report_date": run_date},
+                idempotency_key=f"daily_collection_report:{run_date}",
+            )
+            await asyncio.sleep(61)  # step past the trigger minute
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("daily-collection scheduler error (will continue)")
+            await asyncio.sleep(60)
 
 
 # ==================== REMINDERS ====================

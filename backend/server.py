@@ -32,6 +32,9 @@ async def lifespan(application):
     await create_indexes(db)
     await recover_stale_jobs()
     start_worker()
+    import asyncio
+    from routes.reports import run_daily_report_scheduler
+    report_task = asyncio.create_task(run_daily_report_scheduler())
     # Run one-time migrations on startup
     try:
         from routes.upgradation import _backfill_from_academic_year, _backfill_streams
@@ -45,6 +48,7 @@ async def lifespan(application):
         logging.getLogger("shemford.api").warning("upgradation backfill skipped: %s", exc)
     logger.info("Startup complete — DB indexes verified, job worker running")
     yield
+    report_task.cancel()
     stop_worker()
     client.close()
 
