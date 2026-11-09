@@ -949,7 +949,7 @@ async def _claim_report(report_date: str) -> Optional[dict]:
         return doc
     except DuplicateKeyError:
         pass
-    stale = (now - timedelta(minutes=15)).isoformat()
+    stale = (now - STALE_SENDING).isoformat()
     return await db.daily_collection_reports.find_one_and_update(
         {"_id": report_date, "$or": [
             {"status": "failed"},
@@ -1016,41 +1016,82 @@ async def send_daily_collection_report(report_date: Optional[str] = None) -> Non
 register_handler("daily_collection_report", send_daily_collection_report)
 
 
-def _seconds_until_next_run(now: datetime, hhmm: str) -> float:
+SCHEDULER_POLL_SECONDS = 60
+STALE_SENDING = timedelta(minutes=15)   # a claim older than this is a crashed run
+FAILED_RETRY_AFTER = timedelta(minutes=30)
+MAX_REPORT_ATTEMPTS = 12
+
+
+def _latest_due_date(now: datetime, hhmm: str) -> str:
+    """Most recent report date whose trigger time (hhmm) has already passed."""
     hh, mm = (int(x) for x in hhmm.split(":"))
-    target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-    if target <= now:
-        target += timedelta(days=1)
-    return (target - now).total_seconds()
+    due_today = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    return (now.date() if now >= due_today else now.date() - timedelta(days=1)).isoformat()
+
+
+def _needs_run(log: Optional[dict], now_utc: datetime) -> bool:
+    """Whether the report for a due date still has to be (re)queued, given its log doc."""
+    if log is None:
+        return True
+    status = log.get("status")
+    if status in ("sent", "skipped"):
+        return False
+    if status == "sending":
+        # Only a crashed worker leaves a stale claim; a live run is left alone.
+        claimed = datetime.fromisoformat(log["claimed_at"])
+        return now_utc - claimed > STALE_SENDING
+    if status == "failed":
+        finished = log.get("finished_at")
+        waited = now_utc - datetime.fromisoformat(finished) if finished else FAILED_RETRY_AFTER
+        return log.get("attempts", 0) < MAX_REPORT_ATTEMPTS and waited >= FAILED_RETRY_AFTER
+    return True
+
+
+async def _queue_due_report(hhmm: str) -> Optional[str]:
+    """Queue the latest due report if it hasn't been delivered. Returns the date queued."""
+    due = _latest_due_date(datetime.now(REPORT_TZ), hhmm)
+    log = await db.daily_collection_reports.find_one({"_id": due})
+    if not _needs_run(log, datetime.now(timezone.utc)):
+        return None
+    await enqueue_job(
+        "daily_collection_report", {"report_date": due},
+        idempotency_key=f"daily_collection_report:{due}",
+    )
+    return due
 
 
 async def run_daily_report_scheduler():
-    """Sleep until DAILY_REPORT_TIME (REPORT_TIMEZONE), then enqueue the job.
-    The idempotency key + `_claim_report` make duplicate triggers harmless."""
+    """Poll once a minute and queue the latest due report if it hasn't been delivered.
+
+    Polling (rather than sleeping until 23:59) makes recovery automatic: if the app
+    was down at the trigger time, the first poll after restart queues the missed
+    report; a crashed or failed run is retried. Duplicates are harmless: the queue
+    idempotency key, the sent/skipped check above, and `_claim_report` all guard it.
+    """
     if os.environ.get("DAILY_REPORT_ENABLED", "true").lower() != "true":
         logger.info("daily-collection scheduler disabled (DAILY_REPORT_ENABLED!=true)")
         return
     hhmm = os.environ.get("DAILY_REPORT_TIME", "23:59")
     try:
-        _seconds_until_next_run(datetime.now(REPORT_TZ), hhmm)
+        _latest_due_date(datetime.now(REPORT_TZ), hhmm)
     except ValueError:
         logger.error("daily-collection scheduler not started: invalid DAILY_REPORT_TIME=%r (want HH:MM)", hhmm)
         return
-    logger.info("daily-collection scheduler started (%s %s)", hhmm, REPORT_TZ.key)
+    logger.info("daily-collection scheduler started (%s %s, polling every %ds)",
+                hhmm, REPORT_TZ.key, SCHEDULER_POLL_SECONDS)
     while True:
         try:
-            await asyncio.sleep(_seconds_until_next_run(datetime.now(REPORT_TZ), hhmm))
-            run_date = datetime.now(REPORT_TZ).date().isoformat()
-            await enqueue_job(
-                "daily_collection_report", {"report_date": run_date},
-                idempotency_key=f"daily_collection_report:{run_date}",
-            )
-            await asyncio.sleep(61)  # step past the trigger minute
+            queued = await _queue_due_report(hhmm)
+            if queued:
+                logger.info("daily-collection: queued report for %s", queued)
         except asyncio.CancelledError:
             return
         except Exception:
             logger.exception("daily-collection scheduler error (will continue)")
-            await asyncio.sleep(60)
+        try:
+            await asyncio.sleep(SCHEDULER_POLL_SECONDS)
+        except asyncio.CancelledError:
+            return
 
 
 # ==================== REMINDERS ====================
