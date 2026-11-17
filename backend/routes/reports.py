@@ -919,6 +919,55 @@ def _report_email_html(report: dict) -> str:
     </div>"""
 
 
+def _report_xlsx(report: dict) -> bytes:
+    """Excel copy of the daily collection report, emailed as an attachment.
+    Plain values (no formulas): mail/phone previewers do not recalculate, so formulas would show blank."""
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Daily Collection"
+    thin = Side(style="thin", color="DDDDDD")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    money = '"Rs." #,##0.00'
+    ws["A1"] = "Shemford Futuristic School"
+    ws["A1"].font = Font(name="Arial", size=14, bold=True, color="FFFFFF")
+    ws["A1"].fill = PatternFill("solid", fgColor="E88A1A")
+    ws.merge_cells("A1:B1")
+    ws["A2"] = f"Daily Collection Report - {report['report_date']}"
+    ws["A2"].font = Font(name="Arial", size=12, bold=True)
+    ws.merge_cells("A2:B2")
+
+    def put(row, label, value, bold=False, fmt=money):
+        a, b = ws.cell(row=row, column=1, value=label), ws.cell(row=row, column=2, value=value)
+        for c in (a, b):
+            c.font = Font(name="Arial", size=11, bold=bold)
+            c.border = border
+        b.number_format = fmt
+        b.alignment = Alignment(horizontal="right")
+
+    row = 4
+    for c, h in enumerate(("Payment Mode", "Amount (INR)"), 1):
+        cell = ws.cell(row=row, column=c, value=h)
+        cell.font = Font(name="Arial", size=11, bold=True)
+        cell.fill = PatternFill("solid", fgColor="F3F3F3")
+        cell.border = border
+    for mode, amount in report["collections"].items():
+        row += 1
+        put(row, mode.replace("_", " ").upper(), amount)
+    put(row + 1, "Total Collection", report["total_collection"], bold=True)
+    put(row + 2, f"Refunds ({report['refunds']['count']})", -report["refunds"]["total"])
+    put(row + 3, "Net Collection", report["net_collection"], bold=True)
+    put(row + 4, "Transactions", report["transaction_count"], fmt="0")
+    ws.column_dimensions["A"].width = 30
+    ws.column_dimensions["B"].width = 20
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 async def _push_webhook(report: dict) -> None:
     url = os.environ.get("DAILY_REPORT_WEBHOOK_URL", "").strip()
     body = json.dumps(report, separators=(",", ":")).encode()
@@ -979,8 +1028,9 @@ async def send_daily_collection_report(report_date: Optional[str] = None) -> Non
         if recipients and not done.get("email"):
             from routes.payments import send_email  # lazy: pulls in Stripe/Resend setup
             subject = f"Daily Collection Report - {report_date}"
+            attachment = [{"filename": f"daily-collection-{report_date}.xlsx", "content": _report_xlsx(report)}]
             results = await asyncio.gather(
-                *(send_email(r, subject, _report_email_html(report)) for r in recipients)
+                *(send_email(r, subject, _report_email_html(report), attachments=attachment) for r in recipients)
             )
             if all(results):
                 done["email"] = True

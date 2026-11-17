@@ -33,12 +33,15 @@ class PaymentRequest(BaseModel):
     origin_url: str
 
 
-async def send_email(to_email: str, subject: str, html_content: str):
+async def send_email(to_email: str, subject: str, html_content: str, attachments: Optional[list] = None):
     if not RESEND_API_KEY:
         logger.warning("Email service not configured")
         return False
     try:
         params = {"from": SENDER_EMAIL, "to": [to_email], "subject": subject, "html": html_content}
+        if attachments:
+            # [{"filename": str, "content": bytes}] -> Resend wants the content as a list of ints
+            params["attachments"] = [{"filename": a["filename"], "content": list(a["content"])} for a in attachments]
         await asyncio.to_thread(resend.Emails.send, params)
         return True
     except Exception as e:
