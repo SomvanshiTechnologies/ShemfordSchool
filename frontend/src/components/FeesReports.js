@@ -216,6 +216,7 @@ const FEE_TYPES = [
   { value: 'exam_fee', label: 'Exam Fee' },
   { value: 'lab_fee', label: 'Lab Fee' },
   { value: 'ai_robotics_fee', label: 'AI & Robotics Fee' },
+  { value: 'e_learning', label: 'E-Learning Fee' },
   { value: 'caution_deposit', label: 'Caution Deposit' },
   { value: 'upgradation', label: 'Upgradation Fee' },
 ];

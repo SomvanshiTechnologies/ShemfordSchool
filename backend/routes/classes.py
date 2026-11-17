@@ -54,7 +54,7 @@ def _build_shemford_defaults() -> list:
     Called once when the DB has no class_structures yet.
     """
     fee_map = {
-        "SF. SR.": 30000, "LKG": 36000, "UKG": 40000,
+        "SF. JR.": 30000, "SF. SR.": 30000, "LKG": 36000, "UKG": 40000,
         "1st": 48000,  "2nd": 50000,  "3rd": 52000,
         "4th": 54000,  "5th": 56000,  "6th": 60000,
         "7th": 62000,  "8th": 64000,  "9th": 72000,
@@ -66,7 +66,7 @@ def _build_shemford_defaults() -> list:
         is_senior = cls_name in ("11th", "12th")
         entry = {
             "name": cls_name,
-            "display_name": cls_name if cls_name in ("SF. SR.", "LKG", "UKG") else f"Class {cls_name}",
+            "display_name": cls_name if cls_name in ("SF. JR.", "SF. SR.", "LKG", "UKG") else f"Class {cls_name}",
             "sort_order": order,
             "sections": _senior_sections(45) if is_senior else _default_sections(45),
             "has_streams": is_senior,

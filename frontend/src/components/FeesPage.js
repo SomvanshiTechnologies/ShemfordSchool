@@ -45,6 +45,7 @@ const FEE_COMPONENTS = [
   { key: 'lab_fee', label: 'Lab Fee', type: 'yearly', tip: 'For science/computer streams and classes 9–12' },
   { key: 'ai_robotics_fee', label: 'AI & Robotics Fee', type: 'yearly', tip: 'Yearly AI & Robotics fee (Class IX & X only)' },
   { key: 'monthly_tuition', label: 'Monthly Tuition', type: 'monthly', tip: '1st month collected at admission; sibling discount applies, per Fee Config' },
+  { key: 'e_learning_fee', label: 'E-Learning Fee (Digital Education)', type: 'monthly', tip: 'Billed every month alongside tuition; 1st month collected at admission' },
   { key: 'upgradation_fee', label: 'Upgradation Fee', type: 'one_time', tip: 'Charged when student is promoted to next class' },
   { key: 'late_fee', label: 'Late Fee (per month)', type: 'monthly', tip: 'Penalty applied after due date if enabled' },
 ];
@@ -365,7 +366,7 @@ const FeesPage = () => {
         academic_year: selectedYear,
         registration_fee: 0, admission_fee: 0, caution_deposit: 0,
         annual_charge: 0, activity_fee: 0, exam_fee: 0, lab_fee: 0,
-        monthly_tuition: 0, upgradation_fee: 0,
+        monthly_tuition: 0, e_learning_fee: 0, upgradation_fee: 0,
         due_day: 10, grace_days: 0, late_fee: 0, late_fee_enabled: false,
         sibling_admission_discount_amount: 0,
         sibling_tuition_discount_amount: 0,
@@ -920,7 +921,7 @@ const FeesPage = () => {
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-slate-50">
-                      {['Class', 'Stream', 'Registration', 'Admission', 'Caution', 'Annual', 'Activity', 'Exam', 'Lab', 'Monthly Tuition', 'Late Fee', 'Actions'].map(h => (
+                      {['Class', 'Stream', 'Registration', 'Admission', 'Caution', 'Annual', 'Activity', 'Exam', 'Lab', 'Monthly Tuition', 'E-Learning', 'Late Fee', 'Actions'].map(h => (
                         <TableHead key={h} className="text-[10px] uppercase tracking-wider font-bold text-slate-500 whitespace-nowrap">{h}</TableHead>
                       ))}
                     </TableRow>
@@ -934,7 +935,7 @@ const FeesPage = () => {
                             <span className="text-xs capitalize px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded">{cfg.stream}</span>
                           ) : <span className="text-slate-500">—</span>}
                         </TableCell>
-                        {['registration_fee', 'admission_fee', 'caution_deposit', 'annual_charge', 'activity_fee', 'exam_fee', 'lab_fee', 'monthly_tuition'].map(k => (
+                        {['registration_fee', 'admission_fee', 'caution_deposit', 'annual_charge', 'activity_fee', 'exam_fee', 'lab_fee', 'monthly_tuition', 'e_learning_fee'].map(k => (
                           <TableCell key={k} className="text-sm">
                             {cfg[k] > 0 ? fmt(cfg[k]) : <span className="text-[#CCC]">—</span>}
                           </TableCell>
@@ -1255,6 +1256,7 @@ const FeesPage = () => {
                   lab_fee: 'lab_fee',
                   ai_robotics_fee: 'ai_robotics_fee',
                   monthly_tuition: 'tuition',
+                  e_learning_fee: 'e_learning',
                   upgradation_fee: 'upgradation',
                 };
                 const COMPONENT_LABELS = { monthly_tuition: 'Tuition Fee' };

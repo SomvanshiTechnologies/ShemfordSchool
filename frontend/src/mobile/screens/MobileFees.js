@@ -1380,6 +1380,7 @@ const FEE_KEYS = [
   ['lab_fee', 'Lab Fee'],
   ['ai_robotics_fee', 'AI & Robotics Fee'],
   ['monthly_tuition', 'Monthly Tuition'],
+  ['e_learning_fee', 'E-Learning Fee (monthly)'],
   ['upgradation_fee', 'Upgradation Fee'],
   ['late_fee', 'Late Fee (per month)'],
 ];
@@ -1507,6 +1508,7 @@ const ConfigEditSheet = ({ config, year, classes, onClose, onSaved }) => {
     lab_fee: config.lab_fee || 0,
     ai_robotics_fee: config.ai_robotics_fee || 0,
     monthly_tuition: config.monthly_tuition || 0,
+    e_learning_fee: config.e_learning_fee || 0,
     upgradation_fee: config.upgradation_fee || 0,
     due_day: config.due_day || 10,
     grace_days: config.grace_days || 0,

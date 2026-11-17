@@ -95,6 +95,7 @@ CFG_FIELD_TO_COMPONENT = {
     "lab_fee":          "lab_fee",
     "ai_robotics_fee":  "ai_robotics_fee",
     "monthly_tuition":  "tuition",
+    "e_learning_fee":   "e_learning",
     "upgradation_fee":  "upgradation",
 }
 
@@ -112,6 +113,7 @@ _COMPONENT_LABELS = {
     "lab_fee": "Lab Fee",
     "ai_robotics_fee": "AI & Robotics Fee",
     "tuition": "Tuition Fee",
+    "e_learning": "E-Learning Fee",
     "upgradation": "Upgradation Fee",
 }
 
@@ -175,7 +177,7 @@ def validate_academic_year(y: str):
 _FEE_AMOUNT_FIELDS = [
     "registration_fee", "admission_fee", "caution_deposit", "annual_charge",
     "activity_fee", "exam_fee", "lab_fee", "ai_robotics_fee",
-    "monthly_tuition", "upgradation_fee", "late_fee",
+    "monthly_tuition", "e_learning_fee", "upgradation_fee", "late_fee",
 ]
 
 
@@ -432,6 +434,18 @@ def build_admission_fee_breakdown(cfg: dict, is_sibling: bool) -> List[dict]:
             "net_amount": tuition - disc,
             "sibling_discount_amount": disc,
         })
+    # 1st month E-Learning (monthly, no sibling discount)
+    e_learning = cfg.get("e_learning_fee", 0)
+    if e_learning > 0:
+        items.append({
+            "fee_component": "e_learning",
+            "fee_type": "monthly",
+            "label": "E-Learning (1st Month)",
+            "gross_amount": e_learning,
+            "discount_amount": 0,
+            "net_amount": e_learning,
+            "sibling_discount_amount": 0,
+        })
     return items
 
 
@@ -574,6 +588,36 @@ async def create_admission_ledger(student: dict, cfg: dict, academic_year: str, 
             )
             ledger_entries.append(entry)
 
+    # — Monthly E-Learning (all remaining months, no sibling discount) —
+    e_learning = cfg.get("e_learning_fee", 0)
+    if e_learning > 0:
+        month_names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        for month_str in remaining_months:
+            if await db.student_ledger.find_one({
+                "student_id": student_id,
+                "fee_component": "e_learning",
+                "month": month_str,
+                "academic_year": academic_year,
+            }, {"_id": 1}):
+                continue
+            yr, mn = month_str.split("-")
+            ledger_entries.append(StudentLedgerEntry(
+                student_id=student_id,
+                admission_number=admission_number,
+                class_name=class_name,
+                stream=stream,
+                academic_year=academic_year,
+                fee_component="e_learning",
+                fee_type="monthly",
+                description=f"E-Learning — {month_names[int(mn)]} {yr}",
+                month=month_str,
+                gross_amount=e_learning,
+                net_amount=e_learning,
+                due_date=_due_date(month_str, due_day),
+                status="pending",
+            ))
+
     # Bulk insert
     if ledger_entries:
         docs = []
@@ -645,6 +689,7 @@ async def create_fee_component_config(request: Request):
         lab_fee=float(body.get("lab_fee", 0)),
         ai_robotics_fee=float(body.get("ai_robotics_fee", 0)),
         monthly_tuition=float(body.get("monthly_tuition", 0)),
+        e_learning_fee=float(body.get("e_learning_fee", 0)),
         upgradation_fee=float(body.get("upgradation_fee", 0)),
         due_day=int(body.get("due_day", 10)),
         late_fee=float(body.get("late_fee", 0)),
@@ -693,7 +738,7 @@ async def update_fee_component_config(config_id: str, request: Request):
     allowed_fields = [
         "registration_fee", "admission_fee", "caution_deposit",
         "annual_charge", "activity_fee", "exam_fee", "lab_fee", "ai_robotics_fee",
-        "monthly_tuition", "upgradation_fee",
+        "monthly_tuition", "e_learning_fee", "upgradation_fee",
         "due_day", "late_fee", "late_fee_enabled",
         "sibling_admission_discount_amount", "sibling_tuition_discount_amount", "notes"
     ]
@@ -756,7 +801,7 @@ async def apply_annual_increase(request: Request):
     fee_fields = [
         "registration_fee", "admission_fee", "caution_deposit",
         "annual_charge", "activity_fee", "exam_fee", "lab_fee", "ai_robotics_fee",
-        "monthly_tuition", "upgradation_fee", "late_fee"
+        "monthly_tuition", "e_learning_fee", "upgradation_fee", "late_fee"
     ]
     created = 0
     for src in source_configs:
@@ -811,6 +856,7 @@ async def ensure_default_fee_configs(request: Request):
     }
     
     CLASS_FEES = {
+        "SF. JR.": {"activity_fee": 1500, "exam_fee": 300, "lab_fee": 0, "ai_robotics_fee": 0, "monthly_tuition": 1000},
         "SF. SR.": {"activity_fee": 1500, "exam_fee": 300, "lab_fee": 0, "ai_robotics_fee": 0, "monthly_tuition": 1000},
         "LKG": {"activity_fee": 2000, "exam_fee": 300, "lab_fee": 0, "ai_robotics_fee": 0, "monthly_tuition": 1100},
         "UKG": {"activity_fee": 2000, "exam_fee": 300, "lab_fee": 0, "ai_robotics_fee": 0, "monthly_tuition": 1100},
@@ -1255,27 +1301,52 @@ async def generate_monthly_fees(request: Request):
         # Prefer stream-specific, fall back to no-stream config.
         return cfg_by_class_stream.get((class_name, stream)) or cfg_by_class_stream.get((class_name, None))
 
-    # 2) Existing tuition ledger entries for this month, in a single query.
+    # 2) Existing monthly ledger entries (tuition / e-learning) for this month, in a single query.
     student_ids = [s["student_id"] for s in students]
     existing_ids: set = set()
+    existing_elearning_ids: set = set()
     if student_ids:
         async for row in db.student_ledger.find(
             {
                 "student_id": {"$in": student_ids},
-                "fee_component": "tuition",
+                "fee_component": {"$in": ["tuition", "e_learning"]},
                 "month": month_str,
                 "academic_year": academic_year,
             },
-            {"_id": 0, "student_id": 1},
+            {"_id": 0, "student_id": 1, "fee_component": 1},
         ):
-            existing_ids.add(row["student_id"])
+            (existing_elearning_ids if row["fee_component"] == "e_learning" else existing_ids).add(row["student_id"])
 
     for student in students:
+        cfg = lookup_cfg(student["class_name"], student.get("stream"))
+
+        # E-Learning is its own monthly component; generate it independently of tuition.
+        e_learning = (cfg or {}).get("e_learning_fee", 0)
+        if e_learning > 0 and student["student_id"] not in existing_elearning_ids:
+            due_day_el = cfg.get("due_day", 10)
+            el_entry = StudentLedgerEntry(
+                student_id=student["student_id"],
+                admission_number=student.get("admission_number", ""),
+                class_name=student["class_name"],
+                stream=student.get("stream"),
+                academic_year=academic_year,
+                fee_component="e_learning",
+                fee_type="monthly",
+                description=f"E-Learning — {month_names[int(mn)]} {yr}",
+                month=month_str,
+                gross_amount=e_learning,
+                net_amount=e_learning,
+                due_date=f"{yr}-{mn}-{str(due_day_el).zfill(2)}",
+                status="pending",
+            )
+            d = el_entry.model_dump()
+            d["created_at"] = d["created_at"].isoformat()
+            await db.student_ledger.insert_one(d)
+
         if student["student_id"] in existing_ids:
             skipped += 1
             continue
 
-        cfg = lookup_cfg(student["class_name"], student.get("stream"))
         if not cfg or not cfg.get("monthly_tuition", 0):
             skipped += 1
             continue

@@ -242,7 +242,7 @@ async def set_onboarding_class(onboarding_id: str, request: Request):
     # Total annual = yearly fees + 12 months tuition
     total_annual = (
         sum(item["net_amount"] for item in fee_breakdown if item["fee_type"] in ["one_time", "yearly"])
-        + cfg.get("monthly_tuition", 0) * 12
+        + (cfg.get("monthly_tuition", 0) + cfg.get("e_learning_fee", 0)) * 12
     )
 
     update = {

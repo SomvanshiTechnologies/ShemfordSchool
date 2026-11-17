@@ -34,6 +34,7 @@ class FeeComponentType:
     LAB_FEE = "lab_fee"
     AI_ROBOTICS_FEE = "ai_robotics_fee"
     TUITION = "tuition"
+    E_LEARNING = "e_learning"
     UPGRADATION = "upgradation"
 
 
@@ -47,6 +48,7 @@ FEE_COMPONENT_FREQUENCY = {
     "lab_fee": "yearly",
     "ai_robotics_fee": "yearly",
     "tuition": "monthly",
+    "e_learning": "monthly",
     "upgradation": "one_time",
 }
 
@@ -65,7 +67,7 @@ CLASSES_WITH_STREAMS = ["11th", "12th"]
 
 # Ordered class list for Shemford Futuristic School
 SHEMFORD_CLASSES = [
-    "SF. SR.", "LKG", "UKG",
+    "SF. JR.", "SF. SR.", "LKG", "UKG",
     "1st", "2nd", "3rd", "4th", "5th",
     "6th", "7th", "8th", "9th", "10th",
     "11th", "12th",
@@ -272,6 +274,7 @@ class FeeComponentConfig(BaseModel):
     ai_robotics_fee: float = 0  # for classes IX & X only
     # Monthly fees
     monthly_tuition: float = 0
+    e_learning_fee: float = 0  # E-Learning / Digital Education, billed monthly alongside tuition
     # Upgradation (charged when moving to next class mid-year or on promotion)
     upgradation_fee: float = 0
     # Payment settings
@@ -595,9 +598,9 @@ class Message(BaseModel):
 class ClassStructure(BaseModel):
     model_config = ConfigDict(extra="ignore")
     class_id: str = Field(default_factory=lambda: f"cls_{uuid.uuid4().hex[:8]}")
-    name: str           # e.g. "SF. SR.", "LKG", "1st", "11th"
+    name: str           # e.g. "SF. JR.", "SF. SR.", "LKG", "1st", "11th"
     display_name: str   # e.g. "SF. SR.", "Class 1st", "Class 11th"
-    sort_order: int = 0  # for ordering in UI: 0=SF.SR., 1=LKG, 2=UKG, 3=1st … 14=12th
+    sort_order: int = 0  # for ordering in UI: 0=SF.JR., 1=SF.SR., 2=LKG, 3=UKG, 4=1st … 15=12th
     academic_year: str = Field(default_factory=_current_academic_year)
     # sections: list of dicts with keys: section_name, capacity, class_teacher_id, class_teacher_name
     sections: List[Dict[str, Any]] = Field(default_factory=list)
