@@ -31,7 +31,6 @@ Both return the same report: collections for one day grouped by payment mode, re
 | HTTPS domain `erp.shemfordkatwa.in` | **Pending** (DNS record and certificate). Use HTTPS for any real credentials |
 | Payment-mode mapping (section 7) and transaction rows (section 9) | Implemented and tested in the code repository. They go live on the server at the next deployment |
 | Push webhook | Implemented and tested against a local mock receiver. **Not connected to any real endpoint** |
-| Email copy with Excel attachment | Implemented. Needs an email-service key to be configured (optional channel, section 10.4) |
 
 ---
 
@@ -74,7 +73,7 @@ The API uses a **Bearer token (JWT)**. There is no separate API-key mechanism. A
 
 **How credentials are obtained**
 1. The school administrator creates an account with the **Accountant** role for the integration. In the application this is done through Employees (designation "Accountant").
-2. The login ID and password are handed over through a secure channel by the school. They are never put in documents or e-mailed in clear text.
+2. The login ID and password are handed over through a secure channel by the school. They are never written in documents or sent in clear text.
 3. We recommend a dedicated account used only by the integration, so it can be disabled without affecting staff.
 
 **Step 1: log in** (`POST {BASE_URL}/auth/login`)
@@ -342,6 +341,8 @@ Fields we do **not** store on a payment, and therefore cannot supply: payer name
 
 ### 10.1 What we send
 
+Delivery is by **webhook only**: an HTTP `POST` of the JSON report to your endpoint.
+
 At **23:59 Asia/Kolkata** every day our server builds that day's report and sends it to **your** endpoint:
 
 ```http
@@ -403,13 +404,8 @@ const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.get("X-
 | `DAILY_REPORT_WEBHOOK_SECRET` | *(empty)* | Optional HMAC secret for `X-Signature-SHA256`. Placeholder: `<WEBHOOK-SECRET>` |
 | `DAILY_REPORT_INCLUDE_TRANSACTIONS` | `false` | Add per-payment rows to the push |
 | `DAILY_REPORT_INCLUDE_STUDENT_NAME` | `false` | Add `student_name` to those rows |
-| `DAILY_REPORT_EMAILS` | *(empty)* | Optional e-mail recipients (comma separated) |
 
 Connecting a real receiver is a **configuration change and a restart only**. No code change, unless your system needs a different authentication scheme (for example an API-key header, Basic auth or OAuth), which would be a small addition.
-
-### 10.4 Optional e-mail copy
-
-If `DAILY_REPORT_EMAILS` is set and an e-mail-service key is configured, the same report is e-mailed with an Excel (`.xlsx`) attachment named `daily-collection-<date>.xlsx`. This is independent of the webhook and is currently not active (no e-mail service key is configured yet).
 
 ---
 
@@ -420,9 +416,9 @@ If `DAILY_REPORT_EMAILS` is set and an e-mail-service key is configured, the sam
 | Run time | **23:59 Asia/Kolkata** daily (`DAILY_REPORT_TIME`, `REPORT_TIMEZONE`). The report is for the date that has just ended at that moment |
 | Mechanism | A scheduler checks once a minute for the latest due report and queues it. The job queue then runs and retries it |
 | Server was down at 23:59 | Nothing is lost. On the first check after the server starts, the missed day is queued and sent |
-| Receiver unavailable | The queue retries up to 3 times. If it still fails the day is marked `failed` and is retried about every **30 minutes**, up to **12 attempts**. Only the failed channel is retried (for example e-mail is not resent if only the webhook failed) |
+| Receiver unavailable | The queue retries up to 3 times. If it still fails the day is marked `failed` and is retried about every **30 minutes**, up to **12 attempts**. |
 | Same day triggered twice (restart, retry, manual) | **Sent once.** Each day has an atomic delivery record. A second trigger is skipped. A claim abandoned by a crashed worker is recovered after 15 minutes |
-| No receiver and no e-mail configured | The day is recorded as `skipped`. Nothing is sent |
+| `DAILY_REPORT_WEBHOOK_URL` empty (or not an `http://` / `https://` URL) | The push stays **disabled**. The day is recorded as `skipped` and nothing is sent |
 | Where state is kept | Collection `daily_collection_reports`, one record per date: `status` (`sending`, `sent`, `skipped`, `failed`), `channels`, `attempts`, `error` |
 
 **Timing note:** the push is built at 23:59. A payment recorded between 23:59 and midnight is not in that day's push. It does appear when the GET API is called for that date later, so a periodic GET can be used to reconcile.
@@ -488,14 +484,13 @@ We have made no assumptions about the receiving software.
 | 3 | Issue a dedicated read-only (Accountant) login for GET access | When requested |
 | 4 | Set `DAILY_REPORT_WEBHOOK_URL`, token/secret and the transaction options, then restart | After 14.1 is received |
 | 5 | Run one test delivery to the receiver's test endpoint | After 14.4 |
-| 6 | Optional: e-mail copy (needs an e-mail service key and a verified sender address) | Optional |
 
 ---
 
 ## 15. Security notes
 
 - Send credentials only over **HTTPS**. The interim HTTP address is for connectivity checks only.
-- This document and the Postman files contain **placeholders only**. Never paste real passwords, tokens or secrets into shared documents, tickets or e-mail. Use Postman's secret-type variables.
+- This document and the Postman files contain **placeholders only**. Never paste real passwords, tokens or secrets into shared documents, tickets or chat messages. Use Postman's secret-type variables.
 - Use a dedicated account for the integration and disable it if it is no longer needed.
 - The webhook token and secret are shared only between the two technical teams. Rotate them if they are ever exposed.
 - Student names are personal data and are off by default.
@@ -514,7 +509,7 @@ We have made no assumptions about the receiving software.
 | Scheduler recovery after a simulated missed run | Re-sent automatically on the next check |
 | Automated unit tests | 28 passing |
 
-All testing used a throwaway local database and a local mock receiver. No production data was used and no real e-mail or external request was sent.
+All testing used a throwaway local database and a local mock receiver. No production data was used and no external request was sent.
 
 ---
 

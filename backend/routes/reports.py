@@ -6,7 +6,6 @@ from zoneinfo import ZoneInfo
 import asyncio
 import hashlib
 import hmac
-import html
 import io
 import json
 import logging
@@ -782,8 +781,9 @@ def _academic_excel(student_results, class_name, section, academic_year):
 # ==================== DAILY COLLECTION REPORT ====================
 #
 # Pull: GET /api/reports/daily-collection[?date=YYYY-MM-DD]   (JWT, admin/accountant)
-# Push: a job queued at DAILY_REPORT_TIME (default 23:59) emails the report and,
-#       if configured, POSTs it to an external webhook. Both are optional/env-driven.
+# Push: a job queued at DAILY_REPORT_TIME (default 23:59) POSTs the report as JSON to the
+#       receiving system's webhook (DAILY_REPORT_WEBHOOK_URL). Webhook only: no email, no Excel.
+#       Delivery stays off until that URL is configured.
 #
 # Source of truth is `fee_payments`, which only ever holds *successful*
 # collections: Razorpay/POS/Stripe rows are inserted after verification, and
@@ -952,82 +952,6 @@ async def get_daily_collection_report(request: Request, date: Optional[str] = No
 
 # ── Scheduled push ────────────────────────────────────────────────────────────
 
-def _report_email_html(report: dict) -> str:
-    cell = "padding:6px 12px;border:1px solid #ddd"
-    rows = "".join(
-        f"<tr><td style='{cell}'>{html.escape(k.replace('_', ' ').upper())}</td>"
-        f"<td style='{cell};text-align:right'>Rs.{v:,.2f}</td></tr>"
-        for k, v in report["collections"].items()
-    )
-    return f"""
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background:#E88A1A;padding:20px;text-align:center">
-            <h1 style="color:white;margin:0">Shemford Futuristic School</h1>
-        </div>
-        <div style="padding:24px;background:#f9f9f9">
-            <h2>Daily Collection Report - {report['report_date']}</h2>
-            <table style="border-collapse:collapse;width:100%;background:white">{rows}
-                <tr><td style='{cell}'><b>Total Collection</b></td>
-                    <td style='{cell};text-align:right'><b>Rs.{report['total_collection']:,.2f}</b></td></tr>
-                <tr><td style='{cell}'>Refunds ({report['refunds']['count']})</td>
-                    <td style='{cell};text-align:right'>- Rs.{report['refunds']['total']:,.2f}</td></tr>
-                <tr><td style='{cell}'><b>Net Collection</b></td>
-                    <td style='{cell};text-align:right'><b>Rs.{report['net_collection']:,.2f}</b></td></tr>
-            </table>
-            <p style="color:#666">{report['transaction_count']} transaction(s).</p>
-        </div>
-    </div>"""
-
-
-def _report_xlsx(report: dict) -> bytes:
-    """Excel copy of the daily collection report, emailed as an attachment.
-    Plain values (no formulas): mail/phone previewers do not recalculate, so formulas would show blank."""
-    from io import BytesIO
-    from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Daily Collection"
-    thin = Side(style="thin", color="DDDDDD")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    money = '"Rs." #,##0.00'
-    ws["A1"] = "Shemford Futuristic School"
-    ws["A1"].font = Font(name="Arial", size=14, bold=True, color="FFFFFF")
-    ws["A1"].fill = PatternFill("solid", fgColor="E88A1A")
-    ws.merge_cells("A1:B1")
-    ws["A2"] = f"Daily Collection Report - {report['report_date']}"
-    ws["A2"].font = Font(name="Arial", size=12, bold=True)
-    ws.merge_cells("A2:B2")
-
-    def put(row, label, value, bold=False, fmt=money):
-        a, b = ws.cell(row=row, column=1, value=label), ws.cell(row=row, column=2, value=value)
-        for c in (a, b):
-            c.font = Font(name="Arial", size=11, bold=bold)
-            c.border = border
-        b.number_format = fmt
-        b.alignment = Alignment(horizontal="right")
-
-    row = 4
-    for c, h in enumerate(("Payment Mode", "Amount (INR)"), 1):
-        cell = ws.cell(row=row, column=c, value=h)
-        cell.font = Font(name="Arial", size=11, bold=True)
-        cell.fill = PatternFill("solid", fgColor="F3F3F3")
-        cell.border = border
-    for mode, amount in report["collections"].items():
-        row += 1
-        put(row, mode.replace("_", " ").upper(), amount)
-    put(row + 1, "Total Collection", report["total_collection"], bold=True)
-    put(row + 2, f"Refunds ({report['refunds']['count']})", -report["refunds"]["total"])
-    put(row + 3, "Net Collection", report["net_collection"], bold=True)
-    put(row + 4, "Transactions", report["transaction_count"], fmt="0")
-    ws.column_dimensions["A"].width = 30
-    ws.column_dimensions["B"].width = 20
-    buf = BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
-
-
 async def _push_webhook(report: dict) -> None:
     url = os.environ.get("DAILY_REPORT_WEBHOOK_URL", "").strip()
     body = json.dumps(report, separators=(",", ":")).encode()
@@ -1079,8 +1003,11 @@ async def send_daily_collection_report(report_date: Optional[str] = None) -> Non
         return
 
     done = dict(log.get("channels") or {})
-    recipients = [e.strip() for e in os.environ.get("DAILY_REPORT_EMAILS", "").split(",") if e.strip()]
     webhook = os.environ.get("DAILY_REPORT_WEBHOOK_URL", "").strip()
+    if webhook and not webhook.lower().startswith(("http://", "https://")):
+        # A malformed value must not turn every night into a failing delivery: treat it as "not configured".
+        logger.error("daily-collection: DAILY_REPORT_WEBHOOK_URL is not an http(s) URL — push disabled")
+        webhook = ""
     errors = []
     try:
         report = await build_daily_collection_report(
@@ -1089,25 +1016,14 @@ async def send_daily_collection_report(report_date: Optional[str] = None) -> Non
             include_student_name=_env_flag("DAILY_REPORT_INCLUDE_STUDENT_NAME"),
         )
 
-        if recipients and not done.get("email"):
-            from routes.payments import send_email  # lazy: pulls in Stripe/Resend setup
-            subject = f"Daily Collection Report - {report_date}"
-            attachment = [{"filename": f"daily-collection-{report_date}.xlsx", "content": _report_xlsx(report)}]
-            results = await asyncio.gather(
-                *(send_email(r, subject, _report_email_html(report), attachments=attachment) for r in recipients)
-            )
-            if all(results):
-                done["email"] = True
-            else:
-                errors.append("email delivery failed for one or more recipients")
         if webhook and not done.get("webhook"):
             try:
                 await _push_webhook(report)
                 done["webhook"] = True
             except Exception as exc:
                 errors.append(f"webhook: {exc}")
-        if not recipients and not webhook:
-            logger.warning("daily-collection: no DAILY_REPORT_EMAILS or DAILY_REPORT_WEBHOOK_URL configured — nothing sent")
+        if not webhook:
+            logger.warning("daily-collection: DAILY_REPORT_WEBHOOK_URL not configured — nothing pushed")
     except Exception as exc:
         logger.exception("daily-collection: failed building/sending report for %s", report_date)
         errors.append(str(exc))

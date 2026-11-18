@@ -114,26 +114,42 @@ async def test_build_report_groups_modes_splits_and_refunds(monkeypatch):
 async def test_send_is_idempotent(monkeypatch):
     fake = _FakeDb([{"amount": 10, "payment_method": "cash"}], [])
     monkeypatch.setattr(reports, "db", fake)
-    monkeypatch.setenv("DAILY_REPORT_EMAILS", "a@example.com")
-    monkeypatch.delenv("DAILY_REPORT_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv("DAILY_REPORT_WEBHOOK_URL", "http://127.0.0.1:9/hook")
+    pushed = []
 
-    sent = []
+    async def fake_hook(report):
+        pushed.append(report["report_date"])
 
-    files = []
-
-    async def fake_send(to, subject, html_, attachments=None):
-        sent.append(to)
-        files.extend(a["filename"] for a in attachments or [])
-        return True
-
-    import routes.payments as payments_mod
-    monkeypatch.setattr(payments_mod, "send_email", fake_send)
-
+    monkeypatch.setattr(reports, "_push_webhook", fake_hook)
     await reports.send_daily_collection_report("2026-11-09")
     await reports.send_daily_collection_report("2026-11-09")  # duplicate trigger
-    assert sent == ["a@example.com"]
-    assert files == ["daily-collection-2026-11-09.xlsx"]  # Excel copy attached, sent once
+    assert pushed == ["2026-11-09"]
     assert fake.daily_collection_reports.docs["2026-11-09"]["status"] == "sent"
+
+
+@pytest.mark.anyio
+async def test_push_stays_disabled_until_a_valid_webhook_url_is_configured(monkeypatch):
+    for value in (None, "", "# external system endpoint", "ftp://example.com/x", "example.com/hook"):
+        fake = _FakeDb([{"amount": 10, "payment_method": "cash"}], [])
+        monkeypatch.setattr(reports, "db", fake)
+        if value is None:
+            monkeypatch.delenv("DAILY_REPORT_WEBHOOK_URL", raising=False)
+        else:
+            monkeypatch.setenv("DAILY_REPORT_WEBHOOK_URL", value)
+        pushed = []
+
+        async def fake_hook(report):
+            pushed.append(report)
+
+        monkeypatch.setattr(reports, "_push_webhook", fake_hook)
+        await reports.send_daily_collection_report("2026-11-09")
+        assert pushed == [], value                      # nothing is sent
+        doc = fake.daily_collection_reports.docs["2026-11-09"]
+        assert doc["status"] == "skipped" and doc["error"] is None, value
+
+
+def test_report_module_has_no_email_or_excel_delivery():
+    assert not hasattr(reports, "_report_xlsx") and not hasattr(reports, "_report_email_html")
 
 
 def _utc(**kw):
@@ -165,19 +181,16 @@ def test_needs_run_recovery_rules():
 async def test_concurrent_triggers_deliver_once(monkeypatch):
     fake = _FakeDb([{"amount": 10, "payment_method": "cash"}], [])
     monkeypatch.setattr(reports, "db", fake)
-    monkeypatch.setenv("DAILY_REPORT_EMAILS", "a@example.com")
-    monkeypatch.delenv("DAILY_REPORT_WEBHOOK_URL", raising=False)
-    sent = []
+    monkeypatch.setenv("DAILY_REPORT_WEBHOOK_URL", "http://127.0.0.1:9/hook")
+    pushed = []
 
-    async def fake_send(to, subject, html_, attachments=None):
+    async def fake_hook(report):
         await asyncio.sleep(0.05)  # keep the first run in flight while the others start
-        sent.append(to)
-        return True
+        pushed.append(report["report_date"])
 
-    import routes.payments as payments_mod
-    monkeypatch.setattr(payments_mod, "send_email", fake_send)
+    monkeypatch.setattr(reports, "_push_webhook", fake_hook)
     await asyncio.gather(*(reports.send_daily_collection_report("2026-11-09") for _ in range(4)))
-    assert sent == ["a@example.com"]
+    assert pushed == ["2026-11-09"]
 
 
 @pytest.mark.anyio
@@ -187,63 +200,41 @@ async def test_stale_claim_is_recovered_and_delivered(monkeypatch):
     fake.daily_collection_reports.docs["2026-11-09"] = {
         "_id": "2026-11-09", "status": "sending", "claimed_at": old, "channels": {}, "attempts": 1}
     monkeypatch.setattr(reports, "db", fake)
-    monkeypatch.setenv("DAILY_REPORT_EMAILS", "a@example.com")
-    monkeypatch.delenv("DAILY_REPORT_WEBHOOK_URL", raising=False)
-    sent = []
+    monkeypatch.setenv("DAILY_REPORT_WEBHOOK_URL", "http://127.0.0.1:9/hook")
+    pushed = []
 
-    async def fake_send(to, subject, html_, attachments=None):
-        sent.append(to)
-        return True
+    async def fake_hook(report):
+        pushed.append(report["report_date"])
 
-    import routes.payments as payments_mod
-    monkeypatch.setattr(payments_mod, "send_email", fake_send)
+    monkeypatch.setattr(reports, "_push_webhook", fake_hook)
     await reports.send_daily_collection_report("2026-11-09")
-    assert sent == ["a@example.com"]
+    assert pushed == ["2026-11-09"]
     assert fake.daily_collection_reports.docs["2026-11-09"]["status"] == "sent"
 
 
 @pytest.mark.anyio
-async def test_retry_only_resends_the_failed_channel(monkeypatch):
+async def test_failed_push_is_retried_then_marked_sent(monkeypatch):
     fake = _FakeDb([{"amount": 10, "payment_method": "cash"}], [])
     monkeypatch.setattr(reports, "db", fake)
-    monkeypatch.setenv("DAILY_REPORT_EMAILS", "a@example.com")
     monkeypatch.setenv("DAILY_REPORT_WEBHOOK_URL", "http://127.0.0.1:9/hook")
-    emails, hooks, hook_ok = [], [], {"v": False}
-
-    async def fake_send(to, subject, html_, attachments=None):
-        emails.append(to)
-        return True
+    hooks, hook_ok = [], {"v": False}
 
     async def fake_hook(report):
         hooks.append(report["report_date"])
         if not hook_ok["v"]:
             raise RuntimeError("receiver down")
 
-    import routes.payments as payments_mod
-    monkeypatch.setattr(payments_mod, "send_email", fake_send)
     monkeypatch.setattr(reports, "_push_webhook", fake_hook)
 
     with pytest.raises(RuntimeError):
-        await reports.send_daily_collection_report("2026-11-09")   # email ok, webhook fails
+        await reports.send_daily_collection_report("2026-11-09")   # receiver down -> job queue retries
+    assert fake.daily_collection_reports.docs["2026-11-09"]["status"] == "failed"
     hook_ok["v"] = True
     await reports.send_daily_collection_report("2026-11-09")       # the queue's retry
-    assert emails == ["a@example.com"]        # not re-sent
     assert hooks == ["2026-11-09", "2026-11-09"]
     assert fake.daily_collection_reports.docs["2026-11-09"]["status"] == "sent"
-
-
-def test_report_xlsx_attachment_has_values_for_every_mode():
-    from io import BytesIO
-    from openpyxl import load_workbook
-
-    rep = {"report_date": "2026-11-17", "currency": "INR", "collections": {"cash": 1500.0, "upi": 2500.5},
-           "total_collection": 4000.5, "refunds": {"total": 500.0, "count": 1}, "net_collection": 3500.5,
-           "transaction_count": 3}
-    ws = load_workbook(BytesIO(reports._report_xlsx(rep))).active
-    cells = {r[0]: r[1] for r in ws.iter_rows(min_row=5, values_only=True) if r[0]}
-    assert cells["CASH"] == 1500 and cells["UPI"] == 2500.5
-    assert cells["Total Collection"] == 4000.5 and cells["Net Collection"] == 3500.5
-    assert cells["Refunds (1)"] == -500
+    await reports.send_daily_collection_report("2026-11-09")       # already delivered: not pushed again
+    assert hooks == ["2026-11-09", "2026-11-09"]
 
 
 @pytest.mark.anyio

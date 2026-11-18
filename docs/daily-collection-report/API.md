@@ -15,6 +15,77 @@ Both produce the same JSON (see [Response](#response-body)). All examples below 
 
 ---
 
+## Quick start for the integrating team
+
+Everything needed to call the API is in this section. Details follow in sections 1 to 4.
+
+### Deployed API address
+
+| | Address | Status |
+|---|---|---|
+| Interim (live now) | `http://15.135.209.95:8000` | Plain HTTP, for connectivity testing only. Do not send real credentials over it. It will be closed when the domain goes live |
+| Target production | `https://erp.shemfordkatwa.in` | HTTPS domain, **pending** (DNS record and certificate) |
+
+The report endpoint is `<address>/api/reports/daily-collection`, so today that is
+`http://15.135.209.95:8000/api/reports/daily-collection` and, once the domain is live,
+`https://erp.shemfordkatwa.in/api/reports/daily-collection`. Keep the address as a setting. The server's public address is fixed.
+
+- **Method:** `GET`
+- **Format:** JSON
+- **Check it is reachable:** calling the endpoint without a token returns `401` (this proves the route exists).
+
+### Authentication
+
+Bearer token (JWT), for a user with the **Accountant** or **Admin** role. There is no separate API-key mechanism.
+
+1. **Get credentials:** the school administrator creates an Accountant login for the integration and hands it over securely. Credentials are never written in this document. Use `<LOGIN>` and `<PASSWORD>` below as placeholders.
+2. **Log in:**
+   ```bash
+   curl -s -X POST "<address>/api/auth/login" -H "Content-Type: application/json"         -d '{"email": "<LOGIN>", "password": "<PASSWORD>", "platform": "web"}'
+   ```
+   Response: `{"token": "<ACCESS-TOKEN>", "refresh_token": "<REFRESH-TOKEN>", "user": {...}}`
+3. **Call the report:**
+   ```bash
+   curl -s "<address>/api/reports/daily-collection?date=2026-11-10"         -H "Authorization: Bearer <ACCESS-TOKEN>" -H "Accept: application/json"
+   ```
+4. **Renew without the password:** `POST <address>/api/auth/refresh` with `{"refresh_token": "<REFRESH-TOKEN>"}` returns a new `token` and a new `refresh_token`.
+
+| Rule | Value |
+|---|---|
+| Access token lifetime | 15 minutes |
+| Refresh token lifetime | 30 days. It rotates, so always store the newest refresh token |
+| Login lockout | 5 failed attempts lock that login for 15 minutes |
+| Allowed roles | `admin`, `accountant`. Others get `403` |
+| Rate limits | Login 20 per 15 min per IP. Other endpoints 120 per minute per IP (`429` with `Retry-After`) |
+
+### Sample response
+
+`GET /api/reports/daily-collection?date=2026-11-10` (test data):
+
+```json
+{
+  "report_date": "2026-11-10",
+  "currency": "INR",
+  "collections": {
+    "cash": 1800.0, "cheque": 2000.0, "dd": 1500.0, "card": 3400.0, "upi": 3200.0,
+    "online": 1200.0, "bank_transfer": 800.0, "bharat_qr": 0.0
+  },
+  "total_collection": 13900.0,
+  "refunds": { "total": 600.0, "count": 1 },
+  "net_collection": 13300.0,
+  "transaction_count": 10,
+  "generated_at": "2026-11-18T11:42:00.000000+00:00"
+}
+```
+
+More samples: a day with POS card/UPI/cash/cheque/BharatQR and a split payment ([`samples/pull_pos_modes_day_response.json`](samples/pull_pos_modes_day_response.json)), an empty day ([`samples/pull_empty_day_response.json`](samples/pull_empty_day_response.json)), per-payment rows ([`samples/pull_with_transactions_response.json`](samples/pull_with_transactions_response.json)) and error bodies (`samples/error_*.json`).
+
+### Push to your system: still needs your endpoint
+
+The nightly push (23:59 Asia/Kolkata) is a webhook only: an HTTP `POST` of this JSON to your endpoint. It is **disabled** until the receiving team provides the endpoint URL and its authentication details (section 4 lists what we need). The pull API above works on its own in the meantime.
+
+---
+
 ## 1. Pull: `GET /api/reports/daily-collection`
 
 ```
@@ -149,8 +220,7 @@ const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.get("X-
 | Receiver returns non-2xx / is down | The job queue retries (3 attempts). If still failing, the day is marked `failed` and the scheduler tries again about every **30 minutes**, up to **12 attempts** |
 | Application was down at 23:59 | On the first scheduler poll after it starts (polls every 60 s) the missed day is queued and sent |
 | Same day triggered twice (restart, retry, manual) | Sent **once**. A per-day delivery record is claimed atomically; a repeat is skipped |
-| Email and webhook both configured, only one failed | Only the failed channel is retried |
-| No receiver URL and no email configured | The day is recorded as `skipped`; nothing is sent |
+| `DAILY_REPORT_WEBHOOK_URL` empty or not an http(s) URL | The push stays disabled; the day is recorded as `skipped`; nothing is sent |
 
 Delivery state lives in the `daily_collection_reports` collection (`_id` = date; `status`: `sending`, `sent`, `skipped`, `failed`; plus `channels`, `attempts`, `error`).
 
@@ -165,7 +235,6 @@ Delivery state lives in the `daily_collection_reports` collection (`_id` = date;
 | `DAILY_REPORT_WEBHOOK_SECRET` | empty | Optional HMAC secret for `X-Signature-SHA256` |
 | `DAILY_REPORT_INCLUDE_TRANSACTIONS` | `false` | Add per-payment rows to the pushed payload |
 | `DAILY_REPORT_INCLUDE_STUDENT_NAME` | `false` | Add `student_name` to those rows |
-| `DAILY_REPORT_EMAILS` | empty | Comma-separated recipients; the email carries an Excel (`.xlsx`) copy |
 
 Connecting to a real receiver is a configuration change only: set the URL (and token/secret if they use them) and restart the backend. No code changes.
 
@@ -216,7 +285,7 @@ A payment belongs to the day of its stored `payment_date`, which the application
 
 Files in [`postman/`](postman/): `DailyCollectionReport.postman_collection.json` and `Local.postman_environment.json`. Import both, choose the **Local test** environment, run the collection.
 
-Local test stack (throwaway database, no real email or webhook):
+Local test stack (throwaway database, local mock receiver only):
 1. `python tools/seed_test_data.py` (needs `MONGO_URL=mongodb://localhost:27017`, `DB_NAME=postman_test_dc`; refuses any other database)
 2. `bash tools/run_local.sh` starts the backend (port 8100) and a mock receiver (port 9100)
 3. Run the Postman collection (or `npx newman run postman/DailyCollectionReport.postman_collection.json -e postman/Local.postman_environment.json`)
