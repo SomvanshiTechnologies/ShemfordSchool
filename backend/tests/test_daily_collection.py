@@ -71,6 +71,8 @@ class _FakeDb:
 @pytest.mark.parametrize("raw,expected", [
     ("Cash", "cash"), ("pos_card", "card"), ("pos_upi", "upi"), ("Demand Draft", "dd"),
     ("online", "online"), ("bank_transfer", "bank_transfer"), (None, "unknown"),
+    ("pos_cash", "cash"), ("pos_cheque", "cheque"), ("pos_bharatqr", "bharat_qr"), ("BHARATQR", "bharat_qr"),
+    ("pos_all", "pos_terminal"), ("pos_terminal", "pos_terminal"), ("upi", "upi"),
 ])
 def test_normalize_mode(raw, expected):
     assert reports._normalize_mode(raw) == expected
@@ -100,8 +102,8 @@ async def test_build_report_groups_modes_splits_and_refunds(monkeypatch):
     ]
     monkeypatch.setattr(reports, "db", _FakeDb(payments, orders))
     r = await reports.build_daily_collection_report("2026-11-09")
-    assert r["collections"] == {"cash": 900.0, "cheque": 50.0, "dd": 0.0, "card": 300.0,
-                                "upi": 200.0, "online": 600.0}
+    assert r["collections"] == {"cash": 900.0, "cheque": 50.0, "dd": 0.0, "card": 300.0, "upi": 200.0,
+                                "online": 600.0, "bank_transfer": 0.0, "bharat_qr": 0.0}
     assert r["total_collection"] == 2050.0
     assert r["refunds"] == {"total": 100.0, "count": 1}
     assert r["net_collection"] == 1950.0
@@ -272,3 +274,21 @@ async def test_transactions_are_opt_in_and_names_are_separately_opt_in(monkeypat
 
     named = await reports.build_daily_collection_report("2026-11-09", True, True)
     assert {r["student_name"] for r in named["transactions"]} == {"Asha Rao", "Ben Roy"}
+
+
+@pytest.mark.anyio
+async def test_every_pos_terminal_mode_and_qr_is_not_merged_into_upi(monkeypatch):
+    """The six terminal modes the app can store, plus a split: BharatQR stays separate from UPI."""
+    payments = [
+        {"amount": 100, "payment_method": "pos_card"}, {"amount": 200, "payment_method": "pos_upi"},
+        {"amount": 300, "payment_method": "pos_cash"}, {"amount": 400, "payment_method": "pos_cheque"},
+        {"amount": 500, "payment_method": "pos_bharatqr"}, {"amount": 600, "payment_method": "pos_all"},
+        {"amount": 700, "payment_method": "split", "split_payments": {"cash": 200, "online": 500}},
+    ]
+    monkeypatch.setattr(reports, "db", _FakeDb(payments, []))
+    r = await reports.build_daily_collection_report("2026-11-09")
+    c = r["collections"]
+    assert c["card"] == 100 and c["upi"] == 200 and c["bharat_qr"] == 500       # QR is not UPI
+    assert c["cash"] == 500 and c["cheque"] == 400 and c["online"] == 500       # split separated by mode
+    assert c["pos_terminal"] == 600                                             # mode unknown -> not guessed
+    assert r["total_collection"] == sum(c.values()) == 2800

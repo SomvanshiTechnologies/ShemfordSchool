@@ -16,6 +16,8 @@ Scenario dates (REPORT_TIMEZONE = Asia/Kolkata):
     2026-11-10  full day: every payment mode, a split payment, a refund, a failed refund, failed/cancelled orders
     2026-11-11  one UPI payment (proves a neighbouring day does not leak into 2026-11-10)
     2026-11-09  one cash payment (same)
+    2026-11-12  every POS terminal mode (card, upi, cash, cheque, BharatQR, "all modes"), manual cash/cheque/online,
+                and a cash+online split: used to check the mode mapping
     2026-11-13  no collections at all (empty day)
 """
 import asyncio
@@ -74,6 +76,18 @@ PAYMENTS = [
     pay(10, "stu_001", 400, "pos_card", txn="POS-TXN-1002"),          # alias of card
     pay(11, "stu_002", 777, "upi", date="2026-11-11", txn="UPI-NEXT-DAY"),
     pay(12, "stu_003", 999, "cash", date="2026-11-09"),
+    # ---- 2026-11-12: payment-mode mapping day (expected: cash 600, cheque 450, card 1000, upi 2000,
+    #      bharat_qr 1500, pos_terminal 600, online 1000, total 7150, 10 transactions)
+    pay(21, "stu_001", 1000, "pos_card", date="2026-11-12", txn="POS-C-1"),
+    pay(22, "stu_002", 2000, "pos_upi", date="2026-11-12", txn="POS-U-1"),
+    pay(23, "stu_003", 300, "pos_cash", date="2026-11-12"),
+    pay(24, "stu_001", 400, "pos_cheque", date="2026-11-12", txn="POS-CHQ-1"),
+    pay(25, "stu_002", 1500, "pos_bharatqr", date="2026-11-12", txn="POS-QR-1"),
+    pay(26, "stu_003", 600, "pos_all", date="2026-11-12", txn="POS-ALL-1"),
+    pay(27, "stu_001", 100, "cash", date="2026-11-12"),
+    pay(28, "stu_002", 50, "cheque", date="2026-11-12", txn="CHQ-1"),
+    pay(29, "stu_003", 700, "online", date="2026-11-12", txn="pay_RZP0000002"),
+    pay(30, "stu_001", 500, "split", date="2026-11-12", split={"cash": 200, "online": 300}),
 ]
 
 ORDERS = [

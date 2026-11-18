@@ -1,0 +1,139 @@
+{
+  "report_date": "2026-11-12",
+  "currency": "INR",
+  "collections": {
+    "cash": 600.0,
+    "cheque": 450.0,
+    "dd": 0.0,
+    "card": 1000.0,
+    "upi": 2000.0,
+    "online": 1000.0,
+    "bank_transfer": 0.0,
+    "bharat_qr": 1500.0,
+    "pos_terminal": 600.0
+  },
+  "total_collection": 7150.0,
+  "refunds": {
+    "total": 0,
+    "count": 0
+  },
+  "net_collection": 7150.0,
+  "transaction_count": 10,
+  "transactions": [
+    {
+      "payment_id": "pay_test_021",
+      "receipt_number": "RCP2026TEST021",
+      "transaction_id": "POS-C-1",
+      "payment_date": "2026-11-12",
+      "payment_mode": "card",
+      "amount": 1000.0,
+      "student_id": "stu_001",
+      "admission_number": "SFS2026/0001",
+      "academic_year": "2026-2027"
+    },
+    {
+      "payment_id": "pay_test_022",
+      "receipt_number": "RCP2026TEST022",
+      "transaction_id": "POS-U-1",
+      "payment_date": "2026-11-12",
+      "payment_mode": "upi",
+      "amount": 2000.0,
+      "student_id": "stu_002",
+      "admission_number": "SFS2026/0002",
+      "academic_year": "2026-2027"
+    },
+    {
+      "payment_id": "pay_test_023",
+      "receipt_number": "RCP2026TEST023",
+      "transaction_id": null,
+      "payment_date": "2026-11-12",
+      "payment_mode": "cash",
+      "amount": 300.0,
+      "student_id": "stu_003",
+      "admission_number": "SFS2026/0003",
+      "academic_year": "2026-2027"
+    },
+    {
+      "payment_id": "pay_test_024",
+      "receipt_number": "RCP2026TEST024",
+      "transaction_id": "POS-CHQ-1",
+      "payment_date": "2026-11-12",
+      "payment_mode": "cheque",
+      "amount": 400.0,
+      "student_id": "stu_001",
+      "admission_number": "SFS2026/0001",
+      "academic_year": "2026-2027"
+    },
+    {
+      "payment_id": "pay_test_025",
+      "receipt_number": "RCP2026TEST025",
+      "transaction_id": "POS-QR-1",
+      "payment_date": "2026-11-12",
+      "payment_mode": "bharat_qr",
+      "amount": 1500.0,
+      "student_id": "stu_002",
+      "admission_number": "SFS2026/0002",
+      "academic_year": "2026-2027"
+    },
+    {
+      "payment_id": "pay_test_026",
+      "receipt_number": "RCP2026TEST026",
+      "transaction_id": "POS-ALL-1",
+      "payment_date": "2026-11-12",
+      "payment_mode": "pos_terminal",
+      "amount": 600.0,
+      "student_id": "stu_003",
+      "admission_number": "SFS2026/0003",
+      "academic_year": "2026-2027"
+    },
+    {
+      "payment_id": "pay_test_027",
+      "receipt_number": "RCP2026TEST027",
+      "transaction_id": null,
+      "payment_date": "2026-11-12",
+      "payment_mode": "cash",
+      "amount": 100.0,
+      "student_id": "stu_001",
+      "admission_number": "SFS2026/0001",
+      "academic_year": "2026-2027"
+    },
+    {
+      "payment_id": "pay_test_028",
+      "receipt_number": "RCP2026TEST028",
+      "transaction_id": "CHQ-1",
+      "payment_date": "2026-11-12",
+      "payment_mode": "cheque",
+      "amount": 50.0,
+      "student_id": "stu_002",
+      "admission_number": "SFS2026/0002",
+      "academic_year": "2026-2027"
+    },
+    {
+      "payment_id": "pay_test_029",
+      "receipt_number": "RCP2026TEST029",
+      "transaction_id": "pay_RZP0000002",
+      "payment_date": "2026-11-12",
+      "payment_mode": "online",
+      "amount": 700.0,
+      "student_id": "stu_003",
+      "admission_number": "SFS2026/0003",
+      "academic_year": "2026-2027"
+    },
+    {
+      "payment_id": "pay_test_030",
+      "receipt_number": "RCP2026TEST030",
+      "transaction_id": null,
+      "payment_date": "2026-11-12",
+      "payment_mode": "split",
+      "amount": 500.0,
+      "student_id": "stu_001",
+      "admission_number": "SFS2026/0001",
+      "academic_year": "2026-2027",
+      "split": {
+        "cash": 200.0,
+        "online": 300.0
+      }
+    }
+  ],
+  "generated_at": "2026-11-18T12:30:00.000000+00:00"
+}

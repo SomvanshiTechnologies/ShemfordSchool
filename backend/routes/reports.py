@@ -792,11 +792,22 @@ def _academic_excel(student_results, class_name, section, academic_year):
 # reported as a deduction on the day the refund was initiated.
 
 REPORT_TZ = ZoneInfo(os.environ.get("REPORT_TIMEZONE", "Asia/Kolkata"))
-BASE_MODES = ("cash", "cheque", "dd", "card", "upi")
+# Keys that are always present in `collections` (0 when unused) so the payload shape is stable.
+# These are the modes the application actually records: manual cash/cheque/bank_transfer/online,
+# POS card/upi/BharatQR, plus "dd" (demand draft) which the school asked to report.
+BASE_MODES = ("cash", "cheque", "dd", "card", "upi", "online", "bank_transfer", "bharat_qr")
+# The POS terminal stores `pos_<terminal mode>` (modes: ALL, UPI, CARD, CASH, BHARATQR, CHEQUE).
+# A POS card/UPI/cash/cheque payment is the same instrument as its manual counterpart, so it merges.
+# BharatQR is its own terminal mode and is NOT stored as UPI, so it keeps its own key.
+# `pos_all` ("All modes" chosen on the terminal) does not record which instrument the payer used,
+# so it is reported as `pos_terminal` rather than guessed.
 _MODE_ALIASES = {
     "pos_card": "card", "debit_card": "card", "credit_card": "card",
     "pos_upi": "upi",
     "pos_cash": "cash",
+    "pos_cheque": "cheque",
+    "pos_bharatqr": "bharat_qr", "bharatqr": "bharat_qr", "bharat_qr": "bharat_qr",
+    "pos_all": "pos_terminal",
     "demand_draft": "dd",
 }
 

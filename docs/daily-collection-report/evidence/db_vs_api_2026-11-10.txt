@@ -2,6 +2,7 @@ Report date: 2026-11-10   (raw rows in fee_payments for that day: 10)
 
 Payment mode         MongoDB         API   match
 bank_transfer         800.00      800.00   OK
+bharat_qr               0.00        0.00   OK
 card                3,400.00    3,400.00   OK
 cash                1,800.00    1,800.00   OK
 cheque              2,000.00    2,000.00   OK

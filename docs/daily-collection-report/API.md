@@ -63,7 +63,7 @@ Summary (always present):
 |---|---|---|
 | `report_date` | string | The day reported, `YYYY-MM-DD` |
 | `currency` | string | Always `INR` |
-| `collections` | object | Amount per payment mode (see [modes](#payment-modes)). `cash`, `cheque`, `dd`, `card`, `upi` are **always present** (0 when none); other modes appear only when used that day |
+| `collections` | object | Amount per payment mode (see [modes](#payment-modes)). `cash`, `cheque`, `dd`, `card`, `upi`, `online`, `bank_transfer`, `bharat_qr` are **always present** (0 when none); other modes appear only when used that day |
 | `total_collection` | number | Sum of `collections` |
 | `refunds.total` / `refunds.count` | number | Refunds initiated on that day (see [refunds](#refunds-failed-and-cancelled-payments)) |
 | `net_collection` | number | `total_collection - refunds.total` |
@@ -173,20 +173,33 @@ Connecting to a real receiver is a configuration change only: set the URL (and t
 
 ## Payment modes
 
-`collections` keys are normalised, lower-case:
+`collections` keys are lower-case. These keys are **always present** (0 when unused): `cash`, `cheque`, `dd`, `card`, `upi`, `online`, `bank_transfer`, `bharat_qr`. Any other mode the application records appears only when used.
 
-| Key | Meaning | Includes (aliases) |
+How each way of collecting a fee is stored by the application, and the key it is reported under:
+
+| How it was collected | Stored as | Reported under |
 |---|---|---|
-| `cash` | Cash at the counter | `pos_cash` |
-| `cheque` | Cheque | |
-| `dd` | Demand draft | `demand_draft` |
-| `card` | Debit/credit card, mostly via the POS machine | `pos_card`, `debit_card`, `credit_card` |
-| `upi` | UPI | `pos_upi` |
-| `online` | Online gateway payment (Razorpay/Stripe, parent self-pay). Cards/UPI paid through the gateway are reported here, not under `card`/`upi` | |
-| `bank_transfer` | NEFT/RTGS/IMPS recorded by the school | |
-| *other* | Any other method string used by the application appears under its own key | |
+| Cash at the counter | `cash` | `cash` |
+| Cheque recorded by staff | `cheque` | `cheque` |
+| NEFT/RTGS/IMPS recorded by staff | `bank_transfer` | `bank_transfer` |
+| "Online / UPI" chosen by staff, with a UPI/UTR/NEFT reference, **and** Razorpay/Stripe gateway payments by parents | `online` | `online` |
+| POS terminal: Card | `pos_card` | `card` |
+| POS terminal: UPI only | `pos_upi` | `upi` |
+| POS terminal: Cash | `pos_cash` | `cash` |
+| POS terminal: Cheque | `pos_cheque` | `cheque` |
+| POS terminal: BharatQR | `pos_bharatqr` | `bharat_qr` |
+| POS terminal: "All modes" (payer chooses on the device) | `pos_all` | `pos_terminal` |
+| Split payment (cash + online) | `split` + a breakdown | each part under its own key above |
+| Demand draft | not a built-in method; reported as `dd` if an admin adds a method with that value (or `demand_draft`) | `dd` |
+| Any other method an admin adds in Settings -> Payment Methods | its own value | its own key |
 
-Split payments (one payment settled with several modes) are expanded: each part is added to its own mode, so the mode totals always add up to `total_collection`.
+Things to know:
+- **QR is not UPI.** The POS terminal records BharatQR as its own mode, and the report keeps it as `bharat_qr`. It is never added to `upi`. The application has no other QR payment type.
+- **`online` is one bucket.** Gateway payments don't record whether the payer used UPI, card or net banking, and staff-entered "Online / UPI" payments are stored under `online` too, so `online` is not broken down further, and it is not added to `upi`.
+- **`pos_terminal`:** when staff choose "All modes" on the POS terminal, the terminal's reply does not record which instrument the payer used, so these payments are reported as `pos_terminal` rather than guessed.
+- A POS card/UPI/cash/cheque payment is the same instrument as its manual counterpart, so it is added to `card`, `upi`, `cash` and `cheque`.
+
+Split payments (one payment settled with several modes, e.g. cash 200 + online 300) are expanded: each part is added to its own mode, so the mode totals always add up to `total_collection`.
 
 ## Refunds, failed and cancelled payments
 - Only **successful** payments are counted. Failed and cancelled gateway attempts never create a payment record, so they never appear.

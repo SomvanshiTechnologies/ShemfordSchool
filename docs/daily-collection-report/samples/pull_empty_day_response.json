@@ -6,7 +6,10 @@
     "cheque": 0.0,
     "dd": 0.0,
     "card": 0.0,
-    "upi": 0.0
+    "upi": 0.0,
+    "online": 0.0,
+    "bank_transfer": 0.0,
+    "bharat_qr": 0.0
   },
   "total_collection": 0.0,
   "refunds": {

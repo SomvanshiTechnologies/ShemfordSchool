@@ -18,7 +18,9 @@ DB_NAME = os.environ.get("DB_NAME", "postman_test_dc")
 if not DB_NAME.startswith("postman_test"):
     sys.exit("local test DB only")
 BASE = os.environ.get("BASE_URL", "http://127.0.0.1:8100/api")
-ALIAS = {"pos_card": "card", "debit_card": "card", "credit_card": "card", "pos_upi": "upi", "pos_cash": "cash", "demand_draft": "dd"}
+# Independent restatement of the documented mapping (not imported from the app)
+ALIAS = {"pos_card": "card", "pos_upi": "upi", "pos_cash": "cash", "pos_cheque": "cheque",
+         "pos_bharatqr": "bharat_qr", "pos_all": "pos_terminal", "demand_draft": "dd"}
 
 db = MongoClient("mongodb://localhost:27017")[DB_NAME]
 nxt = (datetime.strptime(DAY, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")

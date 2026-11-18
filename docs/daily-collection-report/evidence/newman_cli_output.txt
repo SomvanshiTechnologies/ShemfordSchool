@@ -1,8 +1,4 @@
-npm warn deprecated har-validator@5.1.5: this library is no longer supported
-npm warn deprecated uuid@3.4.0: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
-npm warn deprecated uuid@8.3.2: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
-npm warn deprecated @faker-js/faker@5.5.3: Please update to a newer version.
-(node:14428) [DEP0176] DeprecationWarning: fs.F_OK is deprecated, use fs.constants.F_OK instead
+(node:2936) [DEP0176] DeprecationWarning: fs.F_OK is deprecated, use fs.constants.F_OK instead
 (Use `node --trace-deprecation ...` to show where the warning was created)
 newman
 
@@ -10,23 +6,23 @@ Daily Collection Report API (local test)
 
 □ 0 - Authentication
 └ Login as admin
-  POST http://127.0.0.1:8100/api/auth/login [200 OK, 1.04kB, 475ms]
+  POST http://127.0.0.1:8100/api/auth/login [200 OK, 1.04kB, 398ms]
   √  login succeeds (200)
   √  access token returned
 
 └ Login as accountant
-  POST http://127.0.0.1:8100/api/auth/login [200 OK, 1.07kB, 410ms]
+  POST http://127.0.0.1:8100/api/auth/login [200 OK, 1.07kB, 462ms]
   √  login succeeds (200)
   √  access token returned
 
 └ Login as teacher (must be refused later)
-  POST http://127.0.0.1:8100/api/auth/login [200 OK, 1.05kB, 446ms]
+  POST http://127.0.0.1:8100/api/auth/login [200 OK, 1.05kB, 376ms]
   √  login succeeds (200)
   √  access token returned
 
 □ 1 - GET daily collection (pull)
 └ Full day, all payment modes + refund (admin)
-  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-10 [200 OK, 789B, 59ms]
+  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-10 [200 OK, 805B, 17ms]
   √  status 200
   √  report_date echoes the request
   √  currency is INR
@@ -44,7 +40,7 @@ Daily Collection Report API (local test)
   √  generated_at present
 
 └ Same day as accountant (allowed role)
-  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-10 [200 OK, 789B, 45ms]
+  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-10 [200 OK, 805B, 16ms]
   √  status 200
   √  report_date echoes the request
   √  currency is INR
@@ -59,26 +55,38 @@ Daily Collection Report API (local test)
   √  net_collection = 13300
   √  transaction_count = 10 (neighbouring days excluded)
 
+└ Payment-mode mapping day: POS modes, BharatQR, split (2026-11-12)
+  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-12 [200 OK, 816B, 24ms]
+  √  status 200
+  √  POS card merges into card (1000); POS UPI into upi (2000)
+  √  BharatQR is its own mode (1500) and is NOT merged into upi
+  √  POS cash + manual cash + split cash part = 600
+  √  POS cheque + manual cheque = 450
+  √  online = 700 + split online part 300 = 1000
+  √  POS terminal payments with no recorded instrument stay as pos_terminal (600), not guessed
+  √  no raw pos_* keys leak through
+  √  total 7150, 10 transactions, sum of modes equals total
+
 └ Neighbouring day 2026-11-11 (only its own 777 UPI)
-  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-11 [200 OK, 733B, 45ms]
+  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-11 [200 OK, 782B, 15ms]
   √  status 200
   √  only the 777 UPI payment
   √  the 250 refund initiated at 01:30 IST on the 11th is counted here, not on the 10th
 
 └ Empty collection day
-  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-13 [200 OK, 723B, 16ms]
+  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-13 [200 OK, 772B, 19ms]
   √  status 200
   √  all modes are 0, totals 0, count 0
-  √  base modes always present
+  √  stable keys always present
 
 └ Default date (no 'date' parameter = today, Asia/Kolkata)
-  GET http://127.0.0.1:8100/api/reports/daily-collection [200 OK, 723B, 24ms]
+  GET http://127.0.0.1:8100/api/reports/daily-collection [200 OK, 772B, 18ms]
   √  status 200
   √  report_date is today in IST
 
 □ 2 - Transaction-level detail (optional, separate section)
 └ include_transactions=true
-  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-10&include_transactions=true [200 OK, 3.28kB, 72ms]
+  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-10&include_transactions=true [200 OK, 3.3kB, 36ms]
   √  status 200
   √  summary is unchanged
   √  10 transaction rows whose amounts add up to the total
@@ -88,47 +96,47 @@ Daily Collection Report API (local test)
   √  student NAME is not included by default
 
 └ include_transactions=true&include_student_name=true
-  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-10&include_transactions=true&include_student_name=true [200 OK, 3.58kB, 24ms]
+  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-10&include_transactions=true&include_student_name=true [200 OK, 3.59kB, 20ms]
   √  status 200
   √  student_name present on every row
   √  name resolves from the students collection
 
 └ include_student_name alone is ignored (no transactions section)
-  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-10&include_student_name=true [200 OK, 789B, 22ms]
+  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-10&include_student_name=true [200 OK, 805B, 16ms]
   √  status 200
   √  no transactions, so no names leak
 
 □ 3 - Error handling
 └ Invalid date: text
-  GET http://127.0.0.1:8100/api/reports/daily-collection?date=abc [400 Bad Request, 514B, 20ms]
+  GET http://127.0.0.1:8100/api/reports/daily-collection?date=abc [400 Bad Request, 514B, 16ms]
   √  status 400
   √  error message mentions: YYYY-MM-DD
 
 └ Invalid date: impossible calendar date
-  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-13-45 [400 Bad Request, 514B, 12ms]
+  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-13-45 [400 Bad Request, 514B, 14ms]
   √  status 400
   √  error message mentions: YYYY-MM-DD
 
 └ Invalid date: not zero-padded
-  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-3-9 [400 Bad Request, 514B, 14ms]
+  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-3-9 [400 Bad Request, 514B, 19ms]
   √  status 400
   √  error message mentions: YYYY-MM-DD
 
 └ Invalid date: future date
-  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2099-01-01 [400 Bad Request, 509B, 16ms]
+  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2099-01-01 [400 Bad Request, 509B, 15ms]
   √  status 400
   √  error message mentions: future
 
 └ Unauthorized: no token
-  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-10 [401 Unauthorized, 298B, 6ms]
+  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-10 [401 Unauthorized, 298B, 5ms]
   √  rejected without a token (401/403)
 
 └ Unauthorized: invalid token
-  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-10 [401 Unauthorized, 511B, 11ms]
+  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-10 [401 Unauthorized, 511B, 10ms]
   √  rejected with a bad token (401/403)
 
 └ Forbidden: teacher role
-  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-10 [403 Forbidden, 549B, 32ms]
+  GET http://127.0.0.1:8100/api/reports/daily-collection?date=2026-11-10 [403 Forbidden, 549B, 22ms]
   √  teacher refused (403)
 
 ┌─────────────────────────┬───────────────────┬───────────────────┐
@@ -136,17 +144,17 @@ Daily Collection Report API (local test)
 ├─────────────────────────┼───────────────────┼───────────────────┤
 │              iterations │                 1 │                 0 │
 ├─────────────────────────┼───────────────────┼───────────────────┤
-│                requests │                18 │                 0 │
+│                requests │                19 │                 0 │
 ├─────────────────────────┼───────────────────┼───────────────────┤
-│            test-scripts │                18 │                 0 │
+│            test-scripts │                19 │                 0 │
 ├─────────────────────────┼───────────────────┼───────────────────┤
 │      prerequest-scripts │                 0 │                 0 │
 ├─────────────────────────┼───────────────────┼───────────────────┤
-│              assertions │                65 │                 0 │
+│              assertions │                74 │                 0 │
 ├─────────────────────────┴───────────────────┴───────────────────┤
-│ total run duration: 3.4s                                        │
+│ total run duration: 3.2s                                        │
 ├─────────────────────────────────────────────────────────────────┤
-│ total data received: 9.88kB (approx)                            │
+│ total data received: 10.46kB (approx)                           │
 ├─────────────────────────────────────────────────────────────────┤
-│ average response time: 97ms [min: 6ms, max: 475ms, s.d.: 156ms] │
+│ average response time: 79ms [min: 5ms, max: 462ms, s.d.: 144ms] │
 └─────────────────────────────────────────────────────────────────┘

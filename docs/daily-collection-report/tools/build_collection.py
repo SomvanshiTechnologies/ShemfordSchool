@@ -87,6 +87,18 @@ collection = {
                 token="adminToken", params={"date": "{{fullDay}}"}),
             req("Same day as accountant (allowed role)", "GET", "/reports/daily-collection",
                 full_day_asserts(), token="accountantToken", params={"date": "{{fullDay}}"}),
+            req("Payment-mode mapping day: POS modes, BharatQR, split (2026-11-12)", "GET", "/reports/daily-collection", [
+                "pm.test('status 200', () => pm.response.to.have.status(200));",
+                "const b = pm.response.json(); const c = b.collections;",
+                "pm.test('POS card merges into card (1000); POS UPI into upi (2000)', () => { pm.expect(c.card).to.eql(1000); pm.expect(c.upi).to.eql(2000); });",
+                "pm.test('BharatQR is its own mode (1500) and is NOT merged into upi', () => { pm.expect(c.bharat_qr).to.eql(1500); pm.expect(c.upi).to.not.eql(3500); });",
+                "pm.test('POS cash + manual cash + split cash part = 600', () => pm.expect(c.cash).to.eql(600));",
+                "pm.test('POS cheque + manual cheque = 450', () => pm.expect(c.cheque).to.eql(450));",
+                "pm.test('online = 700 + split online part 300 = 1000', () => pm.expect(c.online).to.eql(1000));",
+                "pm.test('POS terminal payments with no recorded instrument stay as pos_terminal (600), not guessed', () => pm.expect(c.pos_terminal).to.eql(600));",
+                "pm.test('no raw pos_* keys leak through', () => Object.keys(c).forEach(k => pm.expect(k.startsWith('pos_') && k !== 'pos_terminal').to.eql(false)));",
+                "pm.test('total 7150, 10 transactions, sum of modes equals total', () => { pm.expect(b.total_collection).to.eql(7150); pm.expect(b.transaction_count).to.eql(10); pm.expect(Object.values(c).reduce((a, v) => a + v, 0)).to.eql(7150); });",
+            ], token="adminToken", params={"date": "2026-11-12"}),
             req("Neighbouring day 2026-11-11 (only its own 777 UPI)", "GET", "/reports/daily-collection", [
                 "pm.test('status 200', () => pm.response.to.have.status(200));",
                 "const b = pm.response.json();",
@@ -97,7 +109,7 @@ collection = {
                 "pm.test('status 200', () => pm.response.to.have.status(200));",
                 "const b = pm.response.json();",
                 "pm.test('all modes are 0, totals 0, count 0', () => { Object.values(b.collections).forEach(v => pm.expect(v).to.eql(0)); pm.expect(b.total_collection).to.eql(0); pm.expect(b.net_collection).to.eql(0); pm.expect(b.transaction_count).to.eql(0); });",
-                "pm.test('base modes always present', () => ['cash','cheque','dd','card','upi'].forEach(m => pm.expect(b.collections).to.have.property(m)));",
+                "pm.test('stable keys always present', () => ['cash','cheque','dd','card','upi','online','bank_transfer','bharat_qr'].forEach(m => pm.expect(b.collections).to.have.property(m)));",
             ], token="adminToken", params={"date": "{{emptyDay}}"}),
             req("Default date (no 'date' parameter = today, Asia/Kolkata)", "GET", "/reports/daily-collection", [
                 "pm.test('status 200', () => pm.response.to.have.status(200));",
