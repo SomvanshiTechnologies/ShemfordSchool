@@ -1,0 +1,6 @@
+{
+  "http_status": 400,
+  "body": {
+    "detail": "date must be in YYYY-MM-DD format"
+  }
+}

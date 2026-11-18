@@ -242,3 +242,33 @@ def test_report_xlsx_attachment_has_values_for_every_mode():
     assert cells["CASH"] == 1500 and cells["UPI"] == 2500.5
     assert cells["Total Collection"] == 4000.5 and cells["Net Collection"] == 3500.5
     assert cells["Refunds (1)"] == -500
+
+
+@pytest.mark.anyio
+async def test_transactions_are_opt_in_and_names_are_separately_opt_in(monkeypatch):
+    payments = [
+        {"payment_id": "p1", "receipt_number": "R1", "transaction_id": "T1", "payment_date": "2026-11-09",
+         "amount": 700, "payment_method": "pos_card", "student_id": "s1", "academic_year": "2026-2027"},
+        {"payment_id": "p2", "receipt_number": "R2", "payment_date": "2026-11-09", "amount": 300,
+         "payment_method": "split", "split_payments": {"cash": 100, "pos_upi": 200}, "student_id": "s2"},
+    ]
+    fake = _FakeDb(payments, [])
+    fake.students = _Coll([
+        {"student_id": "s1", "admission_number": "A1", "first_name": "Asha", "last_name": "Rao"},
+        {"student_id": "s2", "admission_number": "A2", "first_name": "Ben", "last_name": "Roy"},
+    ])
+    monkeypatch.setattr(reports, "db", fake)
+
+    plain = await reports.build_daily_collection_report("2026-11-09")
+    assert "transactions" not in plain
+
+    rep = await reports.build_daily_collection_report("2026-11-09", include_transactions=True)
+    assert rep["total_collection"] == plain["total_collection"] == 1000.0
+    rows = {r["payment_id"]: r for r in rep["transactions"]}
+    assert rows["p1"]["payment_mode"] == "card" and rows["p1"]["admission_number"] == "A1"
+    assert rows["p2"]["payment_mode"] == "split" and rows["p2"]["split"] == {"cash": 100.0, "upi": 200.0}
+    assert all("student_name" not in r for r in rep["transactions"])
+    assert sum(r["amount"] for r in rep["transactions"]) == rep["total_collection"]
+
+    named = await reports.build_daily_collection_report("2026-11-09", True, True)
+    assert {r["student_name"] for r in named["transactions"]} == {"Asha Rao", "Ben Roy"}

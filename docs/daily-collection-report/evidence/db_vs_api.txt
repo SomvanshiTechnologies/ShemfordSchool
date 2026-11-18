@@ -1,0 +1,17 @@
+Report date: 2026-11-10   (raw rows in fee_payments for that day: 10)
+
+Payment mode         MongoDB         API   match
+bank_transfer         800.00      800.00   OK
+card                3,400.00    3,400.00   OK
+cash                1,800.00    1,800.00   OK
+cheque              2,000.00    2,000.00   OK
+dd                  1,500.00    1,500.00   OK
+online              1,200.00    1,200.00   OK
+upi                 3,200.00    3,200.00   OK
+TOTAL              13,900.00   13,900.00   OK
+Refunds               600.00      600.00   OK
+Net                13,300.00   13,300.00   OK
+Transactions           10.00       10.00   OK
+Refund count            1.00        1.00   OK
+
+RESULT: ALL TOTALS MATCH

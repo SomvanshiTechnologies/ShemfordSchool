@@ -823,7 +823,47 @@ def _parse_report_date(value: Optional[str]) -> str:
     return d.isoformat()
 
 
-async def build_daily_collection_report(report_date: str) -> dict:
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+async def _transaction_details(payments: list, include_student_name: bool) -> list:
+    """Per-payment rows for the optional `transactions` section. fee_payments stores the
+    student_id only, so admission number (and name, when asked for) come from `students`."""
+    ids = list({p["student_id"] for p in payments if p.get("student_id")})
+    students = {}
+    if ids:
+        for s in await db.students.find(
+            {"student_id": {"$in": ids}},
+            {"_id": 0, "student_id": 1, "admission_number": 1, "first_name": 1, "last_name": 1},
+        ).to_list(None):
+            students[s["student_id"]] = s
+    rows = []
+    for p in sorted(payments, key=lambda x: (str(x.get("created_at") or ""), str(x.get("payment_id") or ""))):
+        stu = students.get(p.get("student_id"), {})
+        split = p.get("split_payments")
+        is_split = isinstance(split, dict) and bool(split)
+        row = {
+            "payment_id": p.get("payment_id"),
+            "receipt_number": p.get("receipt_number"),
+            "transaction_id": p.get("transaction_id"),
+            "payment_date": str(p.get("payment_date") or "")[:10],
+            "payment_mode": "split" if is_split else _normalize_mode(p.get("payment_method")),
+            "amount": round(float(p.get("amount") or 0), 2),
+            "student_id": p.get("student_id"),
+            "admission_number": stu.get("admission_number"),
+            "academic_year": p.get("academic_year") or None,
+        }
+        if is_split:
+            row["split"] = {_normalize_mode(k): round(float(v or 0), 2) for k, v in split.items()}
+        if include_student_name:
+            row["student_name"] = f"{stu.get('first_name', '')} {stu.get('last_name', '')}".strip() or None
+        rows.append(row)
+    return rows
+
+
+async def build_daily_collection_report(report_date: str, include_transactions: bool = False,
+                                        include_student_name: bool = False) -> dict:
     day = datetime.strptime(report_date, "%Y-%m-%d").date()
     next_day = (day + timedelta(days=1)).isoformat()
 
@@ -831,7 +871,9 @@ async def build_daily_collection_report(report_date: str) -> dict:
     # so a half-open string range matches both.
     payments = await db.fee_payments.find(
         {"payment_date": {"$gte": report_date, "$lt": next_day}},
-        {"_id": 0, "amount": 1, "payment_method": 1, "split_payments": 1},
+        {"_id": 0, "amount": 1, "payment_method": 1, "split_payments": 1,
+         **({"payment_id": 1, "receipt_number": 1, "transaction_id": 1, "payment_date": 1, "student_id": 1,
+             "academic_year": 1, "created_at": 1} if include_transactions else {})},
     ).to_list(None)
 
     collections = {m: 0.0 for m in BASE_MODES}
@@ -865,7 +907,7 @@ async def build_daily_collection_report(report_date: str) -> dict:
     refunds = [r for r in refunds if str(r.get("refund_status") or "").lower() != "failed"]
     refund_total = round(sum(float(r.get("refund_amount") or 0) for r in refunds), 2)
 
-    return {
+    report = {
         "report_date": report_date,
         "currency": "INR",
         "collections": collections,
@@ -874,15 +916,22 @@ async def build_daily_collection_report(report_date: str) -> dict:
         "net_collection": round(total - refund_total, 2),
         "transaction_count": len(payments),
     }
+    if include_transactions:
+        report["transactions"] = await _transaction_details(payments, include_student_name)
+    return report
 
 
 @router.get("/reports/daily-collection")
-async def get_daily_collection_report(request: Request, date: Optional[str] = None):
-    """Collections for one day grouped by payment mode. Defaults to today (REPORT_TIMEZONE)."""
+async def get_daily_collection_report(request: Request, date: Optional[str] = None,
+                                      include_transactions: bool = False, include_student_name: bool = False):
+    """Collections for one day grouped by payment mode. Defaults to today (REPORT_TIMEZONE).
+    include_transactions=true adds a separate per-payment `transactions` list;
+    include_student_name=true (only with include_transactions) adds the student's name to each row."""
     await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     report_date = _parse_report_date(date)
     try:
-        report = await build_daily_collection_report(report_date)
+        report = await build_daily_collection_report(
+            report_date, include_transactions, include_transactions and include_student_name)
     except Exception:
         logger.exception("daily-collection: failed to build report for %s", report_date)
         raise HTTPException(status_code=500, detail="Could not generate the collection report")
@@ -1023,7 +1072,11 @@ async def send_daily_collection_report(report_date: Optional[str] = None) -> Non
     webhook = os.environ.get("DAILY_REPORT_WEBHOOK_URL", "").strip()
     errors = []
     try:
-        report = await build_daily_collection_report(report_date)
+        report = await build_daily_collection_report(
+            report_date,
+            include_transactions=_env_flag("DAILY_REPORT_INCLUDE_TRANSACTIONS"),
+            include_student_name=_env_flag("DAILY_REPORT_INCLUDE_STUDENT_NAME"),
+        )
 
         if recipients and not done.get("email"):
             from routes.payments import send_email  # lazy: pulls in Stripe/Resend setup

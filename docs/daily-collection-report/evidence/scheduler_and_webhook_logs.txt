@@ -1,0 +1,48 @@
+mock receiver listening on http://127.0.0.1:9100/receive  (log: C:\Users\HP\ShemfordSchool\docs\daily-collection-report\tools\received.jsonl)
+2026-11-18 17:10:37,704 - routes.reports - INFO - daily-collection scheduler started (23:59 Asia/Kolkata, polling every 60s)
+2026-11-18 17:10:37,715 - job_queue - INFO - Job enqueued: job_be6cc074eb1a4dea task=daily_collection_report delay=0s
+2026-11-18 17:10:37,715 - routes.reports - INFO - daily-collection: queued report for 2026-11-17
+#1 POST /receive key=daily-collection-2026-11-17 checks={'signature_valid': True, 'bearer_valid': True, 'json_valid': True}
+2026-11-18 17:10:53,617 - routes.reports - INFO - daily-collection: report for 2026-11-17 sent via ['webhook']
+2026-11-18 17:10:53,619 - job_queue - INFO - Job job_be6cc074eb1a4dea DONE task=daily_collection_report attempts=1
+2026-11-18 17:12:41,178 - shemford.api - INFO - GET /api/reports/daily-collection | status=200 auth=yes duration=48ms rid=5645f32eba504478938c6b545ab82d8b
+INFO:     127.0.0.1:61718 - "GET /api/reports/daily-collection?date=2026-11-10 HTTP/1.1" 200 OK
+2026-11-18 17:12:41,315 - shemford.api - INFO - GET /api/reports/daily-collection | status=200 auth=yes duration=29ms rid=6da0f2dbf5524c118d81bad8436ce7de
+INFO:     127.0.0.1:61718 - "GET /api/reports/daily-collection?date=2026-11-10 HTTP/1.1" 200 OK
+2026-11-18 17:12:41,456 - shemford.api - INFO - GET /api/reports/daily-collection | status=200 auth=yes duration=31ms rid=14e0b92c412644ab9065f1536f8532b0
+INFO:     127.0.0.1:61718 - "GET /api/reports/daily-collection?date=2026-11-11 HTTP/1.1" 200 OK
+2026-11-18 17:12:41,569 - shemford.api - INFO - GET /api/reports/daily-collection | status=200 auth=yes duration=11ms rid=153651c5e8d34f8d98fea5344c5d9389
+INFO:     127.0.0.1:61718 - "GET /api/reports/daily-collection?date=2026-11-13 HTTP/1.1" 200 OK
+2026-11-18 17:12:41,683 - shemford.api - INFO - GET /api/reports/daily-collection | status=200 auth=yes duration=15ms rid=7943f77ad73746b592ce01f9c893b5bb
+INFO:     127.0.0.1:61718 - "GET /api/reports/daily-collection HTTP/1.1" 200 OK
+2026-11-18 17:12:41,888 - shemford.api - INFO - GET /api/reports/daily-collection | status=200 auth=yes duration=63ms rid=284ce875b1d5469095ae5e05c94d2c67
+INFO:     127.0.0.1:61718 - "GET /api/reports/daily-collection?date=2026-11-10&include_transactions=true HTTP/1.1" 200 OK
+2026-11-18 17:12:42,015 - shemford.api - INFO - GET /api/reports/daily-collection | status=200 auth=yes duration=17ms rid=04d09b93caa14d6fb17afb0d4f853892
+INFO:     127.0.0.1:61718 - "GET /api/reports/daily-collection?date=2026-11-10&include_transactions=true&include_student_name=true HTTP/1.1" 200 OK
+2026-11-18 17:12:42,124 - shemford.api - INFO - GET /api/reports/daily-collection | status=200 auth=yes duration=14ms rid=4043e1113de74b51bc5448200dd7e6b8
+INFO:     127.0.0.1:61718 - "GET /api/reports/daily-collection?date=2026-11-10&include_student_name=true HTTP/1.1" 200 OK
+2026-11-18 17:12:42,213 - shemford.api - INFO - GET /api/reports/daily-collection | status=400 auth=yes duration=12ms rid=dd6dc010ba6e4d74adbe75b26e5bcad3
+INFO:     127.0.0.1:61718 - "GET /api/reports/daily-collection?date=abc HTTP/1.1" 400 Bad Request
+2026-11-18 17:12:42,316 - shemford.api - INFO - GET /api/reports/daily-collection | status=400 auth=yes duration=7ms rid=5167541914ee4804ad7dc6822bce3bf9
+INFO:     127.0.0.1:61718 - "GET /api/reports/daily-collection?date=2026-13-45 HTTP/1.1" 400 Bad Request
+2026-11-18 17:12:42,412 - shemford.api - INFO - GET /api/reports/daily-collection | status=400 auth=yes duration=10ms rid=b33e7e263ab74e44bbf7100e84fd5c93
+INFO:     127.0.0.1:61718 - "GET /api/reports/daily-collection?date=2026-3-9 HTTP/1.1" 400 Bad Request
+2026-11-18 17:12:42,508 - shemford.api - INFO - GET /api/reports/daily-collection | status=400 auth=yes duration=10ms rid=5373486bbbbe41ccbf2ba3085ebdad99
+INFO:     127.0.0.1:61718 - "GET /api/reports/daily-collection?date=2099-01-01 HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:61718 - "GET /api/reports/daily-collection?date=2026-11-10 HTTP/1.1" 401 Unauthorized
+2026-11-18 17:12:42,706 - shemford.api - INFO - GET /api/reports/daily-collection | status=401 auth=yes duration=5ms rid=634acc8d47c74013836dd17f37aa97fe
+INFO:     127.0.0.1:61718 - "GET /api/reports/daily-collection?date=2026-11-10 HTTP/1.1" 401 Unauthorized
+2026-11-18 17:12:42,821 - shemford.api - INFO - GET /api/reports/daily-collection | status=403 auth=yes duration=19ms rid=bc13698242b04a0fbdf70ea3f6ae8d44
+INFO:     127.0.0.1:61718 - "GET /api/reports/daily-collection?date=2026-11-10 HTTP/1.1" 403 Forbidden
+2026-11-18 17:13:07,914 - shemford.api - INFO - GET /api/reports/daily-collection | status=200 auth=yes duration=58ms rid=23b64e558a304b3aa637fbf3321bc2f3
+INFO:     127.0.0.1:61729 - "GET /api/reports/daily-collection?date=2026-11-10 HTTP/1.1" 200 OK
+#2 POST /receive key=daily-collection-2026-11-10 checks={'signature_valid': True, 'bearer_valid': True, 'json_valid': True}
+2026-11-18 17:13:39,327 - routes.reports - INFO - daily-collection: report for 2026-11-10 sent via ['webhook']
+2026-11-18 17:13:39,329 - job_queue - INFO - Job job_a61ee49afe4b49cb DONE task=daily_collection_report attempts=1
+2026-11-18 17:13:54,353 - routes.reports - INFO - daily-collection: 2026-11-10 already sent or in progress — skipping
+2026-11-18 17:13:54,355 - job_queue - INFO - Job job_9bb9776950354ec5 DONE task=daily_collection_report attempts=1
+2026-11-18 17:14:37,764 - job_queue - INFO - Job enqueued: job_bb64692fb10446ec task=daily_collection_report delay=0s
+2026-11-18 17:14:37,764 - routes.reports - INFO - daily-collection: queued report for 2026-11-17
+#3 POST /receive key=daily-collection-2026-11-17 checks={'signature_valid': True, 'bearer_valid': True, 'json_valid': True}
+2026-11-18 17:14:39,950 - routes.reports - INFO - daily-collection: report for 2026-11-17 sent via ['webhook']
+2026-11-18 17:14:39,953 - job_queue - INFO - Job job_bb64692fb10446ec DONE task=daily_collection_report attempts=1

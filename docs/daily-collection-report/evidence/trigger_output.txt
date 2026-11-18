@@ -1,0 +1,6 @@
+Trigger #1 for 2026-11-10
+  delivery log: {"status": "sent", "claimed_at": "2026-11-18T11:43:38.714919+00:00", "channels": {"webhook": true}, "attempts": 1, "error": null, "finished_at": "2026-11-18T11:43:39.326404+00:00"}
+  POSTs received by the mock for 2026-11-10: 0 -> 1
+Trigger #2 for 2026-11-10 (duplicate trigger, must NOT POST again)
+  delivery log: {"status": "sent", "claimed_at": "2026-11-18T11:43:38.714919+00:00", "channels": {"webhook": true}, "attempts": 1, "error": null, "finished_at": "2026-11-18T11:43:39.326404+00:00"}
+  POSTs received by the mock for 2026-11-10: 1 -> 1

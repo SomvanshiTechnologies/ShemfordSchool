@@ -1,0 +1,889 @@
+{
+  "info": {
+    "name": "Daily Collection Report API (local test)",
+    "description": "Run the folders top to bottom. Needs the local test stack (docs/daily-collection-report/tools/run_local.sh) seeded with seed_test_data.py. Never point baseUrl at production with test credentials.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "adminToken",
+      "value": ""
+    },
+    {
+      "key": "accountantToken",
+      "value": ""
+    },
+    {
+      "key": "teacherToken",
+      "value": ""
+    },
+    {
+      "key": "fullDay",
+      "value": "2026-11-10"
+    },
+    {
+      "key": "emptyDay",
+      "value": "2026-11-13"
+    }
+  ],
+  "item": [
+    {
+      "name": "0 - Authentication",
+      "item": [
+        {
+          "name": "Login as admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('login succeeds (200)', () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json();",
+                  "pm.test('access token returned', () => pm.expect(j.access_token || j.token).to.be.a('string'));",
+                  "pm.collectionVariables.set('adminToken', j.access_token || j.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{testPassword}}\",\n  \"platform\": \"web\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Login as accountant",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('login succeeds (200)', () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json();",
+                  "pm.test('access token returned', () => pm.expect(j.access_token || j.token).to.be.a('string'));",
+                  "pm.collectionVariables.set('accountantToken', j.access_token || j.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{accountantEmail}}\",\n  \"password\": \"{{testPassword}}\",\n  \"platform\": \"web\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Login as teacher (must be refused later)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('login succeeds (200)', () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json();",
+                  "pm.test('access token returned', () => pm.expect(j.access_token || j.token).to.be.a('string'));",
+                  "pm.collectionVariables.set('teacherToken', j.access_token || j.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{teacherEmail}}\",\n  \"password\": \"{{testPassword}}\",\n  \"platform\": \"web\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "1 - GET daily collection (pull)",
+      "item": [
+        {
+          "name": "Full day, all payment modes + refund (admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('report_date echoes the request', () => pm.expect(b.report_date).to.eql(pm.collectionVariables.get('fullDay')));",
+                  "pm.test('currency is INR', () => pm.expect(b.currency).to.eql('INR'));",
+                  "pm.test('cash = 1800 (1000 + 500 + 300 from the split)', () => pm.expect(b.collections.cash).to.eql(1800));",
+                  "pm.test('cheque = 2000', () => pm.expect(b.collections.cheque).to.eql(2000));",
+                  "pm.test('dd = 1500', () => pm.expect(b.collections.dd).to.eql(1500));",
+                  "pm.test('card = 3400 (3000 card + 400 pos_card alias)', () => pm.expect(b.collections.card).to.eql(3400));",
+                  "pm.test('upi = 3200 (2500 + 700 from the split)', () => pm.expect(b.collections.upi).to.eql(3200));",
+                  "pm.test('online = 1200 and bank_transfer = 800 reported as their own modes', () => { pm.expect(b.collections.online).to.eql(1200); pm.expect(b.collections.bank_transfer).to.eql(800); });",
+                  "pm.test('total_collection = 13900 = sum of modes', () => { pm.expect(b.total_collection).to.eql(13900); pm.expect(Object.values(b.collections).reduce((a, c) => a + c, 0)).to.eql(13900); });",
+                  "pm.test('refund of 600 counted; failed refund and next-day refund excluded', () => { pm.expect(b.refunds.total).to.eql(600); pm.expect(b.refunds.count).to.eql(1); });",
+                  "pm.test('net_collection = 13300', () => pm.expect(b.net_collection).to.eql(13300));",
+                  "pm.test('transaction_count = 10 (neighbouring days excluded)', () => pm.expect(b.transaction_count).to.eql(10));",
+                  "pm.test('summary only: no transactions key by default', () => pm.expect(b).to.not.have.property('transactions'));",
+                  "pm.test('generated_at present', () => pm.expect(b.generated_at).to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date={{fullDay}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{fullDay}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Same day as accountant (allowed role)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('report_date echoes the request', () => pm.expect(b.report_date).to.eql(pm.collectionVariables.get('fullDay')));",
+                  "pm.test('currency is INR', () => pm.expect(b.currency).to.eql('INR'));",
+                  "pm.test('cash = 1800 (1000 + 500 + 300 from the split)', () => pm.expect(b.collections.cash).to.eql(1800));",
+                  "pm.test('cheque = 2000', () => pm.expect(b.collections.cheque).to.eql(2000));",
+                  "pm.test('dd = 1500', () => pm.expect(b.collections.dd).to.eql(1500));",
+                  "pm.test('card = 3400 (3000 card + 400 pos_card alias)', () => pm.expect(b.collections.card).to.eql(3400));",
+                  "pm.test('upi = 3200 (2500 + 700 from the split)', () => pm.expect(b.collections.upi).to.eql(3200));",
+                  "pm.test('online = 1200 and bank_transfer = 800 reported as their own modes', () => { pm.expect(b.collections.online).to.eql(1200); pm.expect(b.collections.bank_transfer).to.eql(800); });",
+                  "pm.test('total_collection = 13900 = sum of modes', () => { pm.expect(b.total_collection).to.eql(13900); pm.expect(Object.values(b.collections).reduce((a, c) => a + c, 0)).to.eql(13900); });",
+                  "pm.test('refund of 600 counted; failed refund and next-day refund excluded', () => { pm.expect(b.refunds.total).to.eql(600); pm.expect(b.refunds.count).to.eql(1); });",
+                  "pm.test('net_collection = 13300', () => pm.expect(b.net_collection).to.eql(13300));",
+                  "pm.test('transaction_count = 10 (neighbouring days excluded)', () => pm.expect(b.transaction_count).to.eql(10));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accountantToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date={{fullDay}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{fullDay}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Neighbouring day 2026-11-11 (only its own 777 UPI)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('only the 777 UPI payment', () => { pm.expect(b.collections.upi).to.eql(777); pm.expect(b.total_collection).to.eql(777); pm.expect(b.transaction_count).to.eql(1); });",
+                  "pm.test('the 250 refund initiated at 01:30 IST on the 11th is counted here, not on the 10th', () => { pm.expect(b.refunds.count).to.eql(1); pm.expect(b.refunds.total).to.eql(250); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date=2026-11-11",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "2026-11-11"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Empty collection day",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('all modes are 0, totals 0, count 0', () => { Object.values(b.collections).forEach(v => pm.expect(v).to.eql(0)); pm.expect(b.total_collection).to.eql(0); pm.expect(b.net_collection).to.eql(0); pm.expect(b.transaction_count).to.eql(0); });",
+                  "pm.test('base modes always present', () => ['cash','cheque','dd','card','upi'].forEach(m => pm.expect(b.collections).to.have.property(m)));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date={{emptyDay}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{emptyDay}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Default date (no 'date' parameter = today, Asia/Kolkata)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const today = new Date().toLocaleDateString('en-CA', {timeZone: 'Asia/Kolkata'});",
+                  "pm.test('report_date is today in IST', () => pm.expect(pm.response.json().report_date).to.eql(today));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 - Transaction-level detail (optional, separate section)",
+      "item": [
+        {
+          "name": "include_transactions=true",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('summary is unchanged', () => { pm.expect(b.total_collection).to.eql(13900); pm.expect(b.transaction_count).to.eql(10); });",
+                  "pm.test('10 transaction rows whose amounts add up to the total', () => { pm.expect(b.transactions.length).to.eql(10); pm.expect(b.transactions.reduce((a, t) => a + t.amount, 0)).to.eql(13900); });",
+                  "pm.test('each row has receipt, date, mode, amount and student reference', () => b.transactions.forEach(t => { ['payment_id','receipt_number','payment_date','payment_mode','amount','student_id','admission_number'].forEach(k => pm.expect(t).to.have.property(k)); pm.expect(t.payment_date).to.eql('2026-11-10'); }));",
+                  "pm.test('split payment row carries its breakdown', () => { const s = b.transactions.find(t => t.payment_mode === 'split'); pm.expect(s.split).to.eql({cash: 300, upi: 700}); });",
+                  "pm.test('cheque row keeps its cheque number as transaction_id', () => pm.expect(b.transactions.find(t => t.payment_mode === 'cheque').transaction_id).to.eql('CHQ-445566'));",
+                  "pm.test('student NAME is not included by default', () => b.transactions.forEach(t => pm.expect(t).to.not.have.property('student_name')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date={{fullDay}}&include_transactions=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{fullDay}}"
+                },
+                {
+                  "key": "include_transactions",
+                  "value": "true"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "include_transactions=true&include_student_name=true",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('student_name present on every row', () => b.transactions.forEach(t => pm.expect(t.student_name).to.be.a('string').and.not.empty));",
+                  "pm.test('name resolves from the students collection', () => pm.expect(b.transactions.find(t => t.admission_number === 'SFS2026/0001').student_name).to.eql('Aarav Sharma'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date={{fullDay}}&include_transactions=true&include_student_name=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{fullDay}}"
+                },
+                {
+                  "key": "include_transactions",
+                  "value": "true"
+                },
+                {
+                  "key": "include_student_name",
+                  "value": "true"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "include_student_name alone is ignored (no transactions section)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('no transactions, so no names leak', () => pm.expect(pm.response.json()).to.not.have.property('transactions'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date={{fullDay}}&include_student_name=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{fullDay}}"
+                },
+                {
+                  "key": "include_student_name",
+                  "value": "true"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 - Error handling",
+      "item": [
+        {
+          "name": "Invalid date: text",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "const b = pm.response.json();",
+                  "pm.test('error message mentions: YYYY-MM-DD', () => pm.expect(JSON.stringify(b.detail)).to.include('YYYY-MM-DD'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date=abc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "abc"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Invalid date: impossible calendar date",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "const b = pm.response.json();",
+                  "pm.test('error message mentions: YYYY-MM-DD', () => pm.expect(JSON.stringify(b.detail)).to.include('YYYY-MM-DD'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date=2026-13-45",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "2026-13-45"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Invalid date: not zero-padded",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "const b = pm.response.json();",
+                  "pm.test('error message mentions: YYYY-MM-DD', () => pm.expect(JSON.stringify(b.detail)).to.include('YYYY-MM-DD'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date=2026-3-9",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "2026-3-9"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Invalid date: future date",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "const b = pm.response.json();",
+                  "pm.test('error message mentions: future', () => pm.expect(JSON.stringify(b.detail)).to.include('future'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date=2099-01-01",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "2099-01-01"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Unauthorized: no token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('rejected without a token (401/403)', () => pm.expect([401, 403]).to.include(pm.response.code));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date={{fullDay}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{fullDay}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Unauthorized: invalid token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('rejected with a bad token (401/403)', () => pm.expect([401, 403]).to.include(pm.response.code));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bogusToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date={{fullDay}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{fullDay}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Forbidden: teacher role",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('teacher refused (403)', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{teacherToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date={{fullDay}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{fullDay}}"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

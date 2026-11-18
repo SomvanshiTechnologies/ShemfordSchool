@@ -1,0 +1,6 @@
+{
+  "http_status": 400,
+  "body": {
+    "detail": "date cannot be in the future"
+  }
+}

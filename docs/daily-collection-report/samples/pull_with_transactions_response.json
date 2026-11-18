@@ -1,0 +1,147 @@
+{
+  "report_date": "2026-11-10",
+  "currency": "INR",
+  "collections": {
+    "cash": 1800.0,
+    "cheque": 2000.0,
+    "dd": 1500.0,
+    "card": 3400.0,
+    "upi": 3200.0,
+    "online": 1200.0,
+    "bank_transfer": 800.0
+  },
+  "total_collection": 13900.0,
+  "refunds": {
+    "total": 600.0,
+    "count": 1
+  },
+  "net_collection": 13300.0,
+  "transaction_count": 10,
+  "transactions": [
+    {
+      "payment_id": "pay_test_001",
+      "receipt_number": "RCP2026TEST001",
+      "transaction_id": null,
+      "payment_date": "2026-11-10",
+      "payment_mode": "cash",
+      "amount": 1000.0,
+      "student_id": "stu_001",
+      "admission_number": "SFS2026/0001",
+      "academic_year": "2026-2027",
+      "student_name": "Aarav Sharma"
+    },
+    {
+      "payment_id": "pay_test_002",
+      "receipt_number": "RCP2026TEST002",
+      "transaction_id": null,
+      "payment_date": "2026-11-10",
+      "payment_mode": "cash",
+      "amount": 500.0,
+      "student_id": "stu_002",
+      "admission_number": "SFS2026/0002",
+      "academic_year": "2026-2027",
+      "student_name": "Diya Verma"
+    },
+    {
+      "payment_id": "pay_test_003",
+      "receipt_number": "RCP2026TEST003",
+      "transaction_id": "CHQ-445566",
+      "payment_date": "2026-11-10",
+      "payment_mode": "cheque",
+      "amount": 2000.0,
+      "student_id": "stu_001",
+      "admission_number": "SFS2026/0001",
+      "academic_year": "2026-2027",
+      "student_name": "Aarav Sharma"
+    },
+    {
+      "payment_id": "pay_test_004",
+      "receipt_number": "RCP2026TEST004",
+      "transaction_id": "DD-778899",
+      "payment_date": "2026-11-10",
+      "payment_mode": "dd",
+      "amount": 1500.0,
+      "student_id": "stu_003",
+      "admission_number": "SFS2026/0003",
+      "academic_year": "2026-2027",
+      "student_name": "Kabir Singh"
+    },
+    {
+      "payment_id": "pay_test_005",
+      "receipt_number": "RCP2026TEST005",
+      "transaction_id": "POS-TXN-1001",
+      "payment_date": "2026-11-10",
+      "payment_mode": "card",
+      "amount": 3000.0,
+      "student_id": "stu_002",
+      "admission_number": "SFS2026/0002",
+      "academic_year": "2026-2027",
+      "student_name": "Diya Verma"
+    },
+    {
+      "payment_id": "pay_test_006",
+      "receipt_number": "RCP2026TEST006",
+      "transaction_id": "UPI-REF-2002",
+      "payment_date": "2026-11-10",
+      "payment_mode": "upi",
+      "amount": 2500.0,
+      "student_id": "stu_003",
+      "admission_number": "SFS2026/0003",
+      "academic_year": "2026-2027",
+      "student_name": "Kabir Singh"
+    },
+    {
+      "payment_id": "pay_test_007",
+      "receipt_number": "RCP2026TEST007",
+      "transaction_id": "pay_RZP0000001",
+      "payment_date": "2026-11-10",
+      "payment_mode": "online",
+      "amount": 1200.0,
+      "student_id": "stu_001",
+      "admission_number": "SFS2026/0001",
+      "academic_year": "2026-2027",
+      "student_name": "Aarav Sharma"
+    },
+    {
+      "payment_id": "pay_test_008",
+      "receipt_number": "RCP2026TEST008",
+      "transaction_id": "NEFT-3003",
+      "payment_date": "2026-11-10",
+      "payment_mode": "bank_transfer",
+      "amount": 800.0,
+      "student_id": "stu_002",
+      "admission_number": "SFS2026/0002",
+      "academic_year": "2026-2027",
+      "student_name": "Diya Verma"
+    },
+    {
+      "payment_id": "pay_test_009",
+      "receipt_number": "RCP2026TEST009",
+      "transaction_id": null,
+      "payment_date": "2026-11-10",
+      "payment_mode": "split",
+      "amount": 1000.0,
+      "student_id": "stu_003",
+      "admission_number": "SFS2026/0003",
+      "academic_year": "2026-2027",
+      "split": {
+        "cash": 300.0,
+        "upi": 700.0
+      },
+      "student_name": "Kabir Singh"
+    },
+    {
+      "payment_id": "pay_test_010",
+      "receipt_number": "RCP2026TEST010",
+      "transaction_id": "POS-TXN-1002",
+      "payment_date": "2026-11-10",
+      "payment_mode": "card",
+      "amount": 400.0,
+      "student_id": "stu_001",
+      "admission_number": "SFS2026/0001",
+      "academic_year": "2026-2027",
+      "student_name": "Aarav Sharma"
+    }
+  ],
+  "generated_at": "2026-11-18T11:42:00.000000+00:00"
+}

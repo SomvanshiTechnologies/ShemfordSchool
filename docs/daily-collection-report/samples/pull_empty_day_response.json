@@ -1,0 +1,19 @@
+{
+  "report_date": "2026-11-13",
+  "currency": "INR",
+  "collections": {
+    "cash": 0.0,
+    "cheque": 0.0,
+    "dd": 0.0,
+    "card": 0.0,
+    "upi": 0.0
+  },
+  "total_collection": 0.0,
+  "refunds": {
+    "total": 0,
+    "count": 0
+  },
+  "net_collection": 0.0,
+  "transaction_count": 0,
+  "generated_at": "2026-11-18T11:42:00.000000+00:00"
+}

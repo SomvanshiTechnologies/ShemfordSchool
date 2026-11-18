@@ -1,0 +1,67 @@
+<!doctype html><meta charset=utf-8><title>Daily Collection Report - test evidence</title>
+<style>body{font:14px Segoe UI,Arial;margin:24px;background:#fff;color:#111}h1{font-size:20px}h2{font-size:15px;margin:22px 0 6px;background:#E88A1A;color:#fff;padding:6px 10px}
+pre{background:#f6f6f6;border:1px solid #ddd;padding:10px;overflow:auto;font:12px Consolas,monospace;white-space:pre-wrap}.ok{color:#0a7a2f;font-weight:bold}</style>
+<h1>Daily Collection Report API &mdash; local test evidence <span class=ok>(throwaway database, local mock receiver, no real email/webhook)</span></h1>
+<h2>1. GET API vs MongoDB &mdash; independent recomputation</h2><pre>Report date: 2026-11-10   (raw rows in fee_payments for that day: 10)
+
+Payment mode         MongoDB         API   match
+bank_transfer         800.00      800.00   OK
+card                3,400.00    3,400.00   OK
+cash                1,800.00    1,800.00   OK
+cheque              2,000.00    2,000.00   OK
+dd                  1,500.00    1,500.00   OK
+online              1,200.00    1,200.00   OK
+upi                 3,200.00    3,200.00   OK
+TOTAL              13,900.00   13,900.00   OK
+Refunds               600.00      600.00   OK
+Net                13,300.00   13,300.00   OK
+Transactions           10.00       10.00   OK
+Refund count            1.00        1.00   OK
+
+RESULT: ALL TOTALS MATCH
+</pre>
+<h2>2. Mock receiver &mdash; payload received for 2026-11-10 (signature, bearer token and JSON all verified by the receiver)</h2><pre>headers/checks: {&quot;path&quot;: &quot;/receive&quot;, &quot;idempotency_key&quot;: &quot;daily-collection-2026-11-10&quot;, &quot;content_type&quot;: &quot;application/json&quot;, &quot;checks&quot;: {&quot;signature_valid&quot;: true, &quot;bearer_valid&quot;: true, &quot;json_valid&quot;: true}}
+{
+  &quot;report_date&quot;: &quot;2026-11-10&quot;,
+  &quot;currency&quot;: &quot;INR&quot;,
+  &quot;collections&quot;: {
+    &quot;cash&quot;: 1800.0,
+    &quot;cheque&quot;: 2000.0,
+    &quot;dd&quot;: 1500.0,
+    &quot;card&quot;: 3400.0,
+    &quot;upi&quot;: 3200.0,
+    &quot;online&quot;: 1200.0,
+    &quot;bank_transfer&quot;: 800.0
+  },
+  &quot;total_collection&quot;: 13900.0,
+  &quot;refunds&quot;: {
+    &quot;total&quot;: 600.0,
+    &quot;count&quot;: 1
+  },
+  &quot;net_collection&quot;: 13300.0,
+  &quot;transaction_count&quot;: 10
+}
+transactions rows: 10 | sum: 13900.0
+</pre>
+<h2>3. Manual trigger, then duplicate trigger</h2><pre>Trigger #1 for 2026-11-10
+  delivery log: {&quot;status&quot;: &quot;sent&quot;, &quot;claimed_at&quot;: &quot;2026-11-18T11:43:38.714919+00:00&quot;, &quot;channels&quot;: {&quot;webhook&quot;: true}, &quot;attempts&quot;: 1, &quot;error&quot;: null, &quot;finished_at&quot;: &quot;2026-11-18T11:43:39.326404+00:00&quot;}
+  POSTs received by the mock for 2026-11-10: 0 -&gt; 1
+Trigger #2 for 2026-11-10 (duplicate trigger, must NOT POST again)
+  delivery log: {&quot;status&quot;: &quot;sent&quot;, &quot;claimed_at&quot;: &quot;2026-11-18T11:43:38.714919+00:00&quot;, &quot;channels&quot;: {&quot;webhook&quot;: true}, &quot;attempts&quot;: 1, &quot;error&quot;: null, &quot;finished_at&quot;: &quot;2026-11-18T11:43:39.326404+00:00&quot;}
+  POSTs received by the mock for 2026-11-10: 1 -&gt; 1
+</pre>
+<h2>4. Scheduler and webhook execution log (includes automatic recovery of the missed 2026-11-17 run)</h2><pre>2026-11-18 17:10:37,704 - routes.reports - INFO - daily-collection scheduler started (23:59 Asia/Kolkata, polling every 60s)
+2026-11-18 17:10:37,715 - routes.reports - INFO - daily-collection: queued report for 2026-11-17
+#1 POST /receive key=daily-collection-2026-11-17 checks={&#x27;signature_valid&#x27;: True, &#x27;bearer_valid&#x27;: True, &#x27;json_valid&#x27;: True}
+2026-11-18 17:10:53,617 - routes.reports - INFO - daily-collection: report for 2026-11-17 sent via [&#x27;webhook&#x27;]
+2026-11-18 17:10:53,619 - job_queue - INFO - Job job_be6cc074eb1a4dea DONE task=daily_collection_report attempts=1
+#2 POST /receive key=daily-collection-2026-11-10 checks={&#x27;signature_valid&#x27;: True, &#x27;bearer_valid&#x27;: True, &#x27;json_valid&#x27;: True}
+2026-11-18 17:13:39,327 - routes.reports - INFO - daily-collection: report for 2026-11-10 sent via [&#x27;webhook&#x27;]
+2026-11-18 17:13:39,329 - job_queue - INFO - Job job_a61ee49afe4b49cb DONE task=daily_collection_report attempts=1
+2026-11-18 17:13:54,353 - routes.reports - INFO - daily-collection: 2026-11-10 already sent or in progress � skipping
+2026-11-18 17:13:54,355 - job_queue - INFO - Job job_9bb9776950354ec5 DONE task=daily_collection_report attempts=1
+2026-11-18 17:14:37,764 - routes.reports - INFO - daily-collection: queued report for 2026-11-17
+#3 POST /receive key=daily-collection-2026-11-17 checks={&#x27;signature_valid&#x27;: True, &#x27;bearer_valid&#x27;: True, &#x27;json_valid&#x27;: True}
+2026-11-18 17:14:39,950 - routes.reports - INFO - daily-collection: report for 2026-11-17 sent via [&#x27;webhook&#x27;]
+2026-11-18 17:14:39,953 - job_queue - INFO - Job job_bb64692fb10446ec DONE task=daily_collection_report attempts=1
+</pre>
