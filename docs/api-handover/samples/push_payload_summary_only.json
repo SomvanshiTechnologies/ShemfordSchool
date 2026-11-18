@@ -1,0 +1,21 @@
+{
+  "report_date": "2026-11-10",
+  "currency": "INR",
+  "collections": {
+    "cash": 1800.0,
+    "cheque": 2000.0,
+    "dd": 1500.0,
+    "card": 3400.0,
+    "upi": 3200.0,
+    "online": 1200.0,
+    "bank_transfer": 800.0,
+    "bharat_qr": 0.0
+  },
+  "total_collection": 13900.0,
+  "refunds": {
+    "total": 600.0,
+    "count": 1
+  },
+  "net_collection": 13300.0,
+  "transaction_count": 10
+}

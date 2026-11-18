@@ -208,7 +208,7 @@ Split payments (one payment settled with several modes, e.g. cash 200 + online 3
 - Refunds currently exist for online (gateway) payments only.
 
 ## Day boundary (known limitation)
-A payment belongs to the day of its stored `payment_date`. Counter payments (cash, cheque, DD, POS) store the school's local date. Gateway payments store the **UTC** date, so an online payment made between 00:00 and 05:30 IST can be reported on the previous day.
+A payment belongs to the day of its stored `payment_date`, which the application stamps from the **server clock**. The production server runs in **UTC**, so a payment taken between 00:00 and 05:30 IST is stamped with the previous date and appears on the previous day's report. This affects every payment type; normal school hours are not affected. The report's own day boundaries (run time, refund day) use Asia/Kolkata.
 
 ---
 

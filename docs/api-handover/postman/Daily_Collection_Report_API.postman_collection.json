@@ -1,0 +1,1040 @@
+{
+  "info": {
+    "name": "Shemford ERP - Daily Collection Report API",
+    "description": "Handover collection for the Daily Collection Report API.\n\n1. Import this file and the environment file.\n2. In the environment set `baseUrl` (the ERP server address ending in /api), `loginId` and `password` (an accountant or admin account issued by the school; the password is never stored in this file).\n3. Run `0 - Authentication > Login` once; the access token is stored automatically (valid 15 minutes; run `Refresh token` to renew without a password).\n4. Run the requests in `1 - Pull report`.\n\nThe folder `3 - Push webhook (what we send you)` documents the request OUR system sends to YOUR endpoint every night at 23:59 Asia/Kolkata. It is a reference for building your receiver, not something to call.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// reportDate defaults to yesterday (Asia/Kolkata) when the environment value is empty",
+          "if (!pm.variables.get('reportDate')) {",
+          "  const d = new Date(Date.now() - 24 * 3600 * 1000);",
+          "  pm.variables.set('reportDate', d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }));",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "0 - Authentication",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Exchange credentials for an access token (valid 15 minutes) and a refresh token (valid 30 days). 5 failed attempts lock the account for 15 minutes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{loginId}}\",\n  \"password\": \"{{password}}\",\n  \"platform\": \"web\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK (token values shortened)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/auth/login",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "auth",
+                    "login"
+                  ],
+                  "query": []
+                }
+              },
+              "body": "{\n  \"token\": \"<access-jwt>\",\n  \"refresh_token\": \"<refresh-token>\",\n  \"user\": {\n    \"user_id\": \"<id>\",\n    \"email\": \"<loginId>\",\n    \"role\": \"accountant\"\n  }\n}"
+            },
+            {
+              "name": "401 Invalid credentials",
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "originalRequest": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/auth/login",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "auth",
+                    "login"
+                  ],
+                  "query": []
+                }
+              },
+              "body": "{\n  \"detail\": \"Invalid credentials\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json();",
+                  "pm.test('token returned', () => pm.expect(j.token).to.be.a('string'));",
+                  "pm.environment.set('accessToken', j.token);",
+                  "pm.environment.set('refreshToken', j.refresh_token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Exchange the refresh token for a new access token. The refresh token rotates: the old one stops working immediately, so always store the new one.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json();",
+                  "pm.environment.set('accessToken', j.token || j.access_token);",
+                  "if (j.refresh_token) pm.environment.set('refreshToken', j.refresh_token);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1 - Pull report (GET)",
+      "item": [
+        {
+          "name": "Daily report - summary for one date",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date={{reportDate}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{reportDate}}"
+                }
+              ]
+            },
+            "description": "Collections for `date`, grouped by payment mode, with refunds and net collection. Roles allowed: admin, accountant."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/reports/daily-collection?date=2026-11-10",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "reports",
+                    "daily-collection"
+                  ],
+                  "query": [
+                    {
+                      "key": "date",
+                      "value": "2026-11-10"
+                    }
+                  ]
+                }
+              },
+              "body": "{\n  \"report_date\": \"2026-11-10\",\n  \"currency\": \"INR\",\n  \"collections\": {\n    \"cash\": 1800.0,\n    \"cheque\": 2000.0,\n    \"dd\": 1500.0,\n    \"card\": 3400.0,\n    \"upi\": 3200.0,\n    \"online\": 1200.0,\n    \"bank_transfer\": 800.0,\n    \"bharat_qr\": 0.0\n  },\n  \"total_collection\": 13900.0,\n  \"refunds\": {\n    \"total\": 600.0,\n    \"count\": 1\n  },\n  \"net_collection\": 13300.0,\n  \"transaction_count\": 10,\n  \"generated_at\": \"2026-11-18T11:42:00.000000+00:00\"\n}"
+            },
+            {
+              "name": "200 OK - a day with no collections",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/reports/daily-collection?date=2026-11-13",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "reports",
+                    "daily-collection"
+                  ],
+                  "query": [
+                    {
+                      "key": "date",
+                      "value": "2026-11-13"
+                    }
+                  ]
+                }
+              },
+              "body": "{\n  \"report_date\": \"2026-11-13\",\n  \"currency\": \"INR\",\n  \"collections\": {\n    \"cash\": 0.0,\n    \"cheque\": 0.0,\n    \"dd\": 0.0,\n    \"card\": 0.0,\n    \"upi\": 0.0,\n    \"online\": 0.0,\n    \"bank_transfer\": 0.0,\n    \"bharat_qr\": 0.0\n  },\n  \"total_collection\": 0.0,\n  \"refunds\": {\n    \"total\": 0,\n    \"count\": 0\n  },\n  \"net_collection\": 0.0,\n  \"transaction_count\": 0,\n  \"generated_at\": \"2026-11-18T11:42:00.000000+00:00\"\n}"
+            },
+            {
+              "name": "200 OK - day using POS card/UPI/cash/cheque/BharatQR/All-modes and a split",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/reports/daily-collection?date=2026-11-12",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "reports",
+                    "daily-collection"
+                  ],
+                  "query": [
+                    {
+                      "key": "date",
+                      "value": "2026-11-12"
+                    }
+                  ]
+                }
+              },
+              "body": "{\n  \"report_date\": \"2026-11-12\",\n  \"currency\": \"INR\",\n  \"collections\": {\n    \"cash\": 600.0,\n    \"cheque\": 450.0,\n    \"dd\": 0.0,\n    \"card\": 1000.0,\n    \"upi\": 2000.0,\n    \"online\": 1000.0,\n    \"bank_transfer\": 0.0,\n    \"bharat_qr\": 1500.0,\n    \"pos_terminal\": 600.0\n  },\n  \"total_collection\": 7150.0,\n  \"refunds\": {\n    \"total\": 0,\n    \"count\": 0\n  },\n  \"net_collection\": 7150.0,\n  \"transaction_count\": 10,\n  \"generated_at\": \"2026-11-18T12:30:00.000000+00:00\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('has the documented summary fields', () => ['report_date','currency','collections','total_collection','refunds','net_collection','transaction_count'].forEach(k => pm.expect(b).to.have.property(k)));",
+                  "pm.test('currency is INR', () => pm.expect(b.currency).to.eql('INR'));",
+                  "pm.test('collections always include the stable keys', () => ['cash','cheque','dd','card','upi','online','bank_transfer','bharat_qr'].forEach(k => pm.expect(b.collections).to.have.property(k)));",
+                  "pm.test('total_collection equals the sum of collections', () => pm.expect(Math.round(Object.values(b.collections).reduce((a, v) => a + v, 0) * 100)).to.eql(Math.round(b.total_collection * 100)));",
+                  "pm.test('net_collection = total_collection - refunds.total', () => pm.expect(Math.round(b.net_collection * 100)).to.eql(Math.round((b.total_collection - b.refunds.total) * 100)));",
+                  "pm.test('report_date echoes the request', () => pm.expect(b.report_date).to.eql(pm.variables.get('reportDate')));",
+                  "pm.test('summary only by default (no transactions list)', () => pm.expect(b).to.not.have.property('transactions'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Daily report - today (no date)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ]
+            },
+            "description": "Omitting `date` reports today in Asia/Kolkata (a partial day until 23:59)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('has the documented summary fields', () => ['report_date','currency','collections','total_collection','refunds','net_collection','transaction_count'].forEach(k => pm.expect(b).to.have.property(k)));",
+                  "pm.test('currency is INR', () => pm.expect(b.currency).to.eql('INR'));",
+                  "pm.test('collections always include the stable keys', () => ['cash','cheque','dd','card','upi','online','bank_transfer','bharat_qr'].forEach(k => pm.expect(b.collections).to.have.property(k)));",
+                  "pm.test('total_collection equals the sum of collections', () => pm.expect(Math.round(Object.values(b.collections).reduce((a, v) => a + v, 0) * 100)).to.eql(Math.round(b.total_collection * 100)));",
+                  "pm.test('net_collection = total_collection - refunds.total', () => pm.expect(Math.round(b.net_collection * 100)).to.eql(Math.round((b.total_collection - b.refunds.total) * 100)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Daily report - with transaction rows",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date={{reportDate}}&include_transactions=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{reportDate}}"
+                },
+                {
+                  "key": "include_transactions",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Adds a separate `transactions` list, one row per payment. The summary is unchanged."
+          },
+          "response": [
+            {
+              "name": "200 OK (sample data, first rows)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/reports/daily-collection?date=2026-11-10&include_transactions=true",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "reports",
+                    "daily-collection"
+                  ],
+                  "query": [
+                    {
+                      "key": "date",
+                      "value": "2026-11-10"
+                    },
+                    {
+                      "key": "include_transactions",
+                      "value": "true"
+                    }
+                  ]
+                }
+              },
+              "body": "{\n  \"report_date\": \"2026-11-10\",\n  \"currency\": \"INR\",\n  \"collections\": {\n    \"cash\": 1800.0,\n    \"cheque\": 2000.0,\n    \"dd\": 1500.0,\n    \"card\": 3400.0,\n    \"upi\": 3200.0,\n    \"online\": 1200.0,\n    \"bank_transfer\": 800.0,\n    \"bharat_qr\": 0.0\n  },\n  \"total_collection\": 13900.0,\n  \"refunds\": {\n    \"total\": 600.0,\n    \"count\": 1\n  },\n  \"net_collection\": 13300.0,\n  \"transaction_count\": 10,\n  \"generated_at\": \"2026-11-18T11:42:00.000000+00:00\",\n  \"transactions\": [\n    {\n      \"payment_id\": \"pay_test_001\",\n      \"receipt_number\": \"RCP2026TEST001\",\n      \"transaction_id\": null,\n      \"payment_date\": \"2026-11-10\",\n      \"payment_mode\": \"cash\",\n      \"amount\": 1000.0,\n      \"student_id\": \"stu_001\",\n      \"admission_number\": \"SFS2026/0001\",\n      \"academic_year\": \"2026-2027\"\n    },\n    {\n      \"payment_id\": \"pay_test_002\",\n      \"receipt_number\": \"RCP2026TEST002\",\n      \"transaction_id\": null,\n      \"payment_date\": \"2026-11-10\",\n      \"payment_mode\": \"cash\",\n      \"amount\": 500.0,\n      \"student_id\": \"stu_002\",\n      \"admission_number\": \"SFS2026/0002\",\n      \"academic_year\": \"2026-2027\"\n    },\n    {\n      \"payment_id\": \"pay_test_003\",\n      \"receipt_number\": \"RCP2026TEST003\",\n      \"transaction_id\": \"CHQ-445566\",\n      \"payment_date\": \"2026-11-10\",\n      \"payment_mode\": \"cheque\",\n      \"amount\": 2000.0,\n      \"student_id\": \"stu_001\",\n      \"admission_number\": \"SFS2026/0001\",\n      \"academic_year\": \"2026-2027\"\n    }\n  ]\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('has the documented summary fields', () => ['report_date','currency','collections','total_collection','refunds','net_collection','transaction_count'].forEach(k => pm.expect(b).to.have.property(k)));",
+                  "pm.test('currency is INR', () => pm.expect(b.currency).to.eql('INR'));",
+                  "pm.test('collections always include the stable keys', () => ['cash','cheque','dd','card','upi','online','bank_transfer','bharat_qr'].forEach(k => pm.expect(b.collections).to.have.property(k)));",
+                  "pm.test('total_collection equals the sum of collections', () => pm.expect(Math.round(Object.values(b.collections).reduce((a, v) => a + v, 0) * 100)).to.eql(Math.round(b.total_collection * 100)));",
+                  "pm.test('net_collection = total_collection - refunds.total', () => pm.expect(Math.round(b.net_collection * 100)).to.eql(Math.round((b.total_collection - b.refunds.total) * 100)));",
+                  "pm.test('transactions list present', () => pm.expect(b.transactions).to.be.an('array'));",
+                  "pm.test('transaction_count equals rows', () => pm.expect(b.transactions.length).to.eql(b.transaction_count));",
+                  "pm.test('row amounts add up to total_collection', () => pm.expect(Math.round(b.transactions.reduce((a, t) => a + t.amount, 0) * 100)).to.eql(Math.round(b.total_collection * 100)));",
+                  "pm.test('no student_name unless requested', () => b.transactions.forEach(t => pm.expect(t).to.not.have.property('student_name')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Daily report - transaction rows with student names",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date={{reportDate}}&include_transactions=true&include_student_name=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{reportDate}}"
+                },
+                {
+                  "key": "include_transactions",
+                  "value": "true"
+                },
+                {
+                  "key": "include_student_name",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "As above, plus `student_name` on each row (personal data, use only if needed)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('has the documented summary fields', () => ['report_date','currency','collections','total_collection','refunds','net_collection','transaction_count'].forEach(k => pm.expect(b).to.have.property(k)));",
+                  "pm.test('currency is INR', () => pm.expect(b.currency).to.eql('INR'));",
+                  "pm.test('collections always include the stable keys', () => ['cash','cheque','dd','card','upi','online','bank_transfer','bharat_qr'].forEach(k => pm.expect(b.collections).to.have.property(k)));",
+                  "pm.test('total_collection equals the sum of collections', () => pm.expect(Math.round(Object.values(b.collections).reduce((a, v) => a + v, 0) * 100)).to.eql(Math.round(b.total_collection * 100)));",
+                  "pm.test('net_collection = total_collection - refunds.total', () => pm.expect(Math.round(b.net_collection * 100)).to.eql(Math.round((b.total_collection - b.refunds.total) * 100)));",
+                  "pm.test('student_name present on every row', () => b.transactions.forEach(t => pm.expect(t).to.have.property('student_name')));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 - Error responses (GET)",
+      "item": [
+        {
+          "name": "400 - date not in YYYY-MM-DD",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date=2026-3-9",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "2026-3-9"
+                }
+              ]
+            },
+            "description": "Dates must be zero-padded YYYY-MM-DD."
+          },
+          "response": [
+            {
+              "name": "400",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/reports/daily-collection?date=2026-3-9",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "reports",
+                    "daily-collection"
+                  ],
+                  "query": [
+                    {
+                      "key": "date",
+                      "value": "2026-3-9"
+                    }
+                  ]
+                }
+              },
+              "body": "{\n  \"detail\": \"date must be in YYYY-MM-DD format\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 - date in the future",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date=2099-01-01",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "2099-01-01"
+                }
+              ]
+            },
+            "description": "Future dates are rejected."
+          },
+          "response": [
+            {
+              "name": "400",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/reports/daily-collection?date=2099-01-01",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "reports",
+                    "daily-collection"
+                  ],
+                  "query": [
+                    {
+                      "key": "date",
+                      "value": "2099-01-01"
+                    }
+                  ]
+                }
+              },
+              "body": "{\n  \"detail\": \"date cannot be in the future\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 - no token",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date={{reportDate}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{reportDate}}"
+                }
+              ]
+            },
+            "description": "No Authorization header.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [
+            {
+              "name": "401",
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/reports/daily-collection?date={{reportDate}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "reports",
+                    "daily-collection"
+                  ],
+                  "query": [
+                    {
+                      "key": "date",
+                      "value": "{{reportDate}}"
+                    }
+                  ]
+                }
+              },
+              "body": "{\n  \"detail\": \"Authentication required.\",\n  \"request_id\": \"-\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 - invalid or expired token",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date={{reportDate}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{reportDate}}"
+                }
+              ]
+            },
+            "description": "A bad or expired (15 min) access token. Run Refresh token or Login again.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "invalid-token",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "401",
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/reports/daily-collection?date={{reportDate}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "reports",
+                    "daily-collection"
+                  ],
+                  "query": [
+                    {
+                      "key": "date",
+                      "value": "{{reportDate}}"
+                    }
+                  ]
+                }
+              },
+              "body": "{\n  \"detail\": \"Session expired. Please log in again.\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403 - role not allowed",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/daily-collection?date={{reportDate}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "daily-collection"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "{{reportDate}}"
+                }
+              ]
+            },
+            "description": "Only admin and accountant may call this endpoint. OPTIONAL: set the environment variable forbiddenRoleToken to an access token of a non-admin/non-accountant user (e.g. a teacher) to run it; it is skipped when empty.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{forbiddenRoleToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "403",
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/reports/daily-collection?date={{reportDate}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "reports",
+                    "daily-collection"
+                  ],
+                  "query": [
+                    {
+                      "key": "date",
+                      "value": "{{reportDate}}"
+                    }
+                  ]
+                }
+              },
+              "body": "{\n  \"detail\": \"Access denied. Required role(s): admin, accountant. Your role: teacher\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.environment.get('forbiddenRoleToken')) { pm.execution.skipRequest(); }"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 - Push webhook (what we send you)",
+      "description": "Reference only. Our server sends this request to YOUR endpoint every night at 23:59 Asia/Kolkata. Use it to build and test your receiver.",
+      "item": [
+        {
+          "name": "Example of the nightly POST to your endpoint",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "daily-collection-2026-11-10"
+              },
+              {
+                "key": "X-Signature-SHA256",
+                "value": "<hex-hmac-sha256-of-raw-body>"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer <webhook-token>"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "https://YOUR-RECEIVER-HOST/YOUR-ENDPOINT",
+              "protocol": "https",
+              "host": [
+                "YOUR-RECEIVER-HOST"
+              ],
+              "path": [
+                "YOUR-ENDPOINT"
+              ]
+            },
+            "description": "Headers sent: Content-Type: application/json; Idempotency-Key: daily-collection-<date>; Authorization: Bearer <token> (only if a token is configured); X-Signature-SHA256: <hex HMAC-SHA256 of the raw body> (only if a secret is configured). Reply with any 2xx status to acknowledge. This request is not executable against our server.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"report_date\": \"2026-11-10\",\n  \"currency\": \"INR\",\n  \"collections\": {\n    \"cash\": 1800.0,\n    \"cheque\": 2000.0,\n    \"dd\": 1500.0,\n    \"card\": 3400.0,\n    \"upi\": 3200.0,\n    \"online\": 1200.0,\n    \"bank_transfer\": 800.0,\n    \"bharat_qr\": 0.0\n  },\n  \"total_collection\": 13900.0,\n  \"refunds\": {\n    \"total\": 600.0,\n    \"count\": 1\n  },\n  \"net_collection\": 13300.0,\n  \"transaction_count\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// reference only"
+                ]
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// documentation only: never sent when the collection is run",
+                  "pm.execution.skipRequest();"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
