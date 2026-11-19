@@ -190,6 +190,24 @@ def validate_fee_amounts(body: dict):
                 raise HTTPException(status_code=400, detail=f"{field} cannot be negative")
 
 
+def ledger_entry_due(e: dict) -> float:
+    """What is still owed on an unpaid or partly paid ledger entry (the rule /fees/pay uses):
+    the remaining balance when one is recorded, otherwise net amount minus what has been paid."""
+    rb = e.get("remaining_balance")
+    if rb is not None and rb > 0:
+        return round(float(rb), 2)
+    return max(round(float(e.get("net_amount", 0) or 0) - float(e.get("amount_paid", 0) or 0), 2), 0.0)
+
+
+def ledger_due_totals(entries: list) -> tuple:
+    """(total_pending, total_overdue) over a student's ledger. A partly paid entry counts only for
+    its remaining balance, whether its status is pending, overdue or partially_paid."""
+    owing = ("pending", "overdue", "partially_paid")
+    pending = round(sum(ledger_entry_due(e) for e in entries if e["status"] in owing), 2)
+    overdue = round(sum(ledger_entry_due(e) for e in entries if e["status"] == "overdue"), 2)
+    return pending, overdue
+
+
 def get_academic_year_months(academic_year: str) -> List[str]:
     start_year = int(academic_year.split("-")[0])
     months = []
@@ -1004,19 +1022,11 @@ async def get_student_ledger(student_id: str, request: Request):
     ).sort("payment_date", -1).to_list(500)
 
     # Summaries
-    def _sum(entries, statuses, field="net_amount"):
-        return round(sum(e[field] for e in entries if e["status"] in statuses), 2)
-
     total_gross = round(sum(e["gross_amount"] for e in entries), 2)
     total_concession = round(sum(e.get("concession_amount", 0) for e in entries), 2)
     total_late_fees = round(sum(e.get("late_fee_applied", 0) for e in entries), 2)
     total_paid_amount = round(sum(p["amount"] for p in payments), 2)
-    total_pending = round(
-        _sum(entries, ["pending", "overdue"]) +
-        sum(e.get("remaining_balance", 0) for e in entries if e["status"] == "partially_paid"),
-        2
-    )
-    total_overdue = _sum(entries, ["overdue"])
+    total_pending, total_overdue = ledger_due_totals(entries)
     months_paid = sum(1 for e in entries if e["fee_component"] == "tuition" and e["status"] == "paid")
     months_pending = sum(1 for e in entries if e["fee_component"] == "tuition" and e["status"] in ["pending", "overdue", "partially_paid"])
 

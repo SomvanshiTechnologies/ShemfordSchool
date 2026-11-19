@@ -2413,7 +2413,8 @@ const LedgerView = ({
         const entries = grouped[sec.key] || [];
         if (entries.length === 0) return null;
         const expanded = expandedSections[sec.key];
-        const secTotal = entries.filter(e => e.status !== 'paid').reduce((s, e) => s + e.net_amount, 0);
+        // A partly paid entry counts only for what is still due (same rule as the totals above).
+        const secTotal = entries.filter(e => e.status !== 'paid').reduce((s, e) => s + (e.remaining_balance > 0 ? e.remaining_balance : e.net_amount), 0);
 
         return (
           <div key={sec.key} className="border border-slate-200 rounded-2xl overflow-hidden">
