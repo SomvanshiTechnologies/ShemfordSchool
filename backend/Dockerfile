@@ -20,7 +20,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Non-root user for security
-RUN adduser --disabled-password --gecos "" appuser && chown -R appuser /app
+# uploads/ is dockerignored, so create it here: a fresh named volume mounted at /app/uploads
+# inherits this ownership, otherwise it is root-owned and the app cannot write voice notes/files.
+RUN adduser --disabled-password --gecos "" appuser && mkdir -p /app/uploads && chown -R appuser /app
 USER appuser
 
 EXPOSE 8000

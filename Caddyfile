@@ -1,0 +1,17 @@
+# Reverse proxy with automatic HTTPS (Let's Encrypt). {$DOMAIN} comes from the root .env.
+{$DOMAIN} {
+	encode gzip
+
+	# API, webhooks (Razorpay/Stripe), mobile checkout pages and uploaded files -> backend
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+	handle /uploads/* {
+		reverse_proxy backend:8000
+	}
+
+	# Everything else is the React app
+	handle {
+		reverse_proxy frontend:80
+	}
+}
