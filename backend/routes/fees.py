@@ -657,6 +657,10 @@ async def create_fee_component_config(request: Request):
     user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     body = await request.json()
 
+    if user["role"] == UserRole.ACCOUNTANT and any(float(body.get(k) or 0) for k in (
+            "sibling_admission_discount_amount", "sibling_tuition_discount_amount")):
+        raise HTTPException(status_code=403, detail="Discounts can only be configured by an admin.")
+
     academic_year = body.get("academic_year", current_academic_year())
     class_name = body.get("class_name")
     # Normalize empty string / falsy to None so the de-dupe match below treats
@@ -720,6 +724,11 @@ async def update_fee_component_config(config_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Fee config not found")
 
     validate_fee_amounts(body)  # #13
+
+    if user["role"] == UserRole.ACCOUNTANT and any(
+            k in body and float(body.get(k) or 0) != float(cfg.get(k) or 0)
+            for k in ("sibling_admission_discount_amount", "sibling_tuition_discount_amount")):
+        raise HTTPException(status_code=403, detail="Discounts can only be configured by an admin.")
 
     # Identity fields (class / stream / year) are editable from the dialog too —
     # previously they were dropped, so changing the stream silently did nothing.
@@ -1429,6 +1438,18 @@ async def pay_fee(request: Request):
     elif user["role"] not in [UserRole.ADMIN, UserRole.ACCOUNTANT]:
         raise HTTPException(status_code=403, detail="Insufficient permissions")
 
+    # Accountants may not back-date: their payments are always recorded with today's date.
+    # A date equal to today (server clock or India time) is accepted and ignored, because the
+    # collect dialog sends today's date by default; any other date is refused.
+    if custom_payment_date and user["role"] == UserRole.ACCOUNTANT:
+        from zoneinfo import ZoneInfo
+        today_options = {datetime.now().strftime("%Y-%m-%d"),
+                         datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")}
+        if str(custom_payment_date)[:10] not in today_options:
+            raise HTTPException(status_code=403, detail="Back-dated payments are not permitted for the Accountant role. "
+                                                        "Payments are recorded with today's date.")
+        custom_payment_date = None
+
     student = await db.students.find_one({"student_id": student_id}, {"_id": 0})
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
@@ -1840,7 +1861,8 @@ async def refresh_all_overdue(request: Request):
 
 @router.post("/fees/concession")
 async def apply_concession(request: Request):
-    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
+    # Discounts/concessions are an admin-only decision: the Accountant role may not grant them.
+    user = await require_roles(UserRole.ADMIN)(request)
     body = await request.json()
 
     student_id = body.get("student_id")

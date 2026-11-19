@@ -39,7 +39,7 @@ const ALL_MENU_ITEMS = [
   { name: 'Users',                  icon: Users,            path: '/users',               roles: ['admin'] },
   { name: 'Announcements',          icon: Bell,             path: '/announcements',       roles: ['admin', 'teacher', 'student', 'parent'] },
   { name: 'Reports',                icon: BarChart3,        path: '/reports',             roles: ['admin', 'accountant'] },
-  { name: 'Upgradation',            icon: ArrowUpCircle,    path: '/upgradation',         roles: ['admin'] },
+  { name: 'Upgradation',            icon: ArrowUpCircle,    path: '/upgradation',         roles: ['admin', 'accountant'] },
   { name: 'Audit Trails',           icon: History,          path: '/audit-trail',         roles: ['admin'] },
   { name: 'Issues',                 icon: TicketCheck,      path: '/issues',              roles: ['admin', 'teacher', 'student', 'parent'] },
   { name: 'Messages',               icon: MessageSquare,    path: '/messages',            roles: ['admin', 'teacher', 'student', 'parent'] },

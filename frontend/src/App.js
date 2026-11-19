@@ -259,7 +259,7 @@ function AppRouter() {
       <Route
         path="/upgradation"
         element={
-          <ProtectedRoute allowedRoles={['admin']}>
+          <ProtectedRoute allowedRoles={['admin', 'accountant']}>
             <Layout>
               <UpgradationPage />
             </Layout>

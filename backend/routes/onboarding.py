@@ -52,6 +52,10 @@ async def start_onboarding(request: Request):
             detail="Invalid request format. Please check the submitted data."
         )
 
+    # The sibling flag triggers an automatic sibling discount, so only an admin may set it.
+    if user["role"] == UserRole.ACCOUNTANT and (body.get("is_sibling") or body.get("sibling_student_id")):
+        raise HTTPException(status_code=403, detail="Sibling discount can only be applied by an admin.")
+
     # Normalize optional email fields: an empty string fails EmailStr validation
     # (which would surface as an uncaught 500), so treat "" / whitespace as None.
     for _ef in ("email", "parent_email", "mother_email"):
@@ -268,7 +272,7 @@ async def set_onboarding_class(onboarding_id: str, request: Request):
 
 @router.get("/onboarding/{onboarding_id}/documents/required")
 async def get_required_documents(onboarding_id: str, request: Request):
-    await require_roles(UserRole.ADMIN)(request)
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     app = await db.onboarding.find_one({"onboarding_id": onboarding_id}, {"_id": 0})
     if not app:
         raise HTTPException(status_code=404, detail="Application not found")
@@ -618,7 +622,7 @@ async def complete_onboarding(onboarding_id: str, request: Request):
 
 @router.get("/onboarding")
 async def list_onboarding_applications(request: Request, status: Optional[str] = None):
-    await require_roles(UserRole.ADMIN)(request)
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     query = {}
     if status:
         query["status"] = status
@@ -628,7 +632,7 @@ async def list_onboarding_applications(request: Request, status: Optional[str] =
 
 @router.get("/onboarding/{onboarding_id}")
 async def get_onboarding_application(onboarding_id: str, request: Request):
-    await require_roles(UserRole.ADMIN)(request)
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     app = await db.onboarding.find_one({"onboarding_id": onboarding_id}, {"_id": 0})
     if not app:
         raise HTTPException(status_code=404, detail="Application not found")
@@ -644,7 +648,7 @@ async def list_draft_onboarding_applications(request: Request):
     Get all draft onboarding applications (students not yet fully enrolled).
     These are student profiles that have been created but not completed onboarding.
     """
-    await require_roles(UserRole.ADMIN)(request)
+    await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     apps = await db.onboarding.find(
         {"status": "draft"},
         {"_id": 0}

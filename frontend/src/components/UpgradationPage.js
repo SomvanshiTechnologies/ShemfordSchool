@@ -1019,6 +1019,7 @@ export default function UpgradationPage() {
                     ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Processing...</>
                     : <><CreditCard className="h-4 w-4 mr-2" />Collect Fee &amp; Upgrade</>}
                 </Button>
+                {isAdmin && (
                 <Button
                   variant="outline"
                   onClick={() => doUpgrade({ forceUpgrade: true })}
@@ -1027,6 +1028,7 @@ export default function UpgradationPage() {
                 >
                   Send for Approval (skip fee)
                 </Button>
+                )}
               </div>
             </div>
           )}

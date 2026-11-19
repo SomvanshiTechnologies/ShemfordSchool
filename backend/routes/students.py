@@ -361,7 +361,7 @@ async def get_student(student_id: str, request: Request):
 
 @router.put("/students/{student_id}")
 async def update_student(student_id: str, request: Request):
-    user = await require_roles(UserRole.ADMIN)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     body = await request.json()
 
     old_student = await db.students.find_one({"student_id": student_id, "is_active": True}, {"_id": 0})
@@ -446,6 +446,16 @@ async def update_student(student_id: str, request: Request):
     }
     if not changes:
         return old_student
+
+    # Accountants may edit student details, but not anything that grants a discount (the sibling flag
+    # drives the sibling discount) or controls access/status. Unchanged echoed values are ignored.
+    if user["role"] == UserRole.ACCOUNTANT:
+        admin_only = {"is_sibling", "sibling_student_id", "is_active", "fee_status", "app_locked",
+                      "web_login_enabled", "user_id", "parent_id", "role"}
+        blocked = sorted(admin_only & set(changes))
+        if blocked:
+            raise HTTPException(status_code=403,
+                                detail=f"Only an admin can change: {', '.join(blocked)}.")
 
     await db.students.update_one({"student_id": student_id}, {"$set": body})
     updated = await db.students.find_one({"student_id": student_id}, {"_id": 0})

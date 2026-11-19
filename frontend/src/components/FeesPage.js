@@ -114,6 +114,8 @@ const FeesPage = () => {
   const isParent = user?.role === 'parent';
   const isStudent = user?.role === 'student';
   const isAdmin = user?.role === 'admin' || user?.role === 'accountant';
+  // Accountants: payments are always recorded with today's date, and they cannot set discounts.
+  const isAccountantOnly = user?.role === 'accountant';
 
   const [activeTab, setActiveTab] = useState(
     searchParams.get('tab') || (isParent || isStudent ? 'my-fees' : 'collect')
@@ -441,7 +443,7 @@ const FeesPage = () => {
         payment_method: payForm.method,
         transaction_id: payForm.transaction_id || undefined,
         remarks: payForm.remarks || undefined,
-        payment_date: isoPaymentDate || undefined,
+        payment_date: isAccountantOnly ? undefined : (isoPaymentDate || undefined),
       };
       // Partial amount only valid for single-entry selection.
       const partial = parseFloat(payForm.partial_amount);
@@ -1666,6 +1668,8 @@ const FeesPage = () => {
                   <Input
                     type="number" min={0}
                     className="h-8 text-sm pl-8"
+                    disabled={isAccountantOnly}
+                    title={isAccountantOnly ? 'Only an admin can set discounts' : undefined}
                     value={configForm.sibling_admission_discount_amount ?? 0}
                     onChange={e => setConfigForm(f => ({ ...f, sibling_admission_discount_amount: parseFloat(e.target.value) || 0 }))}
                   />
@@ -1678,6 +1682,8 @@ const FeesPage = () => {
                   <Input
                     type="number" min={0}
                     className="h-8 text-sm pl-8"
+                    disabled={isAccountantOnly}
+                    title={isAccountantOnly ? 'Only an admin can set discounts' : undefined}
                     value={configForm.sibling_tuition_discount_amount ?? 0}
                     onChange={e => setConfigForm(f => ({ ...f, sibling_tuition_discount_amount: parseFloat(e.target.value) || 0 }))}
                   />
@@ -1761,6 +1767,9 @@ const FeesPage = () => {
             </DialogDescription>
           </DialogHeader>
           <div className="py-3 space-y-3">
+            {isAccountantOnly ? (
+              <p className="text-[11px] text-slate-500">Payment date: today. Back-dated entries are not permitted for your role.</p>
+            ) : (
             <div>
               <Label className="text-xs font-bold uppercase tracking-wider">Payment Date</Label>
               <Input
@@ -1774,6 +1783,7 @@ const FeesPage = () => {
               />
               <p className="text-[10px] text-slate-400 mt-1">Pick the date from the calendar. Back-dated payments allowed within this session.</p>
             </div>
+            )}
             {/* Partial amount — only when exactly one entry is selected */}
             {payLedgerIds.length === 1 && (() => {
               const all = [

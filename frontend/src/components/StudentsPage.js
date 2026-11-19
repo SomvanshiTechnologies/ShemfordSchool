@@ -1130,7 +1130,7 @@ const StudentsPage = () => {
                           <DropdownMenuItem onClick={async () => { setSelectedStudent(student); setPwResult(null); setPwInput(''); setPwVisible(false); setShowViewDialog(true); try { const r0 = await api.get(`/students/${student.student_id}`); setSelectedStudent(r0.data); } catch {} }} data-testid={`view-${student.student_id}`}>
                             <Eye className="h-4 w-4 mr-2" /> View Details
                           </DropdownMenuItem>
-                          {isAdmin && student.is_active && (
+                          {(isAdmin || isAccountant) && student.is_active && (
                             <DropdownMenuItem onClick={() => handleEditStudent(student)} data-testid={`edit-${student.student_id}`}>
                               <Edit className="h-4 w-4 mr-2" /> Edit
                             </DropdownMenuItem>
@@ -1375,6 +1375,8 @@ const StudentsPage = () => {
                     className="mt-0.5"
                     checked={onbData.is_sibling}
                     onChange={(e) => setOnbData({ ...onbData, is_sibling: e.target.checked })}
+                    disabled={!isAdmin}
+                    title={!isAdmin ? 'Only an admin can apply the sibling discount' : undefined}
                     data-testid="onb-is-sibling"
                   />
                   <span>
@@ -1435,6 +1437,8 @@ const StudentsPage = () => {
                   id="is_sibling"
                   checked={onbData.is_sibling}
                   onChange={e => setOnbData({...onbData, is_sibling: e.target.checked})}
+                  disabled={!isAdmin}
+                  title={!isAdmin ? 'Only an admin can apply the sibling discount' : undefined}
                   className="rounded"
                 />
                 <div>

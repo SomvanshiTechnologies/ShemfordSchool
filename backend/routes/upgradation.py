@@ -182,8 +182,12 @@ async def request_upgrade(student_id: str, request: Request):
     The request is stored with status="pending_approval". The student record is
     NOT modified and no ledger entries are created until an admin approves.
     """
-    user = await require_roles(UserRole.ADMIN)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     body = await request.json()
+
+    # Accountants can run an upgrade, but cannot bypass the dues check or the section capacity limit.
+    if user["role"] == UserRole.ACCOUNTANT and (body.get("force_upgrade") or body.get("admin_override")):
+        raise HTTPException(status_code=403, detail="Only an admin can force an upgrade or override section capacity.")
 
     student = await db.students.find_one({"student_id": student_id, "is_active": True}, {"_id": 0})
     if not student:
@@ -771,7 +775,7 @@ async def create_upgrade_fee_entry(student_id: str, request: Request):
     via /fees/pay BEFORE requesting the upgrade. Reuses any existing unpaid entry.
     Returns {ledger_id, upgradation_fee}.
     """
-    user = await require_roles(UserRole.ADMIN)(request)
+    user = await require_roles(UserRole.ADMIN, UserRole.ACCOUNTANT)(request)
     body = await request.json()
 
     student = await db.students.find_one({"student_id": student_id, "is_active": True}, {"_id": 0})
