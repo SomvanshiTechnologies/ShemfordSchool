@@ -19,7 +19,7 @@ const ParentDashboard = ({ navigation }) => {
 
   useEffect(() => {
     Promise.all([
-      client.get('/students').catch(() => ({ data: [] })),
+      client.get('/students', { params: { app_visible: true } }).catch(() => ({ data: [] })),
       client.get('/announcements').catch(() => ({ data: [] })),
     ]).then(([s, a]) => {
       setChildren(s.data || []);

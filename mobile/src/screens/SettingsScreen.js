@@ -9,6 +9,7 @@ import { COLORS, RADIUS, SHADOW, FONTS } from '../theme/colors';
 import { Badge } from '../components/UI';
 import { useAuth } from '../contexts/AuthContext';
 import { useSession } from '../contexts/SessionContext';
+import { useNavigation } from '@react-navigation/native';
 
 // System-generated logins use a synthetic address; hide it so the user can add a real one.
 const isSyntheticEmail = (em) => /@(student|staff)\.shemford\.in$/i.test(em || '');
@@ -21,6 +22,7 @@ const Field = ({ label, children }) => (
 );
 
 const SettingsScreen = () => {
+  const navigation = useNavigation();
   const { user, checkAuth, logout } = useAuth();
   const isAdmin = user?.role === 'admin';
   const { activeSession, viewSession, availableSessions, sessions, setViewSession } = useSession() || {};
@@ -262,6 +264,10 @@ const SettingsScreen = () => {
             {(availableSessions || []).length === 0 && (
               <Text style={{ fontSize: 13, color: COLORS.lightMuted }}>No sessions found.</Text>
             )}
+            <TouchableOpacity style={[s.sessionRow, { justifyContent: 'center', gap: 6, marginTop: 6 }]} onPress={() => navigation.navigate('AcademicYears')}>
+              <Ionicons name="construct-outline" size={16} color={COLORS.primary} />
+              <Text style={[s.sessionName, { color: COLORS.primary, fontSize: 13 }]}>Manage academic years</Text>
+            </TouchableOpacity>
           </View>
         )}
       </ScrollView>

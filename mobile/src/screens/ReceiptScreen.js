@@ -4,8 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import * as SecureStore from 'expo-secure-store';
-import client from '../api/client';
+import client, { getValidToken } from '../api/client';
 import { API_URL } from '../config';
 import { COLORS, RADIUS, SHADOW } from '../theme/colors';
 import { ScreenLoader } from '../components/LoadingSkeleton';
@@ -58,7 +57,7 @@ const ReceiptScreen = ({ route }) => {
     if (!paymentId) return;
     setDownloading(true);
     try {
-      const token = await SecureStore.getItemAsync('auth_token');
+      const token = await getValidToken();
       const url = `${API_URL}/fees/receipt/${paymentId}/pdf`;
       const tempTarget = `${FileSystem.cacheDirectory}_receipt_${paymentId}.pdf`;
       const res = await FileSystem.downloadAsync(url, tempTarget, { headers: { Authorization: `Bearer ${token}` } });

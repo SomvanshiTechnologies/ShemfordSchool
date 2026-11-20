@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, RADIUS, SHADOW } from '../theme/colors';
 import { useAuth } from '../contexts/AuthContext';
+import PasswordRecoverySheet from '../components/PasswordRecoverySheet';
 
 const LoginScreen = () => {
   const { login } = useAuth();
@@ -14,6 +15,7 @@ const LoginScreen = () => {
   const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [showRecover, setShowRecover] = useState(false);
 
   const handleLogin = async () => {
     const cleanEmail = (email || '').trim().toLowerCase();
@@ -92,6 +94,10 @@ const LoginScreen = () => {
             </TouchableOpacity>
           </View>
 
+          <TouchableOpacity style={styles.forgotBtn} onPress={() => setShowRecover(true)} hitSlop={8}>
+            <Text style={styles.forgotText}>Forgot password?</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity style={styles.btn} onPress={handleLogin} disabled={loading} activeOpacity={0.85}>
             {loading ? (
               <ActivityIndicator color={COLORS.white} />
@@ -103,6 +109,7 @@ const LoginScreen = () => {
 
         <Text style={styles.footer}>School Management System</Text>
       </KeyboardAvoidingView>
+      <PasswordRecoverySheet visible={showRecover} onClose={() => setShowRecover(false)} initialId={email} />
     </SafeAreaView>
   );
 };
@@ -132,8 +139,10 @@ const styles = StyleSheet.create({
   eyeBtn: { paddingHorizontal: 4, paddingVertical: 6 },
   btn: {
     backgroundColor: COLORS.primary, borderRadius: RADIUS.lg, paddingVertical: 16,
-    alignItems: 'center', marginTop: 24, ...SHADOW.md,
+    alignItems: 'center', marginTop: 16, ...SHADOW.md,
   },
+  forgotBtn: { alignSelf: 'flex-end', marginTop: 12 },
+  forgotText: { fontSize: 13, fontWeight: '700', color: COLORS.primary },
   btnText: { fontSize: 16, fontWeight: '700', color: COLORS.white, letterSpacing: 0.2 },
   footer: { textAlign: 'center', fontSize: 12, color: COLORS.lightMuted },
 });
