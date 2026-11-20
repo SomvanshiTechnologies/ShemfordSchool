@@ -11,8 +11,19 @@ import { CardDark, CardOrange, SectionTitle, Badge, Card } from '../components/U
 import { ScreenLoader } from '../components/LoadingSkeleton';
 import POSCheckoutModal from '../components/POSCheckoutModal';
 import CollectPaymentModal from '../components/CollectPaymentModal';
+import StudentSearch from '../components/StudentSearch';
+import ConcessionSheet from '../components/ConcessionSheet';
+import { errorText } from '../utils/students';
 
 const BACKEND_URL = API_ORIGIN; // same host as API but without /api
+
+// Admin shortcuts on the Fees home. Each opens a stack screen.
+const ADMIN_TILES = [
+  { screen: 'FeeSetup', icon: 'pricetags-outline', title: 'Fee Setup', sub: 'Class fees & yearly increase' },
+  { screen: 'FeeReports', icon: 'bar-chart-outline', title: 'Fee Reports', sub: 'Collection & dues, PDF' },
+  { screen: 'PaymentHistory', icon: 'receipt-outline', title: 'Payments', sub: 'All receipts' },
+  { screen: 'Concessions', icon: 'pricetag-outline', title: 'Concessions', sub: 'View & grant' },
+];
 
 const FeesScreen = () => {
   const navigation = useNavigation();
@@ -33,7 +44,55 @@ const FeesScreen = () => {
   const [posEntries, setPosEntries] = useState([]);
   const [collectEntry, setCollectEntry] = useState(null);
   const [selectedLedgerIds, setSelectedLedgerIds] = useState([]);
+  const [showConcession, setShowConcession] = useState(false);
+  const [busyAction, setBusyAction] = useState(null); // 'reminders' | 'overdue'
   const pollRef = useRef(null);
+
+  const loadDueChart = () =>
+    client.get('/fees/due-chart')
+      .then(r => setDueChart(Array.isArray(r.data) ? r.data : []))
+      .catch(e => { console.warn('Due chart load failed', e?.message); setDueChart([]); });
+
+  const openStudentFees = (st) => {
+    const [first, ...rest] = (st.name || '').split(' ');
+    setSelectedChild({ student_id: st.student_id, first_name: first, last_name: rest.join(' '), class_name: st.class_name, section: st.section });
+    loadFees(st.student_id);
+  };
+
+  // Same as the web dashboard's "Send Reminders" and "Refresh Overdue" buttons.
+  const sendReminders = () => Alert.alert(
+    'Send fee reminders?',
+    'Emails a reminder to the parent of every student with overdue fees.',
+    [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Send', onPress: async () => {
+          setBusyAction('reminders');
+          try {
+            const res = await client.post('/notifications/send-fee-reminders');
+            Alert.alert('Reminders sent', `Reminders sent to ${res.data?.sent || 0} parent(s).`);
+          } catch (e) {
+            Alert.alert('Could not send', errorText(e, 'Failed to send reminders.'));
+          } finally {
+            setBusyAction(null);
+          }
+        },
+      },
+    ],
+  );
+
+  const refreshOverdue = async () => {
+    setBusyAction('overdue');
+    try {
+      const res = await client.post('/fees/refresh-overdue');
+      await loadDueChart();
+      Alert.alert('Overdue refreshed', res.data?.message || 'Done.');
+    } catch (e) {
+      Alert.alert('Could not refresh', errorText(e, 'Failed to refresh overdue fees.'));
+    } finally {
+      setBusyAction(null);
+    }
+  };
 
   useEffect(() => {
     if (isParent || isStudent) {
@@ -48,10 +107,7 @@ const FeesScreen = () => {
         .catch(e => { console.warn('Fees load failed', e?.message); })
         .finally(() => setLoading(false));
     } else {
-      client.get('/fees/due-chart')
-        .then(r => setDueChart(Array.isArray(r.data) ? r.data : []))
-        .catch(e => { console.warn('Due chart load failed', e?.message); setDueChart([]); })
-        .finally(() => setLoading(false));
+      loadDueChart().finally(() => setLoading(false));
     }
   }, []);
 
@@ -171,11 +227,35 @@ const FeesScreen = () => {
     const totalDue = (dueChart || []).reduce((s, x) => s + (Number(x?.total_due) || 0), 0);
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+        <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           <View style={styles.header}>
             <Text style={styles.h1}>Fee Management</Text>
             <Text style={styles.sub}>{dueChart.length} students with dues</Text>
           </View>
+
+          <StudentSearch onSelect={openStudentFees} />
+
+          <View style={styles.tileGrid}>
+            {ADMIN_TILES.map(tile => (
+              <TouchableOpacity key={tile.screen} style={styles.tile} activeOpacity={0.7} onPress={() => navigation.navigate(tile.screen)}>
+                <Ionicons name={tile.icon} size={20} color={COLORS.primary} />
+                <Text style={styles.tileTitle}>{tile.title}</Text>
+                <Text style={styles.tileSub} numberOfLines={1}>{tile.sub}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <View style={styles.actionRow}>
+            <TouchableOpacity style={styles.actionBtn} onPress={sendReminders} disabled={!!busyAction}>
+              {busyAction === 'reminders' ? <ActivityIndicator size="small" color={COLORS.black} /> : <Ionicons name="mail-outline" size={15} color={COLORS.black} />}
+              <Text style={styles.actionText}>Send Reminders</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionBtn} onPress={refreshOverdue} disabled={!!busyAction}>
+              {busyAction === 'overdue' ? <ActivityIndicator size="small" color={COLORS.black} /> : <Ionicons name="refresh" size={15} color={COLORS.black} />}
+              <Text style={styles.actionText}>Refresh Overdue</Text>
+            </TouchableOpacity>
+          </View>
+
           <CardDark>
             <Text style={styles.darkLabel}>TOTAL PENDING</Text>
             <Text style={styles.darkValue}>₹{totalDue.toLocaleString()}</Text>
@@ -275,6 +355,13 @@ const FeesScreen = () => {
               <Text style={{ fontSize: 12, color: COLORS.muted, marginTop: 2 }}>{summary.months_paid}/{summary.months_total} months paid</Text>
             </CardDark>
           )
+        )}
+
+        {isAdminAcc && selectedChild && (
+          <TouchableOpacity style={styles.concessionBtn} onPress={() => setShowConcession(true)}>
+            <Ionicons name="pricetag-outline" size={15} color={COLORS.black} />
+            <Text style={styles.actionText}>Grant Concession</Text>
+          </TouchableOpacity>
         )}
 
         {summary?.total_overdue > 0 && (
@@ -390,6 +477,20 @@ const FeesScreen = () => {
         onSuccess={() => { setShowPos(false); if (selectedChild) loadFees(selectedChild.student_id); }}
       />
 
+      {isAdminAcc && (
+        <ConcessionSheet
+          visible={showConcession}
+          onClose={() => setShowConcession(false)}
+          student={selectedChild ? {
+            student_id: selectedChild.student_id,
+            name: `${selectedChild.first_name || ''} ${selectedChild.last_name || ''}`.trim(),
+            class_name: selectedChild.class_name,
+            section: selectedChild.section,
+          } : null}
+          onDone={() => { if (selectedChild) loadFees(selectedChild.student_id); }}
+        />
+      )}
+
       <CollectPaymentModal
         visible={!!collectEntry}
         onClose={() => setCollectEntry(null)}
@@ -429,6 +530,14 @@ const styles = StyleSheet.create({
   modalContent: { backgroundColor: COLORS.white, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, ...SHADOW.md },
   modalHandle: { width: 44, height: 4, borderRadius: 2, backgroundColor: COLORS.border, alignSelf: 'center', marginBottom: 20 },
   amountBox: { backgroundColor: COLORS.lightBg, borderRadius: RADIUS.lg, padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  tileGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 10, marginBottom: 10 },
+  tile: { width: '48.5%', backgroundColor: COLORS.white, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.border, padding: 14, ...SHADOW.sm },
+  tileTitle: { fontSize: 13, fontWeight: '700', color: COLORS.black, marginTop: 8 },
+  tileSub: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
+  actionRow: { flexDirection: 'row', gap: 10, marginBottom: 14 },
+  actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: COLORS.white, borderRadius: RADIUS.lg, borderWidth: 1.5, borderColor: COLORS.border, paddingVertical: 11 },
+  actionText: { fontSize: 12, fontWeight: '700', color: COLORS.black },
+  concessionBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: COLORS.white, borderRadius: RADIUS.lg, borderWidth: 1.5, borderColor: COLORS.border, paddingVertical: 11, marginBottom: 12 },
   payFullBtn: { backgroundColor: COLORS.primary, borderRadius: RADIUS.lg, paddingVertical: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, ...SHADOW.md },
 });
 

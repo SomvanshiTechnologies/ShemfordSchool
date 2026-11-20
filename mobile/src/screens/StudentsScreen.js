@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { View, Text, ScrollView, TextInput, TouchableOpacity, RefreshControl, Modal, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, TextInput, TouchableOpacity, RefreshControl, Modal, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -8,11 +8,19 @@ import { COLORS, RADIUS, SHADOW } from '../theme/colors';
 import { Avatar, Badge, EmptyState } from '../components/UI';
 import { ScreenLoader } from '../components/LoadingSkeleton';
 import { useAuth } from '../contexts/AuthContext';
+import { errorText } from '../utils/students';
 
 const STATUS_OPTIONS = [
   { value: 'active', label: 'Active Only' },
   { value: 'inactive', label: 'Inactive' },
   { value: 'all', label: 'All Students' },
+];
+
+// Admin only. "In app" matches what parents, students and teachers see;
+// "All" also lists students whose app access is turned off.
+const ACCESS_OPTIONS = [
+  { value: 'app', label: 'In App' },
+  { value: 'all', label: 'All (incl. hidden)' },
 ];
 
 // Bottom-sheet option picker used by all three filter chips.
@@ -53,18 +61,50 @@ const StudentsScreen = () => {
   const [classFilter, setClassFilter] = useState(null);   // null = all classes
   const [sectionFilter, setSectionFilter] = useState(null);
   const [statusFilter, setStatusFilter] = useState('active');
-  const [picker, setPicker] = useState(null); // 'class' | 'section' | 'status' | null
+  const [accessFilter, setAccessFilter] = useState('app');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [picker, setPicker] = useState(null); // 'class' | 'section' | 'status' | 'access' | null
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(() => {
-    const params = { app_visible: true, status: statusFilter };
+    const showAll = isAdmin && accessFilter === 'all';
+    const params = { status: statusFilter, limit: 200 };
+    if (!showAll) params.app_visible = true;
     if (classFilter) params.class_name = classFilter;
     if (sectionFilter) params.section = sectionFilter;
     return client.get('/students', { params })
       .then(r => setStudents(Array.isArray(r.data) ? r.data : (r.data?.students || [])))
       .catch(() => {});
-  }, [classFilter, sectionFilter, statusFilter]);
+  }, [classFilter, sectionFilter, statusFilter, accessFilter, isAdmin]);
+
+  // Same as the web dashboard's "tick all" switch: applies to every student in
+  // the school, not only the ones in the current filter.
+  const bulkAccess = (enable) => Alert.alert(
+    enable ? 'Turn on app access for all?' : 'Turn off app access for all?',
+    enable
+      ? 'Every student in the school will show in the app and be able to log in.'
+      : 'Every student in the school will be hidden from the app and unable to log in.',
+    [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: enable ? 'Turn On' : 'Turn Off',
+        style: enable ? 'default' : 'destructive',
+        onPress: async () => {
+          setBulkBusy(true);
+          try {
+            const r = await client.patch('/students/web-login/bulk', { web_login_enabled: enable });
+            await load();
+            Alert.alert('Done', `${r.data?.modified ?? 0} student${r.data?.modified === 1 ? '' : 's'} updated.`);
+          } catch (e) {
+            Alert.alert('Could not update', errorText(e, 'Failed to update app access.'));
+          } finally {
+            setBulkBusy(false);
+          }
+        },
+      },
+    ],
+  );
 
   useEffect(() => {
     client.get('/classes')
@@ -109,10 +149,16 @@ const StudentsScreen = () => {
               <Text style={styles.sub}>{students.length} enrolled</Text>
             </View>
             {isAdmin && (
-              <TouchableOpacity style={styles.newBtn} onPress={() => navigation.navigate('NewAdmission')}>
-                <Ionicons name="add" size={16} color={COLORS.white} />
-                <Text style={styles.newBtnText}>New Admission</Text>
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <TouchableOpacity style={styles.importBtn} onPress={() => navigation.navigate('StudentImport')} accessibilityLabel="Import students from CSV">
+                  <Ionicons name="cloud-upload-outline" size={16} color={COLORS.black} />
+                  <Text style={styles.importBtnText}>Import</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.newBtn} onPress={() => navigation.navigate('NewAdmission')}>
+                  <Ionicons name="add" size={16} color={COLORS.white} />
+                  <Text style={styles.newBtnText}>New Admission</Text>
+                </TouchableOpacity>
+              </View>
             )}
           </View>
         </View>
@@ -146,7 +192,32 @@ const StudentsScreen = () => {
             <Text style={[styles.filterChipText, statusFilter !== 'active' && styles.filterChipTextActive]}>{statusLabel}</Text>
             <Ionicons name="chevron-down" size={13} color={statusFilter !== 'active' ? COLORS.white : COLORS.muted} />
           </TouchableOpacity>
+          {isAdmin && (
+            <TouchableOpacity style={[styles.filterChip, accessFilter !== 'app' && styles.filterChipActive]} onPress={() => setPicker('access')}>
+              <Ionicons name="phone-portrait-outline" size={13} color={accessFilter !== 'app' ? COLORS.white : COLORS.muted} />
+              <Text style={[styles.filterChipText, accessFilter !== 'app' && styles.filterChipTextActive]}>
+                {ACCESS_OPTIONS.find(o => o.value === accessFilter)?.label}
+              </Text>
+              <Ionicons name="chevron-down" size={13} color={accessFilter !== 'app' ? COLORS.white : COLORS.muted} />
+            </TouchableOpacity>
+          )}
         </ScrollView>
+
+        {isAdmin && accessFilter === 'all' && (
+          <View style={styles.bulkBar}>
+            <Text style={styles.bulkText}>App access for all students</Text>
+            {bulkBusy ? <ActivityIndicator size="small" color={COLORS.primary} /> : (
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <TouchableOpacity style={styles.bulkBtn} onPress={() => bulkAccess(true)}>
+                  <Text style={styles.bulkBtnText}>Turn On</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.bulkBtn, { borderColor: '#FECACA' }]} onPress={() => bulkAccess(false)}>
+                  <Text style={[styles.bulkBtnText, { color: COLORS.danger }]}>Turn Off</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
 
         <View style={styles.list}>
           {filtered.map(s => (
@@ -163,7 +234,11 @@ const StudentsScreen = () => {
                   <Text style={{ fontSize: 11, color: COLORS.muted }}>{s.class_name}-{s.section} | {s.admission_number}</Text>
                 </View>
               </View>
-              <Badge text={s.fee_status || 'pending'} variant={s.fee_status === 'paid' ? 'dark' : s.fee_status === 'overdue' ? 'orange' : 'muted'} />
+              {s.is_active === false
+                ? <Badge text="Inactive" variant="danger" />
+                : isAdmin && !s.web_login_enabled
+                  ? <Badge text="Hidden" variant="muted" />
+                  : <Badge text={s.fee_status || 'pending'} variant={s.fee_status === 'paid' ? 'dark' : s.fee_status === 'overdue' ? 'orange' : 'muted'} />}
               <Ionicons name="chevron-forward" size={16} color={COLORS.lightMuted} style={{ marginLeft: 8 }} />
             </TouchableOpacity>
           ))}
@@ -185,6 +260,14 @@ const StudentsScreen = () => {
         options={sectionOptions}
         selected={sectionFilter}
         onSelect={setSectionFilter}
+        onClose={() => setPicker(null)}
+      />
+      <OptionPicker
+        visible={picker === 'access'}
+        title="App access"
+        options={ACCESS_OPTIONS}
+        selected={accessFilter}
+        onSelect={setAccessFilter}
         onClose={() => setPicker(null)}
       />
       <OptionPicker
@@ -211,6 +294,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 10, ...SHADOW.sm,
   },
   newBtnText: { fontSize: 12, fontWeight: '700', color: COLORS.white },
+  importBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: COLORS.white, borderRadius: RADIUS.lg, borderWidth: 1.5, borderColor: COLORS.border,
+    paddingHorizontal: 10, paddingVertical: 9,
+  },
+  importBtnText: { fontSize: 12, fontWeight: '700', color: COLORS.black },
+  bulkBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+    backgroundColor: COLORS.white, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: COLORS.border,
+    paddingHorizontal: 12, paddingVertical: 10, marginBottom: 12,
+  },
+  bulkText: { flex: 1, fontSize: 12, fontWeight: '600', color: COLORS.muted },
+  bulkBtn: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, borderWidth: 1.5, borderColor: COLORS.border },
+  bulkBtnText: { fontSize: 12, fontWeight: '700', color: COLORS.black },
   searchWrap: { position: 'relative', marginBottom: 12 },
   searchIcon: { position: 'absolute', left: 14, top: 14, zIndex: 1 },
   searchInput: { backgroundColor: COLORS.white, borderRadius: RADIUS.lg, paddingLeft: 38, paddingRight: 16, paddingVertical: 12, fontSize: 14, color: COLORS.black, borderWidth: 1.5, borderColor: COLORS.border, ...SHADOW.sm },

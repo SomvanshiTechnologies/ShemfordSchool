@@ -4,13 +4,14 @@
  * Admin users see Edit and Delete actions on each notice card.
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity, Modal,
   TextInput, Alert, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import client from '../api/client';
 import { COLORS, RADIUS, SHADOW, FONTS } from '../theme/colors';
 import { Badge, EmptyState } from '../components/UI';
@@ -27,12 +28,45 @@ const priorityVariant = (p) => {
 
 const voiceNoteUrl = (id) => `${API_URL}/media/voice-notes/${id}`;
 
+const CATEGORIES = [
+  { key: 'general',   label: 'General' },
+  { key: 'homework',  label: 'Homework' },
+  { key: 'classwork', label: 'Classwork' },
+];
+
+const fmtPosted = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return iso.slice(0, 10);
+  return `Posted on ${d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}, ${d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
+};
+
+const targetLabel = (a) => {
+  if (!a.target_type || a.target_type === 'all') return 'Everyone';
+  if (a.target_value) return `${a.target_type}: ${a.target_value}`;
+  return a.target_type;
+};
+
 const NoticesScreen = () => {
+  const navigation = useNavigation();
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
+  // Same as the web: admins and teachers can post notices.
+  const canPost = isAdmin || user?.role === 'teacher';
 
   const [announcements, setAnnouncements] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [category, setCategory] = useState('general');
+  const [search, setSearch] = useState('');
+
+  const categories = isAdmin ? [...CATEGORIES, { key: 'employees', label: 'Employees' }] : CATEGORIES;
+  const countFor = (key) => announcements.filter(a => (a.announcement_type || 'general') === key).length;
+  const visible = announcements.filter(a => {
+    if ((a.announcement_type || 'general') !== category) return false;
+    const t = search.trim().toLowerCase();
+    if (!t) return true;
+    return (a.title || '').toLowerCase().includes(t) || (a.content || '').toLowerCase().includes(t);
+  });
 
   // Edit modal state
   const [editing, setEditing] = useState(null); // the announcement being edited
@@ -48,7 +82,8 @@ const NoticesScreen = () => {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  // Reload on focus so a notice posted from the composer shows straight away.
+  useFocusEffect(load);
 
   const openEdit = useCallback((a) => {
     setEditing(a);
@@ -113,26 +148,60 @@ const NoticesScreen = () => {
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
       <ScrollView style={s.scroll} showsVerticalScrollIndicator={false}>
-        <View style={s.header}>
-          <Text style={s.h1}>Notices</Text>
-          <Text style={s.sub}>{announcements.length} announcements</Text>
+        <View style={[s.header, { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.h1}>Announcements</Text>
+            <Text style={s.sub}>School-wide notifications and updates</Text>
+          </View>
+          {canPost && (
+            <TouchableOpacity style={s.newBtn} onPress={() => navigation.navigate('NoticeCompose', { category })}>
+              <Ionicons name="add" size={16} color={COLORS.white} />
+              <Text style={s.newBtnText}>New</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
-        {announcements.length === 0 ? (
+        <View style={s.tabs}>
+          {categories.map(c => {
+            const active = category === c.key;
+            return (
+              <TouchableOpacity key={c.key} style={[s.tab, active && s.tabActive]} onPress={() => setCategory(c.key)}>
+                <Text style={[s.tabText, active && s.tabTextActive]}>{c.label}</Text>
+                <Text style={[s.tabCount, active && s.tabCountActive]}>({countFor(c.key)})</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <View style={s.searchWrap}>
+          <Ionicons name="search" size={16} color={COLORS.muted} style={s.searchIcon} />
+          <TextInput
+            style={s.searchInput}
+            placeholder="Search announcements..."
+            placeholderTextColor={COLORS.lightMuted}
+            value={search}
+            onChangeText={setSearch}
+          />
+        </View>
+
+        {visible.length === 0 ? (
           <EmptyState
             icon={<Ionicons name="notifications-outline" size={48} color="#DDD" />}
-            text="No announcements yet"
+            text={search ? 'No announcements match your search' : `No ${categories.find(c => c.key === category)?.label.toLowerCase()} announcements yet`}
           />
         ) : (
           <View style={s.list}>
-            {announcements.map((a, i) => (
+            {visible.map((a, i) => (
               <View
                 key={a.announcement_id || i}
-                style={[s.card, i === announcements.length - 1 && s.cardLast]}
+                style={[s.card, i === visible.length - 1 && s.cardLast]}
               >
                 <View style={s.cardHeader}>
                   <Text style={s.cardTitle} numberOfLines={2}>{a.title}</Text>
-                  <Badge text={a.priority || 'normal'} variant={priorityVariant(a.priority)} />
+                  <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    <Badge text={a.priority || 'normal'} variant={priorityVariant(a.priority)} />
+                    <Badge text={targetLabel(a)} variant="muted" />
+                  </View>
                 </View>
 
                 <Text style={s.cardContent}>{a.content}</Text>
@@ -148,7 +217,7 @@ const NoticesScreen = () => {
                 ) : null}
 
                 <View style={s.cardFooter}>
-                  <Text style={s.cardDate}>{a.created_at?.slice(0, 10) || ''}</Text>
+                  <Text style={s.cardDate}>{fmtPosted(a.created_at)}</Text>
                   {isAdmin && (
                     <View style={s.adminActions}>
                       <TouchableOpacity
@@ -247,7 +316,26 @@ const s = StyleSheet.create({
   scroll: { flex: 1, paddingHorizontal: 16 },
   header: { paddingTop: 12, paddingBottom: 16 },
   h1: FONTS.h1,
+  newBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: COLORS.primary, borderRadius: RADIUS.lg, paddingHorizontal: 12, paddingVertical: 9, ...SHADOW.sm },
+  newBtnText: { fontSize: 12, fontWeight: '700', color: COLORS.white },
   sub: { ...FONTS.caption, marginTop: 2 },
+
+  tabs: {
+    flexDirection: 'row', backgroundColor: COLORS.lightBg, borderRadius: RADIUS.lg,
+    padding: 4, marginBottom: 12, gap: 4,
+  },
+  tab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 9, borderRadius: RADIUS.md },
+  tabActive: { backgroundColor: COLORS.white, ...SHADOW.sm },
+  tabText: { fontSize: 12, fontWeight: '600', color: COLORS.muted },
+  tabTextActive: { color: COLORS.black, fontWeight: '700' },
+  tabCount: { fontSize: 11, color: COLORS.lightMuted },
+  tabCountActive: { color: COLORS.muted },
+  searchWrap: { position: 'relative', marginBottom: 14 },
+  searchIcon: { position: 'absolute', left: 14, top: 14, zIndex: 1 },
+  searchInput: {
+    backgroundColor: COLORS.white, borderRadius: RADIUS.lg, paddingLeft: 38, paddingRight: 16, paddingVertical: 12,
+    fontSize: 14, color: COLORS.black, borderWidth: 1.5, borderColor: COLORS.border, ...SHADOW.sm,
+  },
 
   list: {
     backgroundColor: COLORS.white, borderRadius: RADIUS.xl,

@@ -16,8 +16,11 @@ import { NativeModules, Platform } from 'react-native';
  *   1. EXPO_PUBLIC_API_HOST env var (manual override if needed)
  *   2. Platform default: Android emulator → 10.0.2.2, else → localhost
  *
- * Production builds (__DEV__ === false) ignore auto-detection and expect
- * EXPO_PUBLIC_API_HOST to point at a real public backend URL.
+ * Production builds (__DEV__ === false) ignore auto-detection. Set
+ * EXPO_PUBLIC_API_URL to the full public origin, e.g.
+ *   EXPO_PUBLIC_API_URL=https://erp.shemfordkatwa.in
+ * which takes priority over EXPO_PUBLIC_API_HOST / EXPO_PUBLIC_API_PORT and is
+ * the only way to reach the backend over HTTPS without a port number.
  */
 
 function detectDevHost() {
@@ -47,7 +50,11 @@ const defaultHost = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
 // Only auto-detect in dev. In release builds, require an explicit env host.
 const devHost = (typeof __DEV__ !== 'undefined' && __DEV__) ? detectDevHost() : null;
 
+// Full origin wins when set (production): scheme + host, optional port, no
+// trailing slash and no /api suffix.
+const envUrl = (process.env.EXPO_PUBLIC_API_URL || '').trim().replace(/\/+$/, '').replace(/\/api$/, '');
+
 export const API_HOST = envHost || devHost || defaultHost;
 export const API_PORT = process.env.EXPO_PUBLIC_API_PORT || 8000;
-export const API_ORIGIN = `http://${API_HOST}:${API_PORT}`;
+export const API_ORIGIN = envUrl || `http://${API_HOST}:${API_PORT}`;
 export const API_URL = `${API_ORIGIN}/api`;

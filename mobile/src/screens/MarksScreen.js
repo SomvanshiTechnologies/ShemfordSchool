@@ -4,8 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import * as SecureStore from 'expo-secure-store';
-import client from '../api/client';
+import client, { getValidToken } from '../api/client';
 import { API_URL } from '../config';
 import { COLORS, RADIUS, SHADOW, FONTS } from '../theme/colors';
 import { useAuth } from '../contexts/AuthContext';
@@ -96,7 +95,7 @@ const MarksheetContent = ({ sheet, subtitle, downloading, onDownload }) => (
 const downloadMarksheetPdf = async (student, examId, setDownloading) => {
   setDownloading(true);
   try {
-    const token = await SecureStore.getItemAsync('auth_token');
+    const token = await getValidToken();
     const qs = new URLSearchParams({ academic_year: student.academic_year || '' });
     if (examId) qs.append('exam_id', examId);
     const url = `${API_URL}/marks/marksheet/${student.student_id}/pdf?${qs.toString()}`;

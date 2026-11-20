@@ -13,6 +13,19 @@ import StudentDetailScreen from '../screens/StudentDetailScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import ReceiptScreen from '../screens/ReceiptScreen';
 import NewAdmissionScreen from '../screens/NewAdmissionScreen';
+import StudentEditScreen from '../screens/StudentEditScreen';
+import StudentImportScreen from '../screens/StudentImportScreen';
+import FeeSetupScreen from '../screens/FeeSetupScreen';
+import FeeConfigScreen from '../screens/FeeConfigScreen';
+import FeeReportsScreen from '../screens/FeeReportsScreen';
+import PaymentHistoryScreen from '../screens/PaymentHistoryScreen';
+import ConcessionsScreen from '../screens/ConcessionsScreen';
+import StaffAttendanceScreen from '../screens/StaffAttendanceScreen';
+import HolidaysScreen from '../screens/HolidaysScreen';
+import AttendanceAlertsScreen from '../screens/AttendanceAlertsScreen';
+import BulkUnlockScreen from '../screens/BulkUnlockScreen';
+import NoticeComposeScreen from '../screens/NoticeComposeScreen';
+import AcademicYearsScreen from '../screens/AcademicYearsScreen';
 import MarksScreen from '../screens/MarksScreen';
 import ClassesScreen from '../screens/ClassesScreen';
 import EmployeesScreen from '../screens/EmployeesScreen';
@@ -64,6 +77,19 @@ const AppNavigator = () => {
             <Stack.Screen name="Settings" component={SettingsScreen} options={detailHeader('Settings')} />
             <Stack.Screen name="Receipt" component={ReceiptScreen} options={detailHeader('Fee Receipt')} />
             <Stack.Screen name="NewAdmission" component={NewAdmissionScreen} options={detailHeader('New Admission')} />
+            <Stack.Screen name="StudentEdit" component={StudentEditScreen} options={detailHeader('Edit Student')} />
+            <Stack.Screen name="StudentImport" component={StudentImportScreen} options={detailHeader('Import Students')} />
+            <Stack.Screen name="FeeSetup" component={FeeSetupScreen} options={detailHeader('Fee Setup')} />
+            <Stack.Screen name="FeeConfig" component={FeeConfigScreen} options={detailHeader('Class Fees')} />
+            <Stack.Screen name="FeeReports" component={FeeReportsScreen} options={detailHeader('Fee Reports')} />
+            <Stack.Screen name="PaymentHistory" component={PaymentHistoryScreen} options={detailHeader('Payments')} />
+            <Stack.Screen name="Concessions" component={ConcessionsScreen} options={detailHeader('Concessions')} />
+            <Stack.Screen name="StaffAttendance" component={StaffAttendanceScreen} options={detailHeader('Staff Attendance')} />
+            <Stack.Screen name="Holidays" component={HolidaysScreen} options={detailHeader('Holidays')} />
+            <Stack.Screen name="AttendanceAlerts" component={AttendanceAlertsScreen} options={detailHeader('Low Attendance')} />
+            <Stack.Screen name="BulkUnlock" component={BulkUnlockScreen} options={detailHeader('Bulk Unlock')} />
+            <Stack.Screen name="NoticeCompose" component={NoticeComposeScreen} options={detailHeader('New Notice')} />
+            <Stack.Screen name="AcademicYears" component={AcademicYearsScreen} options={detailHeader('Academic Years')} />
             {/* Marks is a bottom tab for teacher/student; admin reaches it from More
                 via this stack screen (nearest navigator wins, so tabs are unaffected). */}
             <Stack.Screen name="Marks" component={MarksScreen} options={detailHeader('Marks & Grades')} />

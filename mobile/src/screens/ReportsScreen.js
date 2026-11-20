@@ -4,8 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import * as SecureStore from 'expo-secure-store';
-import client from '../api/client';
+import client, { getValidToken } from '../api/client';
 import { API_URL } from '../config';
 import { COLORS, RADIUS, SHADOW, FONTS } from '../theme/colors';
 import { CardDark, SectionTitle, EmptyState } from '../components/UI';
@@ -123,7 +122,7 @@ const ReportsScreen = () => {
   const downloadReport = async (format) => {
     setDownloading(format);
     try {
-      const token = await SecureStore.getItemAsync('auth_token');
+      const token = await getValidToken();
       if (!token) { Alert.alert('Not signed in', 'Please log in again.'); return; }
       const ext = format === 'excel' ? 'xlsx' : 'pdf';
       const qs = new URLSearchParams({ format, ...buildParams() });
